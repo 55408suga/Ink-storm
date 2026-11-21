@@ -65,6 +65,12 @@ if(BUILD_TESTING)
     add_executable(test_core_smoke tests/test_core_smoke.c)
     target_link_libraries(test_core_smoke PRIVATE unity ink_core ink_fluid ink_ecs ink_game ink_audio)
     add_test(NAME test_core_smoke COMMAND test_core_smoke)
+
+    add_executable(test_fluid tests/test_fluid.c)
+    target_link_libraries(test_fluid PRIVATE unity ink_fluid ink_core m)
+    add_test(NAME test_fluid COMMAND test_fluid)
+    add_executable(bench_fluid tests/bench_fluid.c)
+    target_link_libraries(bench_fluid PRIVATE ink_fluid ink_core m)
     add_test(NAME test_cli_headless_smoke COMMAND inkstorm --headless-smoke)
 endif()
 
