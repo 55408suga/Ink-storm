@@ -124,46 +124,9 @@ static bool mkdir_parents(const char *file_path, int (*mkdir_fn)(const char *, m
     return true;
 }
 
-bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
+static bool save_write_with_ops(const char *path, const MetaState *meta, const SaveIoOps *io)
 {
-    if (path == NULL || path[0] == '\0' || meta == NULL) {
-        return false;
-    }
-
-    SaveIoOps io = {
-        .mkdir = mkdir,
-        .fopen = fopen,
-        .fwrite = fwrite,
-        .fflush = fflush,
-        .fclose = fclose,
-        .rename = rename,
-        .remove = remove,
-    };
-    if (ops != NULL) {
-        if (ops->mkdir != NULL) {
-            io.mkdir = ops->mkdir;
-        }
-        if (ops->fopen != NULL) {
-            io.fopen = ops->fopen;
-        }
-        if (ops->fwrite != NULL) {
-            io.fwrite = ops->fwrite;
-        }
-        if (ops->fflush != NULL) {
-            io.fflush = ops->fflush;
-        }
-        if (ops->fclose != NULL) {
-            io.fclose = ops->fclose;
-        }
-        if (ops->rename != NULL) {
-            io.rename = ops->rename;
-        }
-        if (ops->remove != NULL) {
-            io.remove = ops->remove;
-        }
-    }
-
-    if (!mkdir_parents(path, io.mkdir)) {
+    if (!mkdir_parents(path, io->mkdir)) {
         return false;
     }
 
@@ -179,23 +142,41 @@ bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
         return false;
     }
 
-    FILE *fp = io.fopen(tmp_path, "wb");
+    FILE *fp = io->fopen(tmp_path, "wb");
     if (fp == NULL) {
         return false;
     }
 
-    const size_t written = io.fwrite(payload, 1, len, fp);
+    const size_t written = io->fwrite(payload, 1, len, fp);
     const bool write_ok = (written == len);
-    const bool flush_ok = write_ok && (io.fflush(fp) == 0);
-    const bool close_ok = (io.fclose(fp) == 0);
+    const bool flush_ok = write_ok && (io->fflush(fp) == 0);
+    const bool close_ok = (io->fclose(fp) == 0);
     if (!write_ok || !flush_ok || !close_ok) {
-        (void)io.remove(tmp_path);
+        (void)io->remove(tmp_path);
         return false;
     }
 
-    if (io.rename(tmp_path, path) != 0) {
-        (void)io.remove(tmp_path);
+    if (io->rename(tmp_path, path) != 0) {
+        (void)io->remove(tmp_path);
         return false;
     }
     return true;
+}
+
+bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
+{
+    if (path == NULL || path[0] == '\0' || meta == NULL) {
+        return false;
+    }
+
+    const SaveIoOps io = {
+        .mkdir = (ops != NULL && ops->mkdir != NULL) ? ops->mkdir : mkdir,
+        .fopen = (ops != NULL && ops->fopen != NULL) ? ops->fopen : fopen,
+        .fwrite = (ops != NULL && ops->fwrite != NULL) ? ops->fwrite : fwrite,
+        .fflush = (ops != NULL && ops->fflush != NULL) ? ops->fflush : fflush,
+        .fclose = (ops != NULL && ops->fclose != NULL) ? ops->fclose : fclose,
+        .rename = (ops != NULL && ops->rename != NULL) ? ops->rename : rename,
+        .remove = (ops != NULL && ops->remove != NULL) ? ops->remove : remove,
+    };
+    return save_write_with_ops(path, meta, &io);
 }
