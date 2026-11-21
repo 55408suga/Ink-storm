@@ -72,6 +72,13 @@ if(BUILD_TESTING)
     add_executable(bench_fluid tests/bench_fluid.c)
     target_link_libraries(bench_fluid PRIVATE ink_fluid ink_core m)
     add_test(NAME test_cli_headless_smoke COMMAND inkstorm --headless-smoke)
+
+    add_executable(test_ecs tests/test_ecs.c)
+    target_link_libraries(test_ecs PRIVATE unity ink_ecs ink_core)
+    add_test(NAME test_ecs COMMAND test_ecs)
+    add_executable(test_roguelike_meta tests/test_roguelike_meta.c)
+    target_link_libraries(test_roguelike_meta PRIVATE unity ink_game ink_core)
+    add_test(NAME test_roguelike_meta COMMAND test_roguelike_meta)
 endif()
 
 file(GLOB_RECURSE format_sources CONFIGURE_DEPENDS src/*.c src/*.h tests/*.c tests/*.h)
