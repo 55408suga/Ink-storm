@@ -6,7 +6,9 @@
 #include "enemies/enemy_defs.h"
 #include "enemies/projectiles.h"
 #include "player/player_skills.h"
+#include "roguelike/hints.h"
 #include "roguelike/rewards.h"
+#include "roguelike/stage_gimmicks.h"
 #include "roguelike/upgrades.h"
 #include "roguelike/waves.h"
 
@@ -53,7 +55,7 @@ static void handle_command(GameState *g, const GameCommand *cmd)
     }
     switch (cmd->type) {
     case CMD_PICK_REWARD:
-        (void)rewards_pick_upgrade(g, cmd->arg);
+        (void)rewards_pick_reward(g, cmd->arg);
         break;
     case CMD_REROLL_REWARD:
         (void)rewards_reroll(g);
@@ -111,13 +113,19 @@ static void step_aftermath(GameState *g)
     g->phase_t += INK_FIXED_DT;
     if (g->phase_t + 0.5f * INK_FIXED_DT >= 1.0f) {
         if (g->internal.wave_clear_is_boss) {
-            g->phase = RUN_PHASE_VICTORY;
-            g->phase_t = 0.0f;
-            (void)game_push_event(g, (GameEvent){
-                                         .type = EV_VICTORY,
-                                         .value = g->run.act_index,
-                                         .flags = 0,
-                                     });
+            if (g->run.act_index + 1 >= g->run.act_count) {
+                g->phase = RUN_PHASE_VICTORY;
+                g->phase_t = 0.0f;
+                (void)game_push_event(g, (GameEvent){
+                                             .type = EV_VICTORY,
+                                             .value = g->run.act_index,
+                                             .flags = 0,
+                                         });
+            } else {
+                rewards_generate_relic_offer(g);
+                g->phase = RUN_PHASE_REWARD;
+                g->phase_t = 0.0f;
+            }
         } else {
             rewards_generate_offer(g);
             g->phase = RUN_PHASE_REWARD;
@@ -167,7 +175,7 @@ void game_init(GameState *g, const RunConfig *cfg)
     g->phase = RUN_PHASE_ACT_TRANSITION;
     g->phase_t = 0.0f;
     g->run.act_index = 0;
-    g->run.act_count = 1;
+    g->run.act_count = GAME_MAIN_ACT_COUNT;
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
 
     const uint8_t hp_lv = clamp_meta_lv(&g->config, META_UPG_SHRINE_HP);
@@ -257,7 +265,8 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
     elements_step(g);
     fluid_sanitize_channels(&g->fluid);
 
-    /* Step 6: Wave reinforcement spawns. */
+    /* Step 6: Stage gimmicks & wave reinforcement spawns. */
+    stage_gimmicks_step(g);
     waves_step_spawns(g);
 
     /* Step 7: ECS combat systems (ascending index order). */
@@ -266,6 +275,7 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
     combat_physics_and_slams_step(g);
     combat_orbs_step(g);
     upgrades_fire_on_tick(g, INK_FIXED_DT);
+    hints_check_tick(g);
 
     /* Step 8: Flush deferred destroys and evaluate transition priority. */
     ecs_flush_destroy(&g->ecs);
@@ -290,6 +300,13 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
                g->run.boss_id.index == ECS_INVALID_INDEX) {
         ++g->run.acts_cleared;
         g->internal.wave_clear_is_boss = true;
+        if (g->run.act_index + 1 < g->run.act_count && g->shrine_count > 0) {
+            ShrineState *sh = &g->shrines[0];
+            sh->hp += 3;
+            if (sh->hp > sh->max_hp) {
+                sh->hp = sh->max_hp;
+            }
+        }
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_ACT_CLEAR,
                                      .x = g->internal.last_boss_x,

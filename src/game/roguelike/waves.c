@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "enemies/enemy_defs.h"
+#include "roguelike/stage_gimmicks.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -29,93 +30,270 @@ typedef struct {
     WaveDef waves[GAME_BOSS_WAVE_INDEX + 1];
 } ActDef;
 
-static const ActDef k_act1_def = {
-    .act_index = 0,
-    .wave_count = 3,
-    .boss_def_id = ENEMY_BOSS_TENGU,
-    .waves =
+static const ActDef
+    k_act_defs[GAME_MAIN_ACT_COUNT] =
         {
             [0] =
                 {
-                    .quota = 6,
-                    .max_alive = 5,
-                    .spawn_interval = 1.1f,
-                    .initial =
+                    .act_index = 0,
+                    .wave_count = 3,
+                    .boss_def_id = ENEMY_BOSS_TENGU,
+                    .waves =
                         {
-                            {.def_id = ENEMY_ARCHER, .count = 3},
-                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
-                        },
-                    .initial_entries = 2,
-                    .weights =
-                        {
-                            [ENEMY_ARCHER] = 45u,
-                            [ENEMY_LANTERN_FIRE] = 30u,
-                            [ENEMY_UMBRELLA] = 0u,
-                            [ENEMY_BOSS_TENGU] = 0u,
+                            [0] =
+                                {
+                                    .quota = 6,
+                                    .max_alive = 5,
+                                    .spawn_interval = 1.1f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 3},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 2,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                        },
+                                },
+                            [1] =
+                                {
+                                    .quota = 8,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [2] =
+                                {
+                                    .quota = 10,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 2},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [GAME_BOSS_WAVE_INDEX] =
+                                {
+                                    .quota = 0,
+                                    .max_alive = 4,
+                                    .spawn_interval = 2.4f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_BOSS_TENGU, .count = 1},
+                                            {.def_id = ENEMY_ARCHER, .count = 1},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
                         },
                 },
             [1] =
                 {
-                    .quota = 8,
-                    .max_alive = 6,
-                    .spawn_interval = 1.0f,
-                    .initial =
+                    .act_index = 1,
+                    .wave_count = 3,
+                    .boss_def_id = ENEMY_BOSS_TENGU,
+                    .waves =
                         {
-                            {.def_id = ENEMY_ARCHER, .count = 2},
-                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
-                            {.def_id = ENEMY_UMBRELLA, .count = 2},
-                        },
-                    .initial_entries = 3,
-                    .weights =
-                        {
-                            [ENEMY_ARCHER] = 45u,
-                            [ENEMY_LANTERN_FIRE] = 30u,
-                            [ENEMY_UMBRELLA] = 25u,
-                            [ENEMY_BOSS_TENGU] = 0u,
+                            [0] =
+                                {
+                                    .quota = 6,
+                                    .max_alive = 5,
+                                    .spawn_interval = 1.1f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 3},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 2,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                        },
+                                },
+                            [1] =
+                                {
+                                    .quota = 8,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [2] =
+                                {
+                                    .quota = 10,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 2},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [GAME_BOSS_WAVE_INDEX] =
+                                {
+                                    .quota = 0,
+                                    .max_alive = 4,
+                                    .spawn_interval = 2.4f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_BOSS_TENGU, .count = 1},
+                                            {.def_id = ENEMY_ARCHER, .count = 1},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
                         },
                 },
             [2] =
                 {
-                    .quota = 10,
-                    .max_alive = 6,
-                    .spawn_interval = 1.0f,
-                    .initial =
+                    .act_index = 2,
+                    .wave_count = 3,
+                    .boss_def_id = ENEMY_BOSS_TENGU,
+                    .waves =
                         {
-                            {.def_id = ENEMY_ARCHER, .count = 2},
-                            {.def_id = ENEMY_LANTERN_FIRE, .count = 2},
-                            {.def_id = ENEMY_UMBRELLA, .count = 2},
-                        },
-                    .initial_entries = 3,
-                    .weights =
-                        {
-                            [ENEMY_ARCHER] = 45u,
-                            [ENEMY_LANTERN_FIRE] = 30u,
-                            [ENEMY_UMBRELLA] = 25u,
-                            [ENEMY_BOSS_TENGU] = 0u,
+                            [0] =
+                                {
+                                    .quota = 6,
+                                    .max_alive = 5,
+                                    .spawn_interval = 1.1f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 3},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 2,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                        },
+                                },
+                            [1] =
+                                {
+                                    .quota = 8,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [2] =
+                                {
+                                    .quota = 10,
+                                    .max_alive = 6,
+                                    .spawn_interval = 1.0f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_ARCHER, .count = 2},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 2},
+                                            {.def_id = ENEMY_UMBRELLA, .count = 2},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
+                            [GAME_BOSS_WAVE_INDEX] =
+                                {
+                                    .quota = 0,
+                                    .max_alive = 4,
+                                    .spawn_interval = 2.4f,
+                                    .initial =
+                                        {
+                                            {.def_id = ENEMY_BOSS_TENGU, .count = 1},
+                                            {.def_id = ENEMY_ARCHER, .count = 1},
+                                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
+                                        },
+                                    .initial_entries = 3,
+                                    .weights =
+                                        {
+                                            [ENEMY_ARCHER] = 45u,
+                                            [ENEMY_LANTERN_FIRE] = 30u,
+                                            [ENEMY_UMBRELLA] = 25u,
+                                        },
+                                },
                         },
                 },
-            [GAME_BOSS_WAVE_INDEX] =
-                {
-                    .quota = 0,
-                    .max_alive = 4,
-                    .spawn_interval = 2.4f,
-                    .initial =
-                        {
-                            {.def_id = ENEMY_BOSS_TENGU, .count = 1},
-                            {.def_id = ENEMY_ARCHER, .count = 1},
-                            {.def_id = ENEMY_LANTERN_FIRE, .count = 1},
-                        },
-                    .initial_entries = 3,
-                    .weights =
-                        {
-                            [ENEMY_ARCHER] = 45u,
-                            [ENEMY_LANTERN_FIRE] = 30u,
-                            [ENEMY_UMBRELLA] = 25u,
-                            [ENEMY_BOSS_TENGU] = 0u,
-                        },
-                },
-        },
 };
+
+static const ActDef *current_act_def(const GameState *g)
+{
+    int32_t act = g->run.act_index;
+    if (act < 0) {
+        act = 0;
+    } else if (act >= GAME_MAIN_ACT_COUNT) {
+        act = GAME_MAIN_ACT_COUNT - 1;
+    }
+    return &k_act_defs[act];
+}
 
 static uint8_t clamp_reroll_lv(const RunConfig *cfg)
 {
@@ -164,7 +342,7 @@ static bool spawn_pos_is_valid(const GameState *g, float x, float y)
 static void pick_spawn_position(GameState *g, EnemyDefId def_id, int32_t edge_hint, float *out_x,
                                 float *out_y)
 {
-    if (def_id == ENEMY_BOSS_TENGU) {
+    if (game_is_boss_enemy(def_id)) {
         *out_x = (float)INK_SCREEN_W * 0.5f;
         *out_y = 112.0f;
         return;
@@ -213,12 +391,12 @@ static void spawn_wave_enemy(GameState *g, EnemyDefId def_id, int32_t edge_hint)
                                      .flags = 0,
                                  });
     }
-    if (def_id == ENEMY_BOSS_TENGU) {
+    if (game_is_boss_enemy(def_id)) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_BOSS_ENTER,
                                      .x = x,
                                      .y = y,
-                                     .value = (int32_t)ENEMY_BOSS_TENGU,
+                                     .value = (int32_t)def_id,
                                      .flags = 0,
                                  });
     }
@@ -229,8 +407,29 @@ void waves_prepare_act(GameState *g)
     if (g == NULL) {
         return;
     }
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX) {
+            continue;
+        }
+        if (ecs_has_mask(&g->ecs, id, COMP_ENEMY) || ecs_has_mask(&g->ecs, id, COMP_PROJ) ||
+            ecs_has_mask(&g->ecs, id, COMP_INK_ORB) || ecs_has_mask(&g->ecs, id, COMP_GIMMICK)) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    g->internal.boss_vortex_t = 0.0f;
+    g->internal.ryu_coil_t = 0.0f;
+    g->internal.nue_trail_t[0] = 0.0f;
+    g->internal.nue_trail_t[1] = 0.0f;
+    g->internal.wind_telegraph_t = 0.0f;
+    g->internal.wind_active_t = 0.0f;
+
     fluid_reset(&g->fluid);
-    fluid_clear_solids(&g->fluid);
+    stage_gimmicks_setup_act(g, g->run.act_index);
     g->run.rerolls_left = 1 + (int32_t)clamp_reroll_lv(&g->config);
     g->internal.act_prepared = true;
 }
@@ -240,9 +439,9 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     if (g == NULL || wave_index < 0 || wave_index > GAME_BOSS_WAVE_INDEX) {
         return;
     }
-    const WaveDef *wdef = &k_act1_def.waves[wave_index];
+    const WaveDef *wdef = &current_act_def(g)->waves[wave_index];
 
-    /* Clear any leftover enemies or projectiles before starting the wave cleanly. */
+    /* Clear leftover enemies, projectiles, and non-pillar gimmicks before starting cleanly. */
     const uint32_t hw = g->ecs.high_water;
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
@@ -251,6 +450,11 @@ void waves_start_wave(GameState *g, int32_t wave_index)
         }
         if (ecs_has_mask(&g->ecs, id, COMP_ENEMY) || ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
             ecs_destroy(&g->ecs, id);
+        } else if (ecs_has_mask(&g->ecs, id, COMP_GIMMICK)) {
+            const GimmickComp *gim = game_gimmick(g, id);
+            if (gim != NULL && gim->kind != (int32_t)GIMMICK_SPIRIT_PILLAR) {
+                ecs_destroy(&g->ecs, id);
+            }
         }
     }
     ecs_flush_destroy(&g->ecs);
@@ -263,6 +467,11 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->phase_t = 0.0f;
     g->internal.spawn_cd = wdef->spawn_interval;
     g->internal.boss_vortex_t = 0.0f;
+    g->internal.wave_elites_spawned = 0;
+    g->internal.last_elite_flags = 0u;
+    g->internal.nue_trail_t[0] = 0.0f;
+    g->internal.nue_trail_t[1] = 0.0f;
+    g->internal.ryu_coil_t = 0.0f;
 
     g->player.ink = g->player.ink_max;
     g->player.dry = false;
@@ -282,7 +491,7 @@ void waves_step_spawns(GameState *g)
     if (g == NULL || g->run.wave_index < 0 || g->run.wave_index > GAME_BOSS_WAVE_INDEX) {
         return;
     }
-    const WaveDef *wdef = &k_act1_def.waves[g->run.wave_index];
+    const WaveDef *wdef = &current_act_def(g)->waves[g->run.wave_index];
     g->internal.spawn_cd -= INK_FIXED_DT;
     if (g->internal.spawn_cd > 1e-4f) {
         return;

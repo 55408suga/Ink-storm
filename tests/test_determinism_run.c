@@ -95,6 +95,8 @@ static void test_full_run_determinism_sanity_and_settlement(void)
     GameState *b = game_create(&cfg);
     TEST_ASSERT_NOT_NULL(a);
     TEST_ASSERT_NOT_NULL(b);
+    a->run.act_count = 1;
+    b->run.act_count = 1;
 
     RunTelemetry tel = {0};
 

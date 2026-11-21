@@ -17,6 +17,22 @@ static const UpgradeMeta k_upgrade_meta[UPG_COUNT] = {
     [UPG_SLAM_SHOCKWAVE] = {.axis = AXIS_GALE, .max_level = 3},
     [UPG_RICH_INK] = {.axis = AXIS_INKWAY, .max_level = 3},
     [UPG_LASTING_SURGE] = {.axis = AXIS_INKWAY, .max_level = 3},
+    [UPG_FLAME_GALE] = {.axis = AXIS_BLAZE, .max_level = 3},
+    [UPG_INFERNO] = {.axis = AXIS_BLAZE, .max_level = 3},
+    [UPG_PHOENIX_ARROW] = {.axis = AXIS_BLAZE, .max_level = 3},
+    [UPG_THUNDER_ARROW] = {.axis = AXIS_THUNDER, .max_level = 3},
+    [UPG_SWIFT_THUNDER] = {.axis = AXIS_THUNDER, .max_level = 3},
+    [UPG_THUNDERBURST_FUSE] = {.axis = AXIS_THUNDER, .max_level = 3},
+    [UPG_MIGHTY_STROKE] = {.axis = AXIS_GALE, .max_level = 3},
+    [UPG_MAELSTROM_BIND] = {.axis = AXIS_GALE, .max_level = 3},
+    [UPG_TAILWIND] = {.axis = AXIS_GALE, .max_level = 3},
+    [UPG_INK_MAGNET] = {.axis = AXIS_INKWAY, .max_level = 3},
+    [UPG_CHAIN_PRIMER] = {.axis = AXIS_INKWAY, .max_level = 3},
+    [UPG_DRY_MASTERY] = {.axis = AXIS_INKWAY, .max_level = 3},
+    [UPG_SHRINE_WARD] = {.axis = AXIS_COMMON, .max_level = 3},
+    [UPG_DEEP_INK] = {.axis = AXIS_COMMON, .max_level = 3},
+    [UPG_DEEP_MARK] = {.axis = AXIS_COMMON, .max_level = 3},
+    [UPG_BARRIER] = {.axis = AXIS_COMMON, .max_level = 3},
 };
 
 bool game_push_event(GameState *g, GameEvent ev)
@@ -110,6 +126,31 @@ bool game_is_recommended_axis(BrushStyleId style, UpgradeAxis axis)
     default:
         return false;
     }
+}
+
+bool game_has_relic(const GameState *g, RelicId id)
+{
+    if (g == NULL || (unsigned)id >= (unsigned)RELIC_COUNT) {
+        return false;
+    }
+    int32_t count = g->run.relic_count;
+    if (count <= 0) {
+        return false;
+    }
+    if (count > GAME_MAX_OWNED_RELICS) {
+        count = GAME_MAX_OWNED_RELICS;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        if (g->run.relics[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool game_is_boss_enemy(EnemyDefId id)
+{
+    return id == ENEMY_BOSS_TENGU || id == ENEMY_BOSS_NUE || id == ENEMY_BOSS_RYU;
 }
 
 static void zero_component_slots(GameState *g, uint32_t index, uint64_t mask)

@@ -88,7 +88,8 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
 
     ecs_destroy(&g->ecs, victim);
 
-    if (def_id == ENEMY_BOSS_TENGU) {
+    const bool is_boss = game_is_boss_enemy(def_id);
+    if (is_boss) {
         g->internal.last_boss_x = vx;
         g->internal.last_boss_y = vy;
     }
@@ -98,7 +99,7 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     } else {
         g->run.chain = 1;
     }
-    g->run.chain_t = 2.65f;
+    g->run.chain_t = g->internal.mods.chain_grace;
     if (g->run.chain > g->run.max_chain) {
         g->run.max_chain = g->run.chain;
     }
@@ -106,7 +107,7 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     if (g->run.kills < META_MAX_COUNTERS) {
         ++g->run.kills;
     }
-    if (def_id != ENEMY_BOSS_TENGU && g->run.wave_index < GAME_BOSS_WAVE_INDEX) {
+    if (!is_boss && g->run.wave_index < GAME_BOSS_WAVE_INDEX) {
         ++g->run.wave_kills;
     }
 
@@ -147,11 +148,9 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
         }
     }
 
-    const float splash_rad = def_id == ENEMY_BOSS_TENGU ? 11.0f : 6.2f;
+    const float splash_rad = is_boss ? 11.0f : 6.2f;
     const float fire_splash =
-        (def_id == ENEMY_LANTERN_FIRE || def_id == ENEMY_BOSS_TENGU || (dmg_flags & DMG_FIRE) != 0)
-            ? 1.35f
-            : 0.35f;
+        (def_id == ENEMY_LANTERN_FIRE || is_boss || (dmg_flags & DMG_FIRE) != 0) ? 1.35f : 0.35f;
     const float death_dye[FLUID_MAX_CHANNELS] = {1.05f, fire_splash, 0.0f, 0.0f};
     fluid_splat(&g->fluid, vx, vy, splash_rad, ink_clampf(kx * 0.06f, -30.0f, 30.0f),
                 ink_clampf(ky * 0.06f, -30.0f, 30.0f), death_dye);
@@ -178,13 +177,21 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
         return 0;
     }
 
+    const RunModifiers *mods = &g->internal.mods;
+    const bool is_boss = game_is_boss_enemy(en->def_id);
     float dmg = base_dmg;
     upgrades_fire_on_hit(g, target, &dmg, dmg_flags);
+    if ((dmg_flags & DMG_FIRE) != 0) {
+        dmg *= mods->fire_dmg_mul;
+    }
+    if (g->player.dry && (dmg_flags & DMG_DEFLECTED) != 0) {
+        dmg *= mods->dry_deflect_dmg_mul;
+    }
 
     if (st->ink_mark_t > 0.0f) {
-        dmg *= en->def_id == ENEMY_BOSS_TENGU ? 1.5f : 2.0f;
+        dmg *= is_boss ? (1.5f * (mods->ink_mark_mul * 0.5f)) : mods->ink_mark_mul;
     }
-    if (en->def_id == ENEMY_BOSS_TENGU && (dmg_flags & DMG_STORM) != 0) {
+    if (is_boss && (dmg_flags & DMG_STORM) != 0) {
         dmg *= 0.5f;
     }
 
@@ -239,7 +246,7 @@ void combat_damage_shrine(GameState *g, float source_x, float source_y, int32_t 
     if (sh->hp < 0) {
         sh->hp = 0;
     }
-    sh->invuln_t = 0.95f;
+    sh->invuln_t = 0.95f + g->internal.mods.shrine_invuln_add;
     g->run.chain = 0;
     g->run.chain_t = 0.0f;
 
@@ -372,7 +379,7 @@ void combat_physics_and_slams_step(GameState *g)
                 if (otr == NULL || oen == NULL || otr->dissolving) {
                     continue;
                 }
-                const float hit_rad = oen->def_id == ENEMY_BOSS_TENGU ? 54.0f : 34.0f;
+                const float hit_rad = game_is_boss_enemy(oen->def_id) ? 54.0f : 34.0f;
                 const float dx = otr->x - tr->x;
                 const float dy = otr->y - tr->y;
                 if (dx * dx + dy * dy < hit_rad * hit_rad) {
@@ -451,8 +458,9 @@ void combat_orbs_step(GameState *g)
         const double bdx = (double)g->player.cursor_x - (double)tr->x;
         const double bdy = (double)g->player.cursor_y - (double)tr->y;
         const double bd = hypot(bdx, bdy);
-        if (bd < 130.0 && bd > 1e-6) {
-            const float pull = (float)((130.0 - bd) * 5.2);
+        const double pull_r = (double)g->internal.mods.orb_pull_radius;
+        if (bd < pull_r && bd > 1e-6) {
+            const float pull = (float)((pull_r - bd) * 5.2);
             vel->vx += (float)(bdx / bd) * pull * INK_FIXED_DT;
             vel->vy += (float)(bdy / bd) * pull * INK_FIXED_DT;
         }
@@ -481,6 +489,10 @@ void combat_orbs_step(GameState *g)
             g->player.ink = ink_clampf(g->player.ink + (float)orb->value, 0.0f, g->player.ink_max);
             g->player.dry = g->player.ink < 20.0f;
             add_score(g, 25);
+            if (g->internal.mods.rosary_swirl) {
+                static const float k_rosary_dye[FLUID_MAX_CHANNELS] = {0.25f, 0.0f, 0.0f, 0.0f};
+                fluid_swirl(&g->fluid, tr->x, tr->y, 6.0f, 36.0f, k_rosary_dye);
+            }
             (void)game_push_event(g, (GameEvent){
                                          .type = EV_ORB_PICKUP,
                                          .x = tr->x,
@@ -529,6 +541,11 @@ void combat_begin_wave_aftermath(GameState *g)
                                          });
             }
             ecs_destroy(&g->ecs, id);
+        } else if (ecs_has_mask(&g->ecs, id, COMP_GIMMICK)) {
+            const GimmickComp *gim = game_gimmick(g, id);
+            if (gim != NULL && gim->kind != (int32_t)GIMMICK_SPIRIT_PILLAR) {
+                ecs_destroy(&g->ecs, id);
+            }
         }
     }
     ecs_flush_destroy(&g->ecs);
