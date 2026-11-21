@@ -90,7 +90,7 @@ add_custom_target(format-check
 )
 add_custom_target(lint
     COMMAND clang-tidy -p "${CMAKE_CURRENT_BINARY_DIR}" ${ink_sources}
-    COMMAND cppcheck --enable=warning,style,performance,portability --error-exitcode=1
+    COMMAND cppcheck --enable=warning,style,performance,portability --check-level=exhaustive --error-exitcode=1
         "--project=${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json"
         "--file-filter=${CMAKE_CURRENT_SOURCE_DIR}/src/*"
     COMMAND python3 tools/check_shaders.py src

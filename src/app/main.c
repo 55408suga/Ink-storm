@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "core.h"
 #include "game.h"
 #include "paths.h"
 #include "render.h"
@@ -9,12 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum {
-    WINDOW_WIDTH = 1280,
-    WINDOW_HEIGHT = 720,
-    TICK_HZ = 60,
-    HEADLESS_TICKS = 5,
-};
+enum { HEADLESS_TICKS = 5 };
 
 static int run_headless_smoke(GameState *game, AudioState *audio)
 {
@@ -39,13 +35,13 @@ static int run_window(GameState *game, bool use_post, int smoke_frames)
     if (smoke_frames > 0) {
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
     }
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "INKSTORM");
+    InitWindow(INK_SCREEN_W, INK_SCREEN_H, "INKSTORM");
     if (!IsWindowReady()) {
         return EXIT_FAILURE;
     }
-    SetTargetFPS(TICK_HZ);
+    SetTargetFPS(INK_TICK_HZ);
 
-    const double step_dt = 1.0 / (double)TICK_HZ;
+    const double step_dt = 1.0 / (double)INK_TICK_HZ;
     const double max_frame_dt = 0.25;
     double accumulator = 0.0;
     const RenderState render = render_init(use_post, GetScreenWidth(), GetScreenHeight());
@@ -115,12 +111,19 @@ int main(int argc, char **argv)
         return usage(argv[0]);
     }
 
-    GameState game;
-    game_init(&game, UINT64_C(1));
+    GameState *game = game_create(UINT64_C(1));
+    if (game == NULL) {
+        fputs("Failed to allocate game state.\n", stderr);
+        return EXIT_FAILURE;
+    }
+    int status;
     if (headless) {
         AudioState audio;
         audio_init(&audio);
-        return run_headless_smoke(&game, &audio);
+        status = run_headless_smoke(game, &audio);
+    } else {
+        status = run_window(game, use_post, smoke_frames);
     }
-    return run_window(&game, use_post, smoke_frames);
+    game_destroy(game);
+    return status;
 }
