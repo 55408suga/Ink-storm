@@ -28,22 +28,24 @@ static void test_splitmix64(void)
 
 static void test_game_advances_fluid_and_rng(void)
 {
-    GameState game;
-    game_init(&game, UINT64_C(7));
-    TEST_ASSERT_EQUAL_UINT64(0, game.ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, game.fluid.steps);
-    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game.ecs));
+    GameState *game = game_create(UINT64_C(7));
+    TEST_ASSERT_NOT_NULL(game);
+    TEST_ASSERT_EQUAL_UINT64(0, game->ticks);
+    TEST_ASSERT_EQUAL_UINT64(0, game->fluid.steps);
+    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game->ecs));
 
-    game_step_smoke(&game);
-    game_step_smoke(&game);
+    game_step_smoke(game);
+    game_step_smoke(game);
 
     uint64_t expected_rng = 7;
     ink_rng_next(&expected_rng);
     ink_rng_next(&expected_rng);
-    TEST_ASSERT_EQUAL_UINT64(2, game.ticks);
-    TEST_ASSERT_EQUAL_UINT64(2, game.fluid.steps);
-    TEST_ASSERT_EQUAL_UINT64(expected_rng, game.rng);
-    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game.ecs));
+    TEST_ASSERT_EQUAL_UINT64(2, game->ticks);
+    TEST_ASSERT_EQUAL_UINT64(2, game->fluid.steps);
+    TEST_ASSERT_EQUAL_UINT64(expected_rng, game->rng);
+    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game->ecs));
+    TEST_ASSERT_TRUE(fluid_validate_finite(&game->fluid));
+    game_destroy(game);
 }
 
 static void test_audio_writes_silence(void)
