@@ -10,17 +10,23 @@ description: >-
    フルの ASan/CTest・`format-check`・`lint`・`dist` は GitHub Actions CI に委譲し、ローカルで重複実行しない。コマンドは [AGENTS.md](../../../AGENTS.md) を参照する。
 2. コミットが依頼範囲に含まれる場合は Conventional Commits を使う。push と `gh pr create` は許可された場合に行い、
    PR 本文には変更範囲、設計上の判断、ローカル確認内容・CI 委譲項目を書く。
-3. 本リポジトリはスター数条件により CodeRabbit の自動レビューがスキップされる場合があるため、PR 作成直後に
-   CodeRabbit チェックが `SKIPPED` のときは `gh pr comment "$pr" --body "@coderabbitai review"` で手動トリガする。
-4. PR 番号を調べ、対象の head に対する CI 結果および CodeRabbit レビューの完了と指摘を確認する。
+3. **CodeRabbit レビューの必須トリガ（マージ前ゲート）**:
+   本リポジトリはスター数条件により CodeRabbit の自動レビューがスキップされる場合があるため、PR 作成直後（または CodeRabbit チェックが `SKIPPED` のとき）に対象の PR 番号を取得し、必ず次のコマンドでレビューを起動する。
 
-```sh
-gh pr checks "$pr"
-gh pr view "$pr" --json headRefOid,reviewDecision,reviews,comments,statusCheckRollup
-gh api --paginate "repos/{owner}/{repo}/pulls/$pr/reviews"
-gh api --paginate "repos/{owner}/{repo}/pulls/$pr/comments"
-gh api --paginate "repos/{owner}/{repo}/issues/$pr/comments"
-```
+   ```sh
+   pr=$(gh pr view --json number --jq .number)
+   gh pr comment "$pr" --body "@coderabbitai review"
+   ```
+
+4. 対象の head に対する **CI 全チェック、自身のコードレビュー、および CodeRabbit レビューの完了と指摘**をすべて確認する。CodeRabbit レビューが完了する前、または Must Fix / Should Fix の未対応が残る状態ではマージしない。
+
+   ```sh
+   gh pr checks "$pr"
+   gh pr view "$pr" --json headRefOid,reviewDecision,reviews,comments,statusCheckRollup
+   gh api --paginate "repos/{owner}/{repo}/pulls/$pr/reviews"
+   gh api --paginate "repos/{owner}/{repo}/pulls/$pr/comments"
+   gh api --paginate "repos/{owner}/{repo}/issues/$pr/comments"
+   ```
 
 レビュー本文、行コメント、要約を突き合わせる。対象コミットが古い指摘は現行コードで再確認する。
 CodeRabbit の提案をそのまま適用せず、コード、仕様、再現結果にもとづいて分類する。
@@ -32,5 +38,5 @@ CodeRabbit の提案をそのまま適用せず、コード、仕様、再現結
 | Defer / Won't Fix | 過剰抽象化、フェーズ外、規模に合わない最適化、誤検知の根拠を残す。 |
 | Verify First | 根拠が曖昧な指摘は実装・仕様・再現テストで裏を取り、上の3分類に確定する。 |
 
-Must Fix と Should Fix の対応だけを差分に入れ、修正箇所の最小確認後に push して CI で全体検証する（CI が落ちた場合のみ該当チェックをローカル再現する）。
+Must Fix と Should Fix の対応だけを差分に入れ、修正箇所の最小確認後に push する。push 後は手順 4 に戻り、新しい head に対して CI、自身のコードレビュー、CodeRabbit レビュー（再レビューがスキップされた場合は手順 3 で再トリガ）が完了するまで確認を繰り返す（CI が落ちた場合のみ該当チェックをローカル再現する）。
 テストを弱める変更は禁止。見送りや誤検知は該当コメントへの PR 返信に理由と根拠を簡潔に記録する。返信の許可を待つ場合は文案を手元に残す。
