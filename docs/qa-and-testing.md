@@ -24,8 +24,11 @@
 
 | テストターゲット | 導入 Phase | 検証対象と必須境界ケース |
 | :--- | :---: | :--- |
-| `test_core_smoke`（既存） | Phase 1（P2 でヒープ化） | SplitMix64 RNG、クランプ、初期化スモーク（`GameState` をヒープ確保へ移行） |
+| `test_core_smoke`（既存） | Phase 1（P2 でヒープ化、P3 で契約追加） | SplitMix64 RNG、クランプ、FNV-1a ハッシュ補助、初期化・中断・Component アクセサ・イベント上限の契約 |
 | `test_cli_headless_smoke`（既存） | Phase 1（P3 で本番化） | `./inkstorm --headless-smoke` の正常終了。Phase 3 以降はスタブではなく本番 `game_step` を 60Hz で複数ティック通過させる |
+| `test_cli_usage_*`（3 件） | Phase 3 | `tools/expect_usage.sh` による CLI Usage エラーの実行ファイル配線・終了コード 1・`Usage: ` 行の検証（未知オプション・セーブ排他・ヘッドレス排他） |
+| `test_app_core` | Phase 3 | CLI オプション解析（全正常・全 Usage エラー・排他・重複・`PATH_MAX`・`INKSTORM_DEBUG_FAULTS`）、`FrameClock`（60Hz/144Hz/頭打ち/非有限入力）、`InputLatch` の規則 |
+| `test_text_table` | Phase 3 | 文字列表の全エントリの非空・英語 ASCII 限定（0x20〜0x7E）・内容 ID 対応関数と範囲外検査 |
 | `test_fluid` | Phase 2 | 静止場・中心/端/四隅/強入力連続での NaN・Inf ゼロ＆クランプ、圧力投影後の発散低下、`solid` no-slip 境界と法線クエリ、**薄い柱（2 セル幅）の壁横断防止＆角（コーナー）回帰**、`fluid_add_radial_impulse` の速度クランプ、非有限/範囲外入力の安全拒否、同一入力の `fluid_hash` 完全一致 |
 | `test_ecs` | Phase 2 | `spawn`/`destroy` による世代インクリメント、無効/旧世代 `EntityId` 拒否、**満杯（512）時のスポーン失敗（`ECS_INVALID_INDEX`）**、**削除予約中エンティティへのアクセス拒否（`ecs_is_alive == false`）**、遅延削除フラッシュ後の再利用、昇順ビットマスク走査 |
 | `test_roguelike_meta` | Phase 2（メタ）→ Phase 3/4（報酬） | `MetaState` の購入残高チェック、`int32_t` 上限付近での**飽和加算（符号付きオーバーフローなし）**、**精算の二重適用防止（`run_settled`）**、`key=value` シリアライズ往復・未知キー無視・破損入力デフォルト復帰・設定/ヒント保存；Phase 3/4 で `RunModifiers` 再計算・7 フック取得順実行・3 択/リロール/修繕・**候補不足（3 件未満/0 件）時の代替選択**・無効コマンド no-op を追加 |
@@ -39,7 +42,7 @@
 ## 3. 性能ベンチマーク（Release ビルド）
 
 - **対象ビルド**: `cmake --preset release && cmake --build --preset release`（`-O2 -DNDEBUG` 相当）
-- **計測コマンド**: 専用ベンチマーク実行または CLI ベンチモード（Phase 2 で `fluid` 単体ベンチ、Phase 3 で `game_step` 全体ベンチを整備）。
+- **計測コマンド**: 専用ベンチマーク実行体（Phase 2 の `bench_fluid`：流体単体ベンチ、Phase 3 の `bench_game`：`game_step` 全体ベンチ。いずれも CTest 非登録とし Release で実行する）。
 - **固定計測条件**:
   - 解像度・格子：160×90、`FluidConfig.project_iters = 12`、`solid` 障害物あり
   - 固定シード・固定入力列（筆ストローク＋渦印＋風斬り＋属性反応＋敵弾が稼働する実戦闘区間。空盤面や報酬停止区間で薄めない）
@@ -57,15 +60,19 @@
 | オプション | 役割 | セーブ I/O |
 | :--- | :--- | :---: |
 | `--headless-smoke` | ウィンドウなしで本番 `game_step`＋`audio`＋アセット解決を検証して終了 | 無効 |
-| `--smoke-frames N` | 隠しウィンドウで `N` フレーム描画して終了（`N >= 1` の整数） | 無効 |
+| `--smoke-frames N` | 隠しウィンドウで `N` フレーム描画して終了（`N` は 10 進数字のみ `1..INT_MAX`） | 無効 |
+| `--showcase` | 見本帳シーン（全登場物・反応・UI の一覧確認用）を起動 | 無効 |
 | `--no-post` | 和紙ポストシェーダを無効化し直接描画経路を使用 | 通常どおり |
 | `--no-save` | セーブファイルの読み込み・書き込みを完全に抑止 | 無効 |
-| `--save-path <path>` | セーブファイルパスを明示指定 | 指定先を使用 |
-| `--demo` | 固定シード・自動入力によるデモプレイを起動 | 無効 |
-| `--snap <dir>` | 指定ディレクトリへ要所 PNG を自動保存（固定シード・採取ティック指定と併用） | 無効 |
+| `--save-path <path>` | セーブファイルパスを明示指定（空・`--` 開始・`PATH_MAX` 以上は不可） | 指定先を使用 |
+| `--demo`（Phase 6 で導入） | 固定シード・自動入力によるデモプレイを起動（Phase 6 まで未知オプション） | 無効 |
+| `--snap <dir>`（Phase 6 で導入） | 指定ディレクトリへ要所 PNG を自動保存（Phase 6 まで未知オプション） | 無効 |
 
-- **エラー時の終了コード契約**:
-  - 未知オプション、引数不足、不正な数値（`N <= 0` や非数値）、排他指定（例：`--headless-smoke` と `--smoke-frames` / `--demo` / `--snap` の併用、`--no-save` と `--save-path` の併用）は `stderr` へ Usage を出力して **`EXIT_FAILURE (1)`** で終了する。
+- **排他・重複・エラー時の終了コード契約**:
+  - 排他組み合わせ：`--headless-smoke` と `--smoke-frames` / `--showcase` / `--save-path`、`--save-path` と `--no-save` / `--smoke-frames` / `--showcase`。
+  - 未知オプション、引数不足、不正な値、排他指定、**同一オプションの重複** は、ファイル I/O・ウィンドウ作成・メモリ確保を行わずに `stderr` へ `Usage: ` で始まる行を出力して **`EXIT_FAILURE (1)`** で終了する。
+- **障害の注入（環境変数 `INKSTORM_DEBUG_FAULTS`）**:
+  - カンマ区切りで `shader`（シェーダ読込失敗）・`font`（フォント欠損）を指定し、本物の失敗と同じ分岐を通して検証する（併用は `shader,font`、前後空白は無視）。未知の語は `stderr` へ `INKSTORM: unknown debug fault '<語>' ignored` を 1 行出力して無視する。
 
 ---
 
@@ -76,8 +83,9 @@ CLI スモーク（終了コード 0）と視覚品質の合格判定は個別�
 ### 5.1 描画経路の個別確認（WSLg 実機）
 1. **通常経路**（ポストシェーダ有効）
 2. **`--no-post` 経路**（直接描画）
-3. **シェーダ読込失敗フォールバック経路**（ログ出力＋直接描画への安全な切替）
-4. **フォント欠損フォールバック経路**（和風 TTF 不在時にクラッシュせず英語 ASCII 文字列表で描画）
+3. **シェーダ読込失敗フォールバック経路**（環境変数 `INKSTORM_DEBUG_FAULTS=shader` で本物の失敗と同じ分岐を通し、ログ出力＋直接描画への安全な切替を確認）
+4. **フォント欠損フォールバック経路**（環境変数 `INKSTORM_DEBUG_FAULTS=font` で本物の失敗と同じ分岐を通し、和風 TTF 不在時にクラッシュせず英語 ASCII 文字列表で描画することを確認。併用確認は `INKSTORM_DEBUG_FAULTS=shader,font`）
+- あわせて、**`assets/` のない場所へ実行ファイルだけを複製して起動する確認**も行い、アセット欠損時でも安全にフォールバックすることを確認する。
 
 ### 5.2 視覚チェックリスト（固定シード・1280×720・要所ティック採取）
 `--snap <dir>` または録画動画からの `tools/extract_snaps.sh <video> build/snaps`（等間隔 6 枚＋3×2 コンタクトシート）で以下を目視確認する：

@@ -479,7 +479,7 @@ void seal_stamp(TextId glyph, Vector2 at, float size, SealStyle style, float t);
 - 墨溜まりは、§9.4 の濃度の対応曲線で CPU 側に作る。
 
 ### 14.2 見本帳シーン
-次のものを 1 画面に並べた固定シーンを用意し、固定シードで `--snap` を撮る（CLI の形は [qa-and-testing.md](qa-and-testing.md) で定める）。
+次のものを 1 画面に並べた固定シーンを CLI オプション `--showcase` で起動できるように用意し、固定シードで確認・撮影する（CLI 契約と障害注入は [qa-and-testing.md](qa-and-testing.md) §4・§5.1 を参照）。
 - 全登場物（待機・攻撃の構え・被弾の 3 状態）
 - 全敵弾、偏向弾、炎上弾、雷撃弾、墨玉
 - 6 種の筆描画プリミティブの見本
@@ -487,7 +487,7 @@ void seal_stamp(TextId glyph, Vector2 at, float size, SealStyle style, float t);
 - パレットのトークンの色見本
 - HUD と、報酬・リザルトの UI 部品
 
-見本帳は、qa-and-testing.md §5.1 の 4 つの描画経路（通常、`--no-post`、シェーダ失敗、フォント欠損）すべてで撮る。
+見本帳は、qa-and-testing.md §5.1 の 4 つの描画経路（通常、`--no-post`、`INKSTORM_DEBUG_FAULTS=shader`、`INKSTORM_DEBUG_FAULTS=font`、および併用 `shader,font`）すべてで確認・撮影する。あわせて、`assets/` のない場所へ実行ファイルだけを複製して起動する確認も行う。
 
 ### 14.3 崩し試験
 見本帳と戦闘中のスナップについて、次の 4 つを確かめる。

@@ -20,7 +20,16 @@
 ### 1.2 演出・VFX の所有境界（`ink_game` vs `ink_render`）
 - **`ink_game` が所有するもの**:
   - ゲームプレイ結果に影響する状態のみ（ヒットストップ残時間、敵・弾・墨玉・社・設置ギミック、および各ティックの `GameEvent` 配列）。
-  - 日本語 UI/コールアウト文字列は `ink_game` に持たせない（表示テキストはすべて ID ベースで `ink_render` 側の文字列表が解決する）。
+  - 日本語 UI/コールアウト文字列および表示文字列 ID（`text_id`）は `ink_game` に持たせない。定義テーブルも `text_id` を持たず、`ink_render` が内容 ID（`EnemyDefId`、`UpgradeId`、`UpgradeAxis` 等）から文字列表を引く。
+  - **公開読み取り契約**: `GameState` の `internal`（`GameInternal`）以外のすべてのフィールドは `ink_render` / `ink_audio` / `app` が `const GameState *` 経由で読んでよい。`internal` は `ink_game` 専有とし、`ink_render` / `ink_audio` / `app` は参照しない。
+  - **ヘッダの分割構成**:
+    - `game.h` → `fluid.h`, `ecs.h`, `meta.h`, `game_ids.h`, `game_events.h`, `game_components.h`, `game_internal.h`
+    - `game_internal.h` → 自己完結（`<stdbool.h>`, `<stdint.h>`, `fluid.h`, `ecs.h`, `game_ids.h`, `game_events.h` のみ）
+    - `audio.h` → `struct GameState` の前方宣言のみ（`game.h` を include しない）
+    - `render.h` → `raylib.h`, `game.h`, `ui_view.h`
+    - `ui_view.h` → `meta.h`（raylib 非依存）
+    - `cli.h` / `frame_clock.h` / `input_latch.h` / `save.h` / `text_table.h` → 標準ヘッダと `game.h` / `meta.h` のみ（raylib 非依存）
+    - 全モジュールのヘッダファイル名は `src/` 全体および raylib ヘッダ名と重複させない。
 - **`ink_render` が所有するもの**:
   - 純粋な見た目 VFX（火花パーティクル、雷ボルト残像、渦印リング演出、画面シェイク、日本語ポップアップ文字／コールアウト）はすべて `RenderState` 内に固定長プールとして持つ。
   - 録画・視覚回帰時の再現性を保つため、`RenderState` 専用の明示 RNG（`uint64_t vfx_rng`）を持つ。
@@ -67,7 +76,15 @@
 - シミュレーション更新は常に固定刻み `INK_FIXED_DT`（60Hz）で行う。
 - 乱数は `ink_core` の SplitMix64（明示状態 `uint64_t rng`）のみを使用し、`rand()` / `time()` を禁止する。
 - 決定性一致の対象は **同一ビルド・同一 `RunConfig`・同一ティック入力列（`BrushInput` + `GameCommand`）** とする。
-- 状態ハッシュ（`fluid_hash` / `game_hash`）はフィールドを固定順に加算し、構造体パディングや計測時間（`solve_ms`）をハッシュ対象から除外する。
+- 状態ハッシュ（`fluid_hash` / `game_hash` / `game_hash_sections`）はフィールドを固定順に `ink_hash_*`（FNV-1a 64bit）で加算し、構造体パディングや計測時間（`solve_ms`）をハッシュ対象から除外する。
+- `game_hash_sections(const GameState *g, uint64_t out[GAME_HASH_SECTION_COUNT])` は次の 7 セクションを個別に算出し、`game_hash(const GameState *g)` はこれらを番号順に `ink_hash_u64` で畳み込む：
+  1. `GAME_HASH_CORE`: `ticks`, `rng`, `phase`, `phase_t`, `hitstop_t`, `config`
+  2. `GAME_HASH_FLUID`: `fluid_hash(&g->fluid)`
+  3. `GAME_HASH_ECS`: `gen` / `comp_mask` / `alive` / `pending_destroy` の `0..high_water-1`、`free_list[0..free_count)`、各カウンタ
+  4. `GAME_HASH_COMPONENTS`: 生存エンティティの、マスクを持つ Component のみ（index 昇順・宣言順）
+  5. `GAME_HASH_RUN`: `player`, `shrines`, `shrine_count`, `run`
+  6. `GAME_HASH_EVENTS`: `event_count`, `events[0..event_count)`, `dropped_events`, `pending_impulse_count`, `pending_impulses[0..pending_impulse_count)`
+  7. `GAME_HASH_INTERNAL`: `GameInternal`（定義順）
 
 ---
 
@@ -81,31 +98,38 @@ typedef enum {
     RUN_PHASE_REWARD,              /* 強化札3択 / 大遺物3択（全シム停止） */
     RUN_PHASE_ACT_TRANSITION,      /* 幕転換題字(2.0s)・流体リセット・次幕地形配置 */
     RUN_PHASE_SHRINE_BREAK,        /* 社砕け演出(1.5s)（全戦闘停止） */
-    RUN_PHASE_VICTORY,             /* 第3幕クリアリザルト（全シム停止） */
+    RUN_PHASE_VICTORY,             /* 勝利リザルト（全シム停止） */
     RUN_PHASE_GAME_OVER            /* 敗北リザルト（全シム停止） */
 } RunPhase;
 ```
+- **フェーズと `ticks` / `phase_t` の契約**:
+  - ラン開始は `RUN_PHASE_ACT_TRANSITION`（2.0 秒）から始まり、終了時に第 1 ウェーブを開始して `RUN_PHASE_PLAYING` へ移る。
+  - `ticks` と `phase_t` は `PLAYING`（ヒットストップ中を含む）・`WAVE_AFTERMATH`・`ACT_TRANSITION`・`SHRINE_BREAK` のティックで進み、`REWARD`・`VICTORY`・`GAME_OVER` のティックでは進まない。1 回の `game_step` で `ticks` が増えるのは 0 か 1 で、0 になるのはステップ後のフェーズが `REWARD` / `VICTORY` / `GAME_OVER` のときだけである。`phase_t` は遷移時に 0 へ戻る。
+  - 最終幕（`act_index == act_count - 1`、P0 では `act_count == 1`）のボスを倒すと、大遺物と社の回復なしで `WAVE_AFTERMATH` → `VICTORY` へ移る。
+  - `CMD_ABORT_RUN` は `PLAYING` / `WAVE_AFTERMATH` / `REWARD` / `ACT_TRANSITION` / `SHRINE_BREAK` で有効で、直ちに `GAME_OVER` へ移り `EV_GAME_OVER`（`EVF_RUN_ABORTED`）を出す。`VICTORY` / `GAME_OVER` では no-op。社 HP 0 による敗北では、`SHRINE_BREAK` に入るティックで `EV_GAME_OVER` を出す。
+  - `CMD_START_ENDLESS` と `CMD_PICK_ENDLESS_CRYSTAL` はエンドレスを実装するまで常に no-op とする。
 
 ### 3.2 `game_step` の 9 段階実行順序
 `game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)` は毎ティック必ず以下の固定順序で実行する。
 
 1. **イベントクリア & コマンド処理**
-   - `g->event_count = 0` にリセット。
-   - `cmd` を処理する（`CMD_ABORT_RUN` はどのプレイ系フェーズでも敗北確定へ遷移、`CMD_PICK_REWARD` / `CMD_REROLL_REWARD` / `CMD_REPAIR_SHRINE` / `CMD_PICK_ENDLESS_CRYSTAL` は `RUN_PHASE_REWARD` のみ有効、`CMD_START_ENDLESS` は `RUN_PHASE_VICTORY` のみ有効）。
+   - `g->event_count = 0` にリセットし、入力（`BrushInput`・`GameCommand`）を §7.2 の境界規則で検証する。
+   - **先にコマンドを処理してから**、その時点のフェーズで停止フェーズの分岐を判定する。報酬を決めたティックから次のウェーブが動き、そのティックで `ticks` も進む。
+   - コマンド有効条件：`CMD_ABORT_RUN` は `PLAYING` / `WAVE_AFTERMATH` / `REWARD` / `ACT_TRANSITION` / `SHRINE_BREAK` で有効、`CMD_PICK_REWARD` / `CMD_REROLL_REWARD` / `CMD_REPAIR_SHRINE` / `CMD_PICK_ENDLESS_CRYSTAL` は `RUN_PHASE_REWARD` のみ有効、`CMD_START_ENDLESS` は `RUN_PHASE_VICTORY` のみ有効。
    - 無効なコマンド（現フェーズ非対応・範囲外 `arg`・リロール残数 0・社 HP 満タン時の修繕等）は **状態を変更せず no-op で無視** する。
    - **停止フェーズ分岐**:
-     - `RUN_PHASE_REWARD` / `RUN_PHASE_VICTORY` / `RUN_PHASE_GAME_OVER`：以降のステップをスキップ（流体・タイマー完全停止。ポーズ解除や報酬決定からの再開ティックでは、`app` 側がフレーム `accumulator` を 0 へリセットしてから再開する）。
+     - `RUN_PHASE_REWARD` / `RUN_PHASE_VICTORY` / `RUN_PHASE_GAME_OVER`：以降のステップをスキップ（流体・タイマー・`ticks` 完全停止。ポーズ解除や報酬決定からの再開ティックでは、`app` 側がフレーム `accumulator` を 0 へリセットしてから再開する）。
      - `RUN_PHASE_SHRINE_BREAK`：演出タイマーのみ進め、1.5 秒経過で `RUN_PHASE_GAME_OVER` へ遷移（流体・戦闘は停止）。
      - `RUN_PHASE_ACT_TRANSITION`：演出タイマー（2.0 秒）を進め、開始フレームで `fluid_reset()`＋次幕の `solid` 地形配置を実施し、終了時に次幕第 1 ウェーブを開始して `RUN_PHASE_PLAYING` へ戻る。
-     - `RUN_PHASE_WAVE_AFTERMATH`：新規スポーン・敵攻撃・社被弾・プレイヤー技を止め、**ステップ 4（`fluid_step`）＋墨還り消滅（0.6 秒）＋場の墨玉自動回収** のみ進める。1.0 秒経過で `RUN_PHASE_REWARD`（または第 3 幕ボス撃破なら `RUN_PHASE_VICTORY`）へ遷移。
+     - `RUN_PHASE_WAVE_AFTERMATH`：新規スポーン・敵攻撃・社被弾・プレイヤー技を止め、**ステップ 4（`fluid_step`）＋墨還り消滅（0.6 秒）＋場の墨玉自動回収** のみ進める。1.0 秒経過で `RUN_PHASE_REWARD`（または最終幕ボス撃破なら `RUN_PHASE_VICTORY`）へ遷移。
 2. **ヒットストップ更新**
-   - `g->hitstop_t > 0` の場合は `hitstop_t -= dt` のみ進め、物理・戦闘ステップ（3〜8）をスキップ（`g->ticks++` は進める）。
+   - `g->hitstop_t > 0` の場合は `hitstop_t -= dt` のみ進め、物理・戦闘ステップ（3〜8）をスキップ（`g->ticks++` と `g->phase_t` は進める）。
 3. **保留インパルス注入 & プレイヤー入力（風筆・渦印・風斬り）＋入力系フック**
    - 前ティックの爆雷・三元共鳴で予約された放射インパルス（`pending_impulses[]`）を `fluid_add_radial_impulse()` で注入しクリア。
    - 風筆／渦印／風斬りの墨消費・かすれ筆判定・硯回復・CD 更新・墨昇華減衰。
    - 流体速度場・墨・能動属性チャンネルへ注入し、`on_stroke` / `on_cyclone` / `on_gale` フックを取得順に実行。
 4. **Fluid Engine ステップ（`fluid_step`）**
-   - 速度移流 → 渦度閉じ込め → Gauss-Seidel 圧力投影（`solid` no-slip 境界適用） → アクティブチャンネル（0..2）のスカラー移流＆減衰 → 統計更新。
+   - 渦度閉じ込め → 圧力投影（`solid` no-slip 境界適用） → 速度移流 → 圧力投影 → アクティブチャンネル（0..2）のスカラー移流＆減衰 → 統計更新。
 5. **属性反応ステップ（`elements_step`）**
    - [game-design.md](game-design.md) §7.2 の順序に厳密準拠：
      1. セル単位反応（紅蓮墨嵐の燃焼・墨上の雷成長）
@@ -136,6 +160,18 @@ typedef enum {
    - `audio_consume_events(audio, g)`
    - `render_consume_events(render, g)` → `render_update_vfx(render, g, INK_FIXED_DT)`
 
+### 3.3 デバッグ API と自動入力（テスト・開発用）
+テスト・ベンチ・ヘッドレススモーク・`--smoke-frames`・見本帳（`--showcase`）・将来の `--demo` 用に次の API を `game.h` に定義する。通常のプレイ経路からは呼ばない。
+
+| 関数 | 役割 |
+| :--- | :--- |
+| `game_debug_spawn_enemy(g, def, x, y)` | `EnemyDef` の生成関数で通常のスポーンと同じ Component・初期値を付与（位置の抽選のみ省略）。ボスなら `run.boss_id` も設定する |
+| `game_debug_spawn_projectile(g, kind, x, y, vx, vy)` | 通常の発射と同じ初期化で敵弾を生成する |
+| `game_debug_spawn_orb(g, x, y)` | 墨玉のドロップと同じ初期化で生成する |
+| `game_debug_start_wave(g, wave_index)` | 現在の幕のウェーブ `wave_index` を通常のウェーブ開始と同じ処理で開始する（範囲外は no-op） |
+| `game_debug_force_wave_clear(g)` | `PLAYING` のみ有効。通常ウェーブはノルマ到達扱い、ボスウェーブは通常のダメージ経路でボスへ致死ダメージを与える（遷移は次ティックの段 8） |
+| `game_autoplay_input(g)` / `game_autoplay_command(g)` | 状態のみから決まる決定的な自動入力を返す（`g` を変更せず `g->rng` も消費しない） |
+
 ---
 
 ## 4. Fluid Engine API 設計（`src/fluid/`）
@@ -143,7 +179,7 @@ typedef enum {
 `ink_fluid` はゲーム属性の意味を一切知らず、汎用スカラーチャンネルと障害物境界を持つ純粋な Stable Fluids ソルバとして設計する。
 
 ### 4.1 設定・状態構造体と単位契約
-- **座標・距離単位**: `px, py, pw, ph, radius_px` は画面論理 px（`0..1280`, `0..720`）。`rad_cells`・速度 `(u, v, fx, fy, strength, peak_speed)` は格子単位（セル / セル/s）。ゲーム側での px/s 換算は `× FLUID_CELL_PX (8.0f)`。`dye` は無次元 `[0, max_dye]`。
+- **座標・距離単位**: `px, py, pw, ph, radius_px` は画面論理 px（`0..1280`, `0..720`）。流体セル `(x, y)` は `[8x, 8x+8)` px を占め、中心は `(8x+4, 8y+4)` とする。`rad_cells`・速度 `(u, v, fx, fy, strength, peak_speed)` は格子単位（セル / セル/s）。ゲーム側での px/s 換算は `× FLUID_CELL_PX (8.0f)`。`dye` は無次元 `[0, max_dye]`。
 - **非有限値・範囲外入力の契約**:
   - 注入系・障害物設定系の引数に `NaN` / `Inf` または非正半径が渡された場合は安全に no-op 拒否する。
   - 範囲外座標は、`fluid_sample` では有効格子域へクランプ、`fluid_splat` / `fluid_swirl` / `fluid_add_radial_impulse` では格子と交差する有効セル範囲のみ適用する。
@@ -261,33 +297,40 @@ bool ecs_add_mask(EcsWorld *w, EntityId id, uint64_t mask);
 bool ecs_remove_mask(EcsWorld *w, EntityId id, uint64_t mask);
 bool ecs_has_mask(const EcsWorld *w, EntityId id, uint64_t mask);
 uint32_t ecs_alive_count(const EcsWorld *w);
+EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 ```
 
 - 削除予約中（`pending_destroy[i] == 1`）のエンティティに対して `ecs_is_alive()` は `false` を返し、以降のコンポーネント変更や走査対象から即座に除外する。
-- 走査は `0 .. w->high_water - 1` の昇順ループで決定的な更新順を保証する。
+- 走査は各システムの開始時に `high_water` を固定し、`0 .. high_water - 1` の昇順ループで決定的な更新順を保証する（走査中に生成されたエンティティは次のシステムから対象とする）。
 
 ### 5.2 `ink_game` 側 Component 配列（`GameComponents`）
 型付き固定配列を `ink_game` 側に配置し、アクセサ関数が `ecs_is_alive` ＋ `comp_mask` を検証した上でポインタを返す（`void *` キャスト排除）。
 
 | ビット | Component | 主なフィールド |
 | :--- | :--- | :--- |
-| `1ULL << 0` | `TransformComp` | `x, y, radius, facing` |
+| `1ULL << 0` | `TransformComp` | `x, y, radius, facing, dissolving, dissolve_t` |
 | `1ULL << 1` | `VelocityComp` | `vx, vy, mass_tier, drag, fluid_coupling` |
 | `1ULL << 2` | `HealthComp` | `hp, max_hp, flash_t, invuln_t` |
 | `1ULL << 3` | `StatusComp` | `ink_mark_t, burn_acc, charge_t, knockback_t, stun_t, barrier_t` |
-| `1ULL << 4` | `EnemyComp` | `def_id, is_elite, elite_flags, phase, fire_cd, ai_state, absorbed_ink` |
-| `1ULL << 5` | `BossComp` | `pattern, pattern_timer, phase_idx, gale_dx, gale_dy, gale_t, part_id, parent_id` |
-| `1ULL << 6` | `ProjComp` | `kind, deflected, burning, electrified, pierce, bounces_left, age, trail[20], trail_n` |
+| `1ULL << 4` | `EnemyComp` | `def_id, is_elite, elite_flags, phase, fire_cd, ai_state, absorbed_ink, windup` |
+| `1ULL << 5` | `BossComp` | `pattern, pattern_timer, phase_idx, gale_dx, gale_dy, gale_t, part_id, parent_id, telegraph_pattern, telegraph` |
+| `1ULL << 6` | `ProjComp` | `kind, deflected, burning, electrified, accelerated, pierce, bounces_left, age, trail[20], trail_n` |
 | `1ULL << 7` | `InkOrbComp` | `value, age` |
 | `1ULL << 8` | `GimmickComp` | `kind, elem_kind, timer, param_a, param_b`（第 3 幕霊柱・環境源等） |
 
 - **多部位ボス（P2 拡張：一筆龍）の表現余白**: `BossComp.part_id` と `parent_id`（`EntityId`）により、龍脈本体と各部位（龍玉／頭・胴・尾等）を独立した ECS エンティティ（個別 `Transform` / `Health` / `Status`）として表現し、部位撃破で本体フェーズ遷移を駆動できる。
 
-### 5.3 ECS 外で管理するもの
-- `FluidState`（格子配列）
-- `ShrineState shrines[GAME_MAX_SHRINES]`（基本 `shrine_count = 1`、複数化余白）
-- `RunProgress`（幕・ウェーブ・フェーズ・報酬 3 択・所持アップグレード/大遺物・`RunModifiers`・墨経済・スコア/チェイン・`run_settled`）
-- `GameEvent events[GAME_MAX_EVENTS]`・`PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`
+### 5.3 ECS 外で管理するものと `GameState` 構成
+`GameState` は次のフィールドをフラットに保持し、`internal`（`GameInternal`）以外を公開読み取り契約として `ink_render` / `ink_audio` / `app` に開示する：
+- `FluidState fluid`（格子配列）
+- `EcsWorld ecs`・`GameComponents comps`
+- `RunConfig config`・`uint64_t rng`・`uint64_t ticks`・`RunPhase phase`・`float phase_t`・`float hitstop_t`
+- `PlayerState player`（墨・かすれ筆・筆先・CD・墨昇華）
+- `ShrineState shrines[GAME_MAX_SHRINES]`・`int32_t shrine_count`（基本 1 基使用、複数化余白）
+- `RunProgress run`（幕・ウェーブ・ノルマ・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`・所持アップグレード・`boss_id`・`run_settled`）
+- `GameEvent events[GAME_MAX_EVENTS]`・`int32_t event_count`・`uint32_t dropped_events`
+- `PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`・`int32_t pending_impulse_count`
+- `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離等を隔離し、描画・音・app は読まない）
 - 描画専用 VFX プール（`RenderState` 内）
 
 ---
@@ -299,13 +342,14 @@ uint32_t ecs_alive_count(const EcsWorld *w);
    - 筆スタイル・メタ強化・所持アップグレード・所持大遺物から `roguelike_recompute_modifiers(g)` で一括再計算する（加算を適用してから乗算を適用する規則で統一）。
 2. **ルール変更系（7 種の限定イベントフック）**:
    - 所持アップグレード／大遺物の取得順（決定的）に以下のフックを呼び出す。未登録フックは `NULL` でスキップ。
-     - `on_stroke(GameState *g, int lv, float x, float y, float vx, float vy)`
-     - `on_cyclone(GameState *g, int lv, float x, float y)`
-     - `on_gale(GameState *g, int lv, float x, float y, float dx, float dy)`
-     - `on_hit(GameState *g, int lv, EntityId target, int *dmg_inout, uint32_t dmg_flags)`
-     - `on_kill(GameState *g, int lv, EntityId victim, float x, float y, uint32_t dmg_flags)`
-     - `on_reaction(GameState *g, int lv, ReactionKind kind, float x, float y, float intensity)`
-     - `on_tick(GameState *g, int lv, float dt)`
+   - 各フックは引数を `const` の構造体 1 つで受け取る（例：`void (*on_hit)(const HitHookArgs *a)`、構造体内に `GameState *g`, `int lv` 等を格納する）。個別のポインタ引数にすると、書き換えないフックで静的解析（cppcheck `constParameterCallback`）に抵触するためである。
+     - `on_stroke(const StrokeHookArgs *a)`（`g, lv, x, y, vx, vy`）
+     - `on_cyclone(const CycloneHookArgs *a)`（`g, lv, x, y`）
+     - `on_gale(const GaleHookArgs *a)`（`g, lv, x, y, dx, dy`）
+     - `on_hit(const HitHookArgs *a)`（`g, lv, target, dmg_inout, dmg_flags`）
+     - `on_kill(const KillHookArgs *a)`（`g, lv, victim, x, y, dmg_flags`）
+     - `on_reaction(const ReactionHookArgs *a)`（`g, lv, kind, x, y, intensity`）
+     - `on_tick(const TickHookArgs *a)`（`g, lv, dt`）
 
 ### 6.2 報酬提示・候補不足時の代替規則
 - `RewardOffer` は現在提示中の候補数 `choice_count`（`0..3`）と種類（強化札／大遺物／エンドレス代替）を保持する。
@@ -313,11 +357,11 @@ uint32_t ecs_alive_count(const EcsWorld *w);
 - **大遺物の候補不足**: 解放済み・未所持の大遺物が 3 件未満なら出せる件数だけ提示する。0 件（エンドレスで全遺物取得済み）になった場合は「社を修繕 +3（最大 HP 超過分は 1 につき墨晶 +15 へ変換）」と「墨晶 +30」の代替 2 択へフォールバックする。
 
 ### 6.3 C11 定義テーブルスキーマ
-各コンテンツは `src/game/` 配下の専用ファイルへ `const` 指示付き初期化子配列として定義する。
-- **`BrushStyleDef`**: `id`, `text_id`, 初期 `RunModifiers` 差分、推奨軸、固有フック
-- **`EnemyDef`**: `id`, `text_id`, `base_hp`, `radius`, `mass_tier`, `fluid_coupling`, `score`, `orb_count`, `ai_step_fn`, `spawn_fn`
-- **`UpgradeDef`**: `id`, `text_id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック
-- **`RelicDef`**: `id`, `text_id`, `unlock_bit`（`0`=初期解放、`1ULL<<k`=墨庵解放）, `apply_mods_fn`, 7 フック
+各コンテンツは `src/game/` 配下の専用ファイルへ `const` 指示付き初期化子配列として定義する。定義テーブルは表示文字列 ID（`text_id`）を持たず、`ink_render` が内容 ID（`EnemyDefId`, `UpgradeId`, `UpgradeAxis` 等）から文字列表を引く。
+- **`BrushStyleDef`**: `id`, 初期 `RunModifiers` 差分、推奨軸、固有フック
+- **`EnemyDef`**: `id`, `base_hp`, `radius`, `mass_tier`, `fluid_coupling`, `score`, `orb_count`, `ai_step_fn`, `spawn_fn`
+- **`UpgradeDef`**: `id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック
+- **`RelicDef`**: `id`, `unlock_bit`（`0`=初期解放、`1ULL<<k`=墨庵解放）, `apply_mods_fn`, 7 フック
 - **`ActDef`**: `act_index`, `wave_count`（3）, `boss_def_id`, `setup_stage_fn`, ウェーブ敵重みテーブル
 
 ---
@@ -325,8 +369,8 @@ uint32_t ecs_alive_count(const EcsWorld *w);
 ## 7. イベントキュー & コマンド設計
 
 ### 7.1 フレームイベント（`ink_game` → `ink_audio` / `ink_render`）
-- 上限 `GAME_MAX_EVENTS (128)` を超えた場合、新規イベントは安全にドロップし、`g->dropped_events` カウンタを加算する（メモリ破壊・境界外書き込み禁止）。
-- イベントには日本語文字列を含めず、種別 enum と数値パラメータ（`x, y, x2, y2, value, flags`）のみを載せる。
+- 上限 `GAME_MAX_EVENTS (128)` を超えた場合、新規イベントは安全にドロップし、`g->dropped_events` カウンタを飽和加算する（メモリ破壊・境界外書き込み禁止）。
+- イベントには日本語文字列を含めず、種別 enum と数値パラメータ（`x, y, x2, y2, value, flags`）のみを載せる。同じティック内のイベントはパイプラインの実行順（§3.2）に並ぶ。
 
 ```c
 typedef enum {
@@ -351,8 +395,18 @@ typedef enum {
     EV_HINT_TRIGGER,    /* value = HintId（初回操作ヒント） */
     EV_WIND_TELEGRAPH,  /* 第3幕 山颪の予告 */
     EV_GAME_OVER,
-    EV_VICTORY
+    EV_VICTORY,
+    EV_ENEMY_INTRO,     /* value = EnemyDefId（初登場ウェーブ開始時） */
+    EV_REWARD_REROLL,   /* value = 残りリロール回数 */
+    EV_SKILL_DENIED,    /* value = SkillId（墨不足または CD 中） */
+    EV_TYPE_COUNT
 } GameEventType;
+
+#define EVF_SLAM_WALL     (UINT32_C(1) << 8)
+#define EVF_SLAM_ENEMY    (UINT32_C(1) << 9)
+#define EVF_ORB_AUTO      (UINT32_C(1) << 10)
+#define EVF_RUN_ABORTED   (UINT32_C(1) << 11)
+#define EVF_REWARD_REPAIR (UINT32_C(1) << 12)
 
 typedef struct {
     GameEventType type;
@@ -362,6 +416,25 @@ typedef struct {
     uint32_t flags;
 } GameEvent;
 ```
+
+| イベント | `x, y` | `x2, y2` | `value` | `flags` |
+| :--- | :--- | :--- | :--- | :--- |
+| `EV_KILL` | 撃破位置 | 衝撃の向き（単位、なければ 0） | `EnemyDefId` | 致命打の `DMG_*` |
+| `EV_DEFLECT` | 弾の位置 | 偏向後の向き（単位） | `ProjKind` | 0 |
+| `EV_SLAM` | 衝突点 | 壁の法線または相手への向き | `EnemyDefId`（飛ばされた側） | `EVF_SLAM_WALL` / `EVF_SLAM_ENEMY` |
+| `EV_IGNITE` | 燃焼セルの重心（px） | — | 燃焼セル数 | 0（24 セル以上・3.2 秒間隔） |
+| `EV_STORM_ZAP` | 始点 | 終点 | ホップ番号（0 = 初撃） | 0 |
+| `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 0 |
+| `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（16） | `EVF_ORB_AUTO`（自動回収時） |
+| `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
+| `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
+| `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号 | 0 |
+| `EV_WAVE_CLEAR` / `EV_ACT_CLEAR` | 社の位置 / ボスの位置 | — | `wave_index` / `act_index` | 0 |
+| `EV_REWARD_PICK` | — | — | `UpgradeId`、修繕は -1 | `EVF_REWARD_REPAIR` |
+| `EV_GAME_OVER` / `EV_VICTORY` | 社の位置 / — | — | 0 / `act_index` | `EVF_RUN_ABORTED` / 0 |
+| `EV_ENEMY_INTRO` | — | — | `EnemyDefId` | 0 |
+| `EV_REWARD_REROLL` | — | — | 残りリロール回数 | 0 |
+| `EV_SKILL_DENIED` | 筆先 | — | `SkillId` | 0 |
 
 ### 7.2 コマンド入力（`app` / テスト → `ink_game`）
 ```c
@@ -377,7 +450,7 @@ typedef enum {
     CMD_REPAIR_SHRINE,        /* 報酬画面の「社を修繕」 */
     CMD_PICK_ENDLESS_CRYSTAL, /* エンドレス候補枯渇時の墨晶代替 */
     CMD_START_ENDLESS,        /* 勝利画面からエンドレス継続 */
-    CMD_ABORT_RUN             /* ポーズからの「最初から / ロビーへ戻る」（敗北扱い） */
+    CMD_ABORT_RUN             /* ラン中断（敗北扱い） */
 } GameCommandType;
 
 typedef struct {
@@ -385,7 +458,8 @@ typedef struct {
     int32_t arg;
 } GameCommand;
 ```
-- `void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd);`（`cmd == NULL` は `CMD_NONE` と同義）。
+- `void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd);`（`in == NULL` は入力なし、`cmd == NULL` は `CMD_NONE` と同義）。
+- **境界検証**: `BrushInput` の 4 座標（`mx, my, pmx, pmy`）のいずれかが非有限（NaN / Inf）なら、そのティックは `in == NULL` と同じに扱う。有限なら画面外の値もそのまま使う（流体は格子と交差する範囲だけに注入する）。`GameCommand.type` が `GameCommandType` の範囲外なら `CMD_NONE` として扱う。
 
 ---
 
@@ -434,7 +508,7 @@ typedef struct {
 
 - **オーバーフロー＆二重精算防止契約**:
   - 読み込み時・精算時ともに `int64_t` 経由の飽和加算で `[0, META_MAX_*]` へクランプし、符号付き整数オーバーフロー（UB）を完全に防ぐ。
-  - `meta_settle_run(MetaState *meta, GameState *game)` は `game->run_settled` を検査・セットし、1 ランにつき **厳密に 1 回だけ** 精算する（勝利画面でエンドレス継続を選んだ場合は精算せず、エンドレス終了時に 1 回精算）。
+  - `meta.h` の `meta_settle_result(MetaState *meta, const MetaRunResult *res, bool *run_settled_flag, MetaSettleBreakdown *out_breakdown)` が純粋な精算を担い、`game.h` の `meta_settle_run(MetaState *meta, GameState *g, MetaSettleBreakdown *out_breakdown)` が `game_run_result(g)` と `&g->run.run_settled` を渡してラップする。1 ランにつき **厳密に 1 回だけ** 精算する（勝利画面でエンドレス継続を選んだ場合は精算せず、エンドレス終了時に 1 回精算）。
   - `meta_build_run_config(const MetaState *meta, BrushStyleId style, uint64_t seed)` で `RunConfig` を生成し、テスト・デモ時は固定プリセット `RunConfig` を直接渡してメタ状態と分離する。
 
 ### 8.2 セーブ形式とファイル I/O（`src/app/save.c`）
@@ -474,12 +548,14 @@ typedef struct {
 ## 9. オーディオ＆描画インターフェース境界
 
 ### 9.1 `ink_audio`（`src/audio/audio.h`）
-- raylib 非依存の純 C11 合成エンジンとして PCM バッファ（和太鼓・琴・風音・炎・雷・筆擦れ・叩きつけ）を生成し、`app` 層が raylib の `AudioStream` / `Music` へ接続する。
-- `audio_consume_events(AudioState *audio, const GameState *game)` で各ティックのイベントを読み取り、SE トリガおよび望ましい BGM トラック状態（`BGM_LOBBY`, `BGM_BATTLE`, `BGM_BOSS`, `BGM_VICTORY`）を更新する。
+- raylib 非依存の純 C11 合成エンジンとして PCM バッファ（和太鼓・琴・風音・炎・雷・筆擦れ・叩きつけ）を生成し、`app` 層が必要なサンプル数だけ `audio_render(audio, samples, sample_count)` で取り出して raylib の `AudioStream` / `Music` へ接続する。
+- `audio.h` は `struct GameState;` を前方宣言のみとし、`game.h` の include を強制しない。
+- `audio_consume_events(AudioState *audio, const struct GameState *game)` で各ティックのイベントと状態を読み取り、SE トリガおよび望ましい BGM トラック状態（`BGM_NONE`, `BGM_LOBBY`, `BGM_BATTLE`, `BGM_BOSS`, `BGM_VICTORY`）を更新する。
 - 外部 BGM（`assets/audio/`）や任意差し替え SE が存在しない場合は、組み込みプロシージャル和風環境音・シンセへ自動フォールバックする。
+- 公開関数：`audio_init`, `audio_set_volumes`, `audio_consume_events`, `audio_render`, `audio_bgm_track`, `audio_validate_finite`。
 
 ### 9.2 `ink_render`（`src/render/render.h`）
-- 描画対象は `const GameState *`（およびロビー/墨庵/ポーズ/設定用の軽量 `const UiView *`）のみで、ゲーム状態を変更しない。
+- 描画対象は `const GameState *`（および `ui_view.h` で定義する raylib 非依存の軽量 `const UiView *`）のみで、ゲーム状態を変更しない。`render_init(RenderState *r, const RenderOptions *opt)` でポストシェーダ有効/無効と障害注入マスクを受け取り、`render_draw(RenderState *r, const GameState *g, const UiView *ui)` で描画する。
 - 内部に固定長 VFX プール（`sparks[512]`, `bolts[32]`, `seals[16]`, `callouts[24]`）、画面シェイク状態、専用 `vfx_rng`、rlgl 筆描画プリミティブ（`ink_stroke`, `ink_wash`, `ink_splatter`, `ink_outline`, `ink_knockout`, `seal_stamp`）、和紙ポストシェーダ（C 文字列埋め込み）、流体可視化テクスチャ、和風フォント（＋文字列表の英語 ASCII フォールバック）を保持する。
 - **再現性と描画順契約（[art-direction.md](art-direction.md) 準拠）**:
   - 登場物のシルエット揺らぎ（ボイル）は `EntityId`（`index`, `gen`）由来の固定シードで生成し、`vfx_rng` は粒子エフェクトのみに用いる（`--snap` 比較の再現性を維持）。
