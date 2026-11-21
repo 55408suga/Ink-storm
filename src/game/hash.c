@@ -260,6 +260,53 @@ static uint64_t hash_events(const GameState *g)
     return h;
 }
 
+static uint64_t hash_internal(const GameInternal *in)
+{
+    uint64_t h = INK_HASH_INIT;
+    const RunModifiers *m = &in->mods;
+    h = ink_hash_f32(h, m->brush_radius_mul);
+    h = ink_hash_f32(h, m->brush_force_mul);
+    h = ink_hash_f32(h, m->stroke_cost_mul);
+    h = ink_hash_f32(h, m->gale_impulse_mul);
+    h = ink_hash_f32(h, m->ink_max_add);
+    h = ink_hash_f32(h, m->ink_regen_mul);
+    h = ink_hash_f32(h, m->burn_rate_mul);
+    h = hash_i32(h, m->chain_hops_add);
+    h = ink_hash_f32(h, m->chain_range_mul);
+    h = ink_hash_f32(h, m->cyclone_radius_mul);
+    h = ink_hash_f32(h, m->cyclone_duration_add);
+    h = ink_hash_f32(h, m->cyclone_cd);
+    h = ink_hash_f32(h, m->gale_cd);
+    h = ink_hash_f32(h, m->surge_duration);
+
+    for (int i = 0; i < GAME_MAX_ACTIVE_CYCLONES; ++i) {
+        const ActiveCyclone *c = &in->cyclones[i];
+        h = hash_bool(h, c->active);
+        h = ink_hash_f32(h, c->x);
+        h = ink_hash_f32(h, c->y);
+        h = ink_hash_f32(h, c->rad_cells);
+        h = ink_hash_f32(h, c->life);
+        h = ink_hash_f32(h, c->max_life);
+        h = ink_hash_f32(h, c->storm_sustain);
+    }
+
+    h = ink_hash_f32(h, in->ignite_callout_cd);
+    h = hash_bool(h, in->blazing_active);
+    h = ink_hash_f32(h, in->storm_zap_cd);
+    h = ink_hash_f32(h, in->ember_tip_dist);
+    h = ink_hash_f32(h, in->spawn_cd);
+    h = ink_hash_u32(h, in->seen_enemies_mask);
+    h = hash_bool(h, in->act_prepared);
+    h = hash_bool(h, in->first_reward_offered);
+    h = hash_bool(h, in->wave_clear_is_boss);
+    h = ink_hash_f32(h, in->last_boss_x);
+    h = ink_hash_f32(h, in->last_boss_y);
+    h = ink_hash_f32(h, in->boss_vortex_t);
+    h = ink_hash_f32(h, in->boss_vortex_x);
+    h = ink_hash_f32(h, in->boss_vortex_y);
+    return h;
+}
+
 void game_hash_sections(const GameState *g, uint64_t out[GAME_HASH_SECTION_COUNT])
 {
     if (out == NULL) {
@@ -275,7 +322,7 @@ void game_hash_sections(const GameState *g, uint64_t out[GAME_HASH_SECTION_COUNT
     out[GAME_HASH_COMPONENTS] = hash_components(g);
     out[GAME_HASH_RUN] = hash_run(g);
     out[GAME_HASH_EVENTS] = hash_events(g);
-    out[GAME_HASH_INTERNAL] = ink_hash_u32(INK_HASH_INIT, g->internal.reserved);
+    out[GAME_HASH_INTERNAL] = hash_internal(&g->internal);
 }
 
 uint64_t game_hash(const GameState *g)
