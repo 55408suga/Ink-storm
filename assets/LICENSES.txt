@@ -1,0 +1,15 @@
+INKSTORM (墨嵐) Third-Party Asset Licenses
+==========================================
+
+1. UI Mincho Font
+-----------------
+File:       assets/fonts/ui_mincho.ttf
+Font Name:  Shippori Mincho Regular (しっぽり明朝 Regular)
+Version:    Version 3.110; ttfautohint (v1.8.3)
+Copyright:  Copyright 2021 The Shippori Mincho Project Authors
+            (https://github.com/fontdasu/ShipporiMincho)
+License:    SIL Open Font License, Version 1.1 (see assets/fonts/OFL.txt)
+Source URL: https://raw.githubusercontent.com/google/fonts/main/ofl/shipporimincho/ShipporiMincho-Regular.ttf
+            (upstream: https://github.com/fontdasu/ShipporiMincho)
+Status:     Unmodified original distribution (renamed to ui_mincho.ttf only;
+            no subsetting or glyph/table modification).

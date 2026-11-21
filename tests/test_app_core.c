@@ -1,5 +1,6 @@
 #include "cli.h"
 #include "frame_clock.h"
+#include "input_latch.h"
 #include "unity.h"
 
 #include <limits.h>
@@ -166,6 +167,136 @@ static void test_frame_clock(void)
     TEST_ASSERT_TRUE(clock.accumulator == 0.0);
 }
 
+static RawInput make_raw(float x, float y)
+{
+    return (RawInput){
+        .mouse_x = x,
+        .mouse_y = y,
+        .pick_pressed = -1,
+    };
+}
+
+static void test_latch_move_first_tick_only(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    RawInput raw = make_raw(100.0f, 50.0f);
+    input_latch_feed(&l, &raw);
+
+    const BrushInput t1 = input_latch_take_tick(&l);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, t1.pmx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, t1.pmy);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 100.0f, t1.mx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.0f, t1.my);
+
+    const BrushInput t2 = input_latch_take_tick(&l);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 100.0f, t2.pmx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.0f, t2.pmy);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 100.0f, t2.mx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.0f, t2.my);
+}
+
+static void test_latch_zero_tick_frame_preserves_motion(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    RawInput r1 = make_raw(10.0f, 0.0f);
+    RawInput r2 = make_raw(20.0f, 0.0f);
+    input_latch_feed(&l, &r1);
+    input_latch_feed(&l, &r2);
+
+    const BrushInput t = input_latch_take_tick(&l);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, t.pmx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 20.0f, t.mx);
+}
+
+static void test_latch_edge_press_held_and_coalesced(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    RawInput press = make_raw(0.0f, 0.0f);
+    press.cyclone_pressed = true;
+    input_latch_feed(&l, &press);
+    input_latch_feed(&l, &press);
+
+    RawInput idle = make_raw(0.0f, 0.0f);
+    input_latch_feed(&l, &idle);
+
+    const BrushInput t1 = input_latch_take_tick(&l);
+    const BrushInput t2 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(t1.cyclone);
+    TEST_ASSERT_FALSE(t2.cyclone);
+}
+
+static void test_latch_reward_commands_and_priority(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    RawInput r = make_raw(0.0f, 0.0f);
+    r.pick_pressed = 1;
+    input_latch_feed(&l, &r);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_PLAYING).type);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+
+    input_latch_feed(&l, &r);
+    const GameCommand c1 = input_latch_take_command(&l, RUN_PHASE_REWARD);
+    TEST_ASSERT_EQUAL_INT(CMD_PICK_REWARD, c1.type);
+    TEST_ASSERT_EQUAL_INT32(1, c1.arg);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+
+    RawInput both = make_raw(0.0f, 0.0f);
+    both.pick_pressed = 2;
+    both.reroll_pressed = true;
+    both.repair_pressed = true;
+    input_latch_feed(&l, &both);
+    const GameCommand c2 = input_latch_take_command(&l, RUN_PHASE_REWARD);
+    TEST_ASSERT_EQUAL_INT(CMD_PICK_REWARD, c2.type);
+    TEST_ASSERT_EQUAL_INT32(2, c2.arg);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+}
+
+static void test_latch_paint_suppression_after_ui_click(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 10.0f, 10.0f);
+
+    RawInput ui = make_raw(10.0f, 10.0f);
+    ui.left_down = true;
+    ui.ui_click = true;
+    input_latch_feed(&l, &ui);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    RawInput still_down = make_raw(20.0f, 10.0f);
+    still_down.left_down = true;
+    input_latch_feed(&l, &still_down);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    RawInput released = make_raw(20.0f, 10.0f);
+    input_latch_feed(&l, &released);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    RawInput pressed_again = make_raw(30.0f, 10.0f);
+    pressed_again.left_down = true;
+    input_latch_feed(&l, &pressed_again);
+    TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
+}
+
+static void test_latch_confirm_once(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    RawInput r = make_raw(0.0f, 0.0f);
+    r.confirm_pressed = true;
+    input_latch_feed(&l, &r);
+    TEST_ASSERT_TRUE(input_latch_take_confirm(&l));
+    TEST_ASSERT_FALSE(input_latch_take_confirm(&l));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -173,5 +304,11 @@ int main(void)
     RUN_TEST(test_cli_usage_errors);
     RUN_TEST(test_cli_debug_faults);
     RUN_TEST(test_frame_clock);
+    RUN_TEST(test_latch_move_first_tick_only);
+    RUN_TEST(test_latch_zero_tick_frame_preserves_motion);
+    RUN_TEST(test_latch_edge_press_held_and_coalesced);
+    RUN_TEST(test_latch_reward_commands_and_priority);
+    RUN_TEST(test_latch_paint_suppression_after_ui_click);
+    RUN_TEST(test_latch_confirm_once);
     return UNITY_END();
 }

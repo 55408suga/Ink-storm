@@ -13,6 +13,7 @@ void input_latch_init(InputLatch *l, float x, float y)
     l->prev_y = y;
     l->cur_x = x;
     l->cur_y = y;
+    l->pick_pending = -1;
 }
 
 void input_latch_feed(InputLatch *l, const RawInput *raw)
@@ -23,6 +24,29 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
     l->cur_x = raw->mouse_x;
     l->cur_y = raw->mouse_y;
     l->left_down = raw->left_down;
+
+    if (raw->ui_click && raw->left_down) {
+        l->paint_suppressed = true;
+    } else if (!raw->left_down) {
+        l->paint_suppressed = false;
+    }
+
+    if (raw->cyclone_pressed) {
+        l->cyclone_pending = true;
+    }
+    if (raw->gale_pressed) {
+        l->gale_pending = true;
+    }
+    if (raw->pick_pressed >= 0 && raw->pick_pressed < GAME_MAX_REWARD_CHOICES &&
+        l->pick_pending < 0) {
+        l->pick_pending = raw->pick_pressed;
+    }
+    if (raw->repair_pressed) {
+        l->repair_pending = true;
+    }
+    if (raw->reroll_pressed) {
+        l->reroll_pending = true;
+    }
     if (raw->confirm_pressed) {
         l->confirm_pending = true;
     }
@@ -38,9 +62,14 @@ BrushInput input_latch_take_tick(InputLatch *l)
     in.my = l->cur_y;
     in.pmx = l->prev_x;
     in.pmy = l->prev_y;
-    in.paint = l->left_down;
+    in.paint = l->left_down && !l->paint_suppressed;
+    in.cyclone = l->cyclone_pending;
+    in.gale = l->gale_pending;
+
     l->prev_x = l->cur_x;
     l->prev_y = l->cur_y;
+    l->cyclone_pending = false;
+    l->gale_pending = false;
     return in;
 }
 
@@ -50,12 +79,21 @@ GameCommand input_latch_take_command(InputLatch *l, RunPhase phase)
     if (l == NULL) {
         return cmd;
     }
-    if (phase == RUN_PHASE_REWARD && l->pending_cmd != CMD_NONE) {
-        cmd.type = l->pending_cmd;
-        cmd.arg = l->pending_arg;
+    if (phase == RUN_PHASE_REWARD) {
+        if (l->pick_pending >= 0) {
+            cmd.type = CMD_PICK_REWARD;
+            cmd.arg = l->pick_pending;
+        } else if (l->repair_pending) {
+            cmd.type = CMD_REPAIR_SHRINE;
+            cmd.arg = 0;
+        } else if (l->reroll_pending) {
+            cmd.type = CMD_REROLL_REWARD;
+            cmd.arg = 0;
+        }
     }
-    l->pending_cmd = CMD_NONE;
-    l->pending_arg = 0;
+    l->pick_pending = -1;
+    l->repair_pending = false;
+    l->reroll_pending = false;
     return cmd;
 }
 
