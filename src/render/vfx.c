@@ -382,7 +382,8 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
         r->reward_reroll_t = fmaxf(0.0f, r->reward_reroll_t - dt);
     }
 
-    if (r->intro_count > 0) {
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f &&
+        (g->phase == RUN_PHASE_PLAYING || g->phase == RUN_PHASE_WAVE_AFTERMATH)) {
         r->intro_t += dt;
         if (r->intro_t >= 2.0f) {
             r->intro_head = (r->intro_head + 1) % RENDER_MAX_INTRO_QUEUE;

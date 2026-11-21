@@ -384,7 +384,7 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
 }
 
 static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossComp *boss,
-                            uint32_t seed, int act_index, float alpha)
+                            const ShrineState *shrine, uint32_t seed, int act_index, float alpha)
 {
     const float cx = tr->x;
     const float cy = tr->y;
@@ -396,6 +396,17 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
         const float ty = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f ? boss->gale_dy : 1.0f;
         const float len = 180.0f + boss->telegraph * 140.0f;
         const InkTone warn = {.color = PAL_SHU, .alpha = 0.55f + 0.35f * boss->telegraph};
+        if (boss->telegraph_pattern == 3 && shrine != NULL) {
+            const float vr = 14.0f * FLUID_CELL_PX;
+            const int segs = 12;
+            for (int k = 0; k < segs; ++k) {
+                const float a0 = k_ent_two_pi * (float)k / (float)segs;
+                const float a1 = k_ent_two_pi * ((float)k + 0.55f) / (float)segs;
+                const Vector2 p0 = {shrine->x + cosf(a0) * vr, shrine->y + sinf(a0) * vr};
+                const Vector2 p1 = {shrine->x + cosf(a1) * vr, shrine->y + sinf(a1) * vr};
+                ink_dashed_stroke(r, p0, p1, 18.0f, 6.0f, 3.4f, warn, seed + 90u + (uint32_t)k);
+            }
+        }
         for (int k = -1; k <= 1; ++k) {
             const float a = atan2f(ty, tx) + (float)k * 0.24f;
             const Vector2 dst = {cx + cosf(a) * len, cy + sinf(a) * len};
@@ -654,7 +665,15 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         const TransformComp *tr = game_transform(g, id);
         const ProjComp *pr = game_proj(g, id);
         if (tr != NULL && pr != NULL) {
-            draw_projectile(r, tr, game_velocity(g, id), pr, entity_seed(id, 2u, boil), act_index);
+            const uint32_t pseed = entity_seed(id, 2u, boil);
+            if (tr->dissolving) {
+                const float u = ink_clampf(tr->dissolve_t / 0.6f, 0.0f, 1.0f);
+                const float rad = (tr->radius > 3.0f ? tr->radius : 7.0f) * (1.1f + 0.8f * u);
+                ink_wash(r, (Vector2){tr->x, tr->y}, rad, rad * 0.88f, u * 0.8f,
+                         (InkTone){.color = PAL_SUMI_LIGHT, .alpha = (1.0f - u) * 0.65f}, 1, pseed);
+            } else {
+                draw_projectile(r, tr, game_velocity(g, id), pr, pseed, act_index);
+            }
         }
     }
 
@@ -663,6 +682,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         draw_shrine(r, &g->shrines[s], g->ticks, act_index);
     }
 
+    const ShrineState *primary_shrine = g->shrine_count > 0 ? &g->shrines[0] : NULL;
     for (uint32_t i = 0; i < hw; ++i) {
         if (!g->ecs.alive[i]) {
             continue;
@@ -694,7 +714,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
             draw_enemy_umbrella(r, tr, en, seed, act_index, 1.0f);
             break;
         case ENEMY_BOSS_TENGU:
-            draw_boss_tengu(r, tr, game_boss(g, id), seed, act_index, 1.0f);
+            draw_boss_tengu(r, tr, game_boss(g, id), primary_shrine, seed, act_index, 1.0f);
             break;
         default:
             break;

@@ -115,9 +115,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 118.0f}, 18.0f, PAL_SUMI_HEAVY,
                               0.88f, false);
 
-    const float anim = r->reward_reroll_t > 0.0f
-                           ? (1.0f - r->reward_reroll_t / 0.40f)
-                           : (r->reward_anim_t > 0.05f ? r->reward_anim_t : 1.0f);
+    const float anim = r->reward_reroll_t > 0.0f ? (1.0f - r->reward_reroll_t / 0.40f)
+                                                 : ink_clampf(r->reward_anim_t, 0.0f, 1.0f);
+    const float text_a = ink_clampf((anim - 0.40f) / 0.45f, 0.0f, 1.0f);
     const int32_t hover = ui != NULL ? ui->hover_choice : UI_HOVER_NONE;
 
     for (int32_t i = 0; i < layout.card_count; ++i) {
@@ -134,6 +134,10 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         const PaletteId border = is_hover ? pal_axis_color(axis) : PAL_SUMI_DARK;
         ink_fill_panel(r, vis, PAL_GOFUN, 0.95f, border, 0.94f, 450u + (uint32_t)i);
 
+        if (text_a <= 0.01f) {
+            continue;
+        }
+
         const float cx = vis.x + vis.width * 0.5f;
         draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f}, axis);
 
@@ -141,12 +145,12 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         char hdr[64];
         snprintf(hdr, sizeof hdr, "[%d] %s", i + 1, text_get(text_axis_name(axis), r->use_ja));
         render_draw_text_centered(r, hdr, (Vector2){cx, vis.y + 82.0f}, 18.0f, pal_axis_color(axis),
-                                  0.94f, false);
+                                  0.94f * text_a, false);
 
         /* Upgrade name */
         const char *name = text_get(text_upgrade_name(uid), r->use_ja);
         render_draw_text_centered(r, name, (Vector2){cx, vis.y + 124.0f}, 26.0f, PAL_SUMI_SCORCH,
-                                  0.98f, false);
+                                  0.98f * text_a, false);
 
         /* Current Lv -> Next Lv */
         const uint8_t cur_lv = game_upgrade_level(g, uid);
@@ -155,7 +159,7 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         snprintf(lv_buf, sizeof lv_buf, "%s %u -> %u", text_get(TEXT_REWARD_LV, r->use_ja),
                  (unsigned)cur_lv, (unsigned)next_lv);
         render_draw_text_centered(r, lv_buf, (Vector2){cx, vis.y + 168.0f}, 20.0f, PAL_SUMI_HEAVY,
-                                  0.92f, false);
+                                  0.92f * text_a, false);
 
         /* Divider brush line */
         const Vector2 div_pts[2] = {{vis.x + 28.0f, vis.y + 196.0f},
@@ -167,12 +171,12 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                                   .exit = 0.25f,
                                   .dry = 0.3f,
                                   .seed = 460u + (uint32_t)i},
-                   (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f}, 1.0f);
+                   (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f * text_a}, 1.0f);
 
         /* Effect description */
         const char *eff = text_get(text_upgrade_effect(uid, (int)next_lv), r->use_ja);
         render_draw_text_centered(r, eff, (Vector2){cx, vis.y + 248.0f}, 18.0f, PAL_SUMI_DARK,
-                                  0.94f, false);
+                                  0.94f * text_a, false);
 
         if (is_hover) {
             seal_stamp(r, TEXT_SEAL_DONE,

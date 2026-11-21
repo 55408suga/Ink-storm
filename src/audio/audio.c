@@ -75,8 +75,31 @@ void audio_consume_events(AudioState *audio, const struct GameState *game)
 
     const uint64_t tick_sample = audio->consumed_ticks * (uint64_t)AUDIO_SAMPLES_PER_TICK;
     audio->consumed_ticks++;
-    const uint64_t at_sample =
+    uint64_t at_sample =
         tick_sample >= audio->samples_rendered ? tick_sample : audio->samples_rendered;
+    const uint64_t max_lead = (uint64_t)AUDIO_SAMPLES_PER_TICK * 15u;
+    const uint64_t limit =
+        ((audio->samples_rendered + max_lead) / (uint64_t)AUDIO_SAMPLES_PER_TICK) *
+        (uint64_t)AUDIO_SAMPLES_PER_TICK;
+    if (at_sample > limit && limit >= audio->samples_rendered) {
+        const uint64_t excess = at_sample - limit;
+        for (int32_t i = 0; i < audio->state_q_count; ++i) {
+            const int32_t idx = (audio->state_q_head + i) % AUDIO_STATE_QUEUE_CAP;
+            if (audio->state_q[idx].at_sample > audio->samples_rendered) {
+                const uint64_t delta = audio->state_q[idx].at_sample - audio->samples_rendered;
+                audio->state_q[idx].at_sample -= delta > excess ? excess : delta;
+            }
+        }
+        for (int32_t i = 0; i < AUDIO_MAX_VOICES; ++i) {
+            if (audio->voices[i].active &&
+                audio->voices[i].start_sample > audio->samples_rendered) {
+                const uint64_t delta = audio->voices[i].start_sample - audio->samples_rendered;
+                audio->voices[i].start_sample -= delta > excess ? excess : delta;
+            }
+        }
+        at_sample = limit;
+        audio->consumed_ticks = (limit / (uint64_t)AUDIO_SAMPLES_PER_TICK) + 1u;
+    }
 
     const BgmTrack next_bgm = desired_bgm_for_game(game);
     audio->bgm = next_bgm;

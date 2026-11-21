@@ -142,6 +142,13 @@ void boss_tengu_step(GameState *g, EntityId id)
         }
         boss->telegraph_pattern = boss->pattern;
     } else if (en->fire_cd <= tele_dur) {
+        if (boss->gale_t <= 0.0f) {
+            const float dx = sx - tr->x;
+            const float dy = sy - tr->y;
+            const float d = hypotf(dx, dy);
+            boss->gale_dx = d > 1e-6f ? dx / d : 0.0f;
+            boss->gale_dy = d > 1e-6f ? dy / d : 1.0f;
+        }
         boss->telegraph_pattern = next_pat;
         boss->telegraph = ink_clampf((tele_dur - en->fire_cd) / tele_dur, 0.0f, 1.0f);
     } else {

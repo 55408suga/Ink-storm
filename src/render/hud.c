@@ -88,6 +88,13 @@ static void draw_center_progress(RenderState *r, const GameState *g)
     }
 
     char wave_buf[96];
+    if (g->run.wave_index >= GAME_BOSS_WAVE_INDEX) {
+        snprintf(wave_buf, sizeof wave_buf, "%s  %s", text_get(TEXT_HUD_ACT, r->use_ja),
+                 text_get(TEXT_HUD_BOSS, r->use_ja));
+        render_draw_text_centered(r, wave_buf, (Vector2){cx, 26.0f}, 20.0f, PAL_SUMI_DARK, 0.95f,
+                                  false);
+        return;
+    }
     snprintf(wave_buf, sizeof wave_buf, "%s  %s %d/3", text_get(TEXT_HUD_ACT, r->use_ja),
              text_get(TEXT_HUD_WAVE, r->use_ja), g->run.wave_index + 1);
     render_draw_text_centered(r, wave_buf, (Vector2){cx - 72.0f, 26.0f}, 20.0f, PAL_SUMI_DARK,

@@ -21,7 +21,7 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
         return;
     }
 
-    const float open = r->victory_scroll_t > 0.1f ? r->victory_scroll_t : 1.0f;
+    const float open = ink_clampf(r->victory_scroll_t, 0.05f, 1.0f);
     const Vector2 full[4] = {{0.0f, 0.0f},
                              {(float)INK_SCREEN_W, 0.0f},
                              {(float)INK_SCREEN_W, (float)INK_SCREEN_H},
