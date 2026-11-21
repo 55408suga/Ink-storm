@@ -1,0 +1,13 @@
+# Keep bounded glibc APIs such as snprintf available without requiring C11 Annex K.
+Checks: >-
+  -*,
+  bugprone-macro-parentheses,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-memset-usage,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  readability-misleading-indentation
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'src/.*'
