@@ -20,6 +20,19 @@ EntityId game_debug_spawn_projectile(GameState *g, ProjKind kind, float x, float
 
 EntityId game_debug_spawn_orb(GameState *g, float x, float y) { return combat_spawn_orb(g, x, y); }
 
+void game_debug_start_act(GameState *g, int32_t act_index)
+{
+    if (g == NULL || act_index < 0 || act_index >= GAME_MAIN_ACT_COUNT) {
+        return;
+    }
+    g->run.act_index = act_index;
+    g->run.wave_index = 0;
+    g->internal.act_prepared = false;
+    waves_prepare_act(g);
+    g->phase = RUN_PHASE_ACT_TRANSITION;
+    g->phase_t = 0.0f;
+}
+
 void game_debug_start_wave(GameState *g, int32_t wave_index) { waves_start_wave(g, wave_index); }
 
 void game_debug_force_wave_clear(GameState *g)

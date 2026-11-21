@@ -1,6 +1,7 @@
 #include "roguelike/rewards.h"
 
 #include "core.h"
+#include "roguelike/relics.h"
 #include "roguelike/upgrades.h"
 #include "roguelike/waves.h"
 
@@ -151,37 +152,112 @@ void rewards_generate_offer(GameState *g)
     g->internal.first_reward_offered = true;
 }
 
-bool rewards_pick_upgrade(GameState *g, int32_t choice_index)
+static void clear_reward_and_advance_act(GameState *g)
 {
-    if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.reward.kind != REWARD_KIND_UPGRADE ||
-        choice_index < 0 || choice_index >= g->run.reward.choice_count ||
-        choice_index >= GAME_MAX_REWARD_CHOICES) {
-        return false;
-    }
-    const UpgradeId chosen = (UpgradeId)g->run.reward.choice_ids[choice_index];
-    if (!roguelike_grant_upgrade(g, chosen)) {
-        return false;
-    }
-    (void)game_push_event(g, (GameEvent){
-                                 .type = EV_REWARD_PICK,
-                                 .value = (int32_t)chosen,
-                                 .flags = 0,
-                             });
     g->run.reward.kind = REWARD_KIND_NONE;
     g->run.reward.choice_count = 0;
     g->run.reward.repair_available = false;
-    waves_start_wave(g, g->run.wave_index + 1);
-    return true;
+    g->internal.wave_clear_is_boss = false;
+    ++g->run.act_index;
+    g->run.wave_index = 0;
+    g->internal.act_prepared = false;
+    g->phase = RUN_PHASE_ACT_TRANSITION;
+    g->phase_t = 0.0f;
+}
+
+void rewards_generate_relic_offer(GameState *g)
+{
+    if (g == NULL) {
+        return;
+    }
+    RewardOffer *offer = &g->run.reward;
+    RelicId pool[RELIC_COUNT];
+    int32_t pool_count = 0;
+    for (int32_t i = 0; i < (int32_t)RELIC_COUNT; ++i) {
+        const RelicId id = (RelicId)i;
+        if (!game_has_relic(g, id)) {
+            pool[pool_count++] = id;
+        }
+    }
+
+    memset(offer->choice_ids, 0, sizeof offer->choice_ids);
+    memset(offer->choice_next_level, 0, sizeof offer->choice_next_level);
+    offer->choice_count = 0;
+
+    if (pool_count == 0) {
+        offer->kind = REWARD_KIND_FALLBACK;
+        offer->repair_available = true;
+        ++offer->serial;
+        return;
+    }
+
+    offer->kind = REWARD_KIND_RELIC;
+    offer->repair_available = false;
+
+    for (int32_t slot = 0; slot < GAME_MAX_REWARD_CHOICES && pool_count > 0; ++slot) {
+        const int32_t pick = (int32_t)(ink_rng_next(&g->rng) % (uint64_t)pool_count);
+        offer->choice_ids[slot] = (int32_t)pool[pick];
+        offer->choice_next_level[slot] = 1u;
+        offer->choice_count = slot + 1;
+        for (int32_t k = pick; k + 1 < pool_count; ++k) {
+            pool[k] = pool[k + 1];
+        }
+        --pool_count;
+    }
+    ++offer->serial;
+}
+
+bool rewards_pick_reward(GameState *g, int32_t choice_index)
+{
+    if (g == NULL || g->phase != RUN_PHASE_REWARD || choice_index < 0 ||
+        choice_index >= g->run.reward.choice_count || choice_index >= GAME_MAX_REWARD_CHOICES) {
+        return false;
+    }
+    if (g->run.reward.kind == REWARD_KIND_UPGRADE) {
+        const UpgradeId chosen = (UpgradeId)g->run.reward.choice_ids[choice_index];
+        if (!roguelike_grant_upgrade(g, chosen)) {
+            return false;
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_REWARD_PICK,
+                                     .value = (int32_t)chosen,
+                                     .flags = 0,
+                                 });
+        g->run.reward.kind = REWARD_KIND_NONE;
+        g->run.reward.choice_count = 0;
+        g->run.reward.repair_available = false;
+        waves_start_wave(g, g->run.wave_index + 1);
+        return true;
+    }
+    if (g->run.reward.kind == REWARD_KIND_RELIC) {
+        const RelicId chosen = (RelicId)g->run.reward.choice_ids[choice_index];
+        if (!roguelike_grant_relic(g, chosen)) {
+            return false;
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_REWARD_PICK,
+                                     .value = (int32_t)chosen,
+                                     .flags = EVF_REWARD_RELIC,
+                                 });
+        clear_reward_and_advance_act(g);
+        return true;
+    }
+    return false;
 }
 
 bool rewards_reroll(GameState *g)
 {
-    if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.reward.kind != REWARD_KIND_UPGRADE ||
-        g->run.rerolls_left <= 0) {
+    if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.rerolls_left <= 0 ||
+        (g->run.reward.kind != REWARD_KIND_UPGRADE && g->run.reward.kind != REWARD_KIND_RELIC)) {
         return false;
     }
+    const RewardKind kind = g->run.reward.kind;
     --g->run.rerolls_left;
-    rewards_generate_offer(g);
+    if (kind == REWARD_KIND_RELIC) {
+        rewards_generate_relic_offer(g);
+    } else {
+        rewards_generate_offer(g);
+    }
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_REWARD_REROLL,
                                  .value = g->run.rerolls_left,
@@ -203,9 +279,13 @@ bool rewards_repair_shrine(GameState *g)
                                  .value = -1,
                                  .flags = EVF_REWARD_REPAIR,
                              });
-    g->run.reward.kind = REWARD_KIND_NONE;
-    g->run.reward.choice_count = 0;
-    g->run.reward.repair_available = false;
-    waves_start_wave(g, g->run.wave_index + 1);
+    if (g->internal.wave_clear_is_boss) {
+        clear_reward_and_advance_act(g);
+    } else {
+        g->run.reward.kind = REWARD_KIND_NONE;
+        g->run.reward.choice_count = 0;
+        g->run.reward.repair_available = false;
+        waves_start_wave(g, g->run.wave_index + 1);
+    }
     return true;
 }

@@ -51,6 +51,66 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .spawn_fn = boss_tengu_spawn,
             .ai_step_fn = boss_tengu_step,
         },
+    [ENEMY_LANTERN_STORM] =
+        {
+            .id = ENEMY_LANTERN_STORM,
+            .base_hp = 20,
+            .radius = 17.0f,
+            .mass_tier = MASS_TURRET,
+            .fluid_coupling = 0.0f,
+            .score = 140,
+            .orb_count = 2,
+        },
+    [ENEMY_KAMAITACHI] =
+        {
+            .id = ENEMY_KAMAITACHI,
+            .base_hp = 30,
+            .radius = 16.0f,
+            .mass_tier = MASS_MEDIUM,
+            .fluid_coupling = 1.5f,
+            .score = 160,
+            .orb_count = 1,
+        },
+    [ENEMY_STONE_ONI] =
+        {
+            .id = ENEMY_STONE_ONI,
+            .base_hp = 90,
+            .radius = 24.0f,
+            .mass_tier = MASS_HEAVY,
+            .fluid_coupling = 0.3f,
+            .score = 300,
+            .orb_count = 3,
+        },
+    [ENEMY_INK_LEECH] =
+        {
+            .id = ENEMY_INK_LEECH,
+            .base_hp = 40,
+            .radius = 19.0f,
+            .mass_tier = MASS_MEDIUM,
+            .fluid_coupling = 1.5f,
+            .score = 220,
+            .orb_count = 3,
+        },
+    [ENEMY_BOSS_NUE] =
+        {
+            .id = ENEMY_BOSS_NUE,
+            .base_hp = 700,
+            .radius = 40.0f,
+            .mass_tier = MASS_BOSS,
+            .fluid_coupling = 0.0f,
+            .score = 1500,
+            .orb_count = 8,
+        },
+    [ENEMY_BOSS_RYU] =
+        {
+            .id = ENEMY_BOSS_RYU,
+            .base_hp = 1500,
+            .radius = 46.0f,
+            .mass_tier = MASS_BOSS,
+            .fluid_coupling = 0.0f,
+            .score = 1500,
+            .orb_count = 8,
+        },
 };
 
 const EnemyDef *enemy_def_get(EnemyDefId id)
@@ -68,8 +128,9 @@ EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
         return invalid;
     }
     const EnemyDef *def = &k_enemy_defs[def_id];
+    const bool is_boss = game_is_boss_enemy(def_id);
     uint64_t mask = COMP_TRANSFORM | COMP_VELOCITY | COMP_HEALTH | COMP_STATUS | COMP_ENEMY;
-    if (def_id == ENEMY_BOSS_TENGU) {
+    if (is_boss) {
         mask |= COMP_BOSS;
     }
     const EntityId id = game_spawn_entity(g, mask);
@@ -97,6 +158,11 @@ EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
     EnemyComp *en = game_enemy_mut(g, id);
     if (en != NULL) {
         en->def_id = def_id;
+    }
+    if (is_boss) {
+        g->run.boss_id = id;
+        g->internal.last_boss_x = x;
+        g->internal.last_boss_y = y;
     }
     if (def->spawn_fn != NULL) {
         def->spawn_fn(g, id);

@@ -164,6 +164,48 @@ static void test_event_queue_capacity_contract(void)
     game_destroy(g);
 }
 
+static void test_phase4_pre_contracts(void)
+{
+    for (int id = 0; id < (int)UPG_COUNT; ++id) {
+        TEST_ASSERT_EQUAL_UINT8(3, game_upgrade_max_level((UpgradeId)id));
+        TEST_ASSERT_TRUE((unsigned)game_upgrade_axis((UpgradeId)id) < (unsigned)AXIS_COUNT);
+    }
+    TEST_ASSERT_EQUAL_UINT8(0, game_upgrade_max_level(UPG_COUNT));
+    TEST_ASSERT_EQUAL_UINT8(0, game_upgrade_max_level((UpgradeId)-1));
+
+    TEST_ASSERT_TRUE(game_is_boss_enemy(ENEMY_BOSS_TENGU));
+    TEST_ASSERT_TRUE(game_is_boss_enemy(ENEMY_BOSS_NUE));
+    TEST_ASSERT_TRUE(game_is_boss_enemy(ENEMY_BOSS_RYU));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_ARCHER));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_LANTERN_FIRE));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_UMBRELLA));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_LANTERN_STORM));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_KAMAITACHI));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_STONE_ONI));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_INK_LEECH));
+    TEST_ASSERT_FALSE(game_is_boss_enemy(ENEMY_DEF_COUNT));
+
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_EQUAL_INT32(GAME_MAIN_ACT_COUNT, g->run.act_count);
+    TEST_ASSERT_FALSE(game_has_relic(g, RELIC_VERMILION_INKSTONE));
+    TEST_ASSERT_FALSE(game_has_relic(g, RELIC_COUNT));
+    TEST_ASSERT_FALSE(game_has_relic(NULL, RELIC_VERMILION_INKSTONE));
+
+    game_debug_start_act(g, 1);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.act_index);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.wave_index);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, g->phase);
+
+    const uint64_t h_before = game_hash(g);
+    game_debug_start_act(g, -1);
+    game_debug_start_act(g, GAME_MAIN_ACT_COUNT);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.act_index);
+    TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(g));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -174,5 +216,6 @@ int main(void)
     RUN_TEST(test_abort_run_contract);
     RUN_TEST(test_component_accessors_contract);
     RUN_TEST(test_event_queue_capacity_contract);
+    RUN_TEST(test_phase4_pre_contracts);
     return UNITY_END();
 }

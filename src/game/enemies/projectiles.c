@@ -49,51 +49,80 @@ EntityId projectiles_spawn_dir(GameState *g, ProjKind kind, float x, float y, fl
     return projectiles_spawn(g, kind, x, y, nx * speed, ny * speed);
 }
 
+static bool is_storm_proj_kind(ProjKind kind)
+{
+    return kind == PROJ_STORM_ORB || kind == PROJ_BOUNCE_ORB;
+}
+
 static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float ox, float oy,
                                        uint32_t hw)
 {
-    EntityId best = {ECS_INVALID_INDEX, 0};
-    float best_d2 = 160.0f * 160.0f + 1.0f;
-    float bx = 0.0f;
-    float by = 0.0f;
-
-    for (uint32_t j = 0; j < hw; ++j) {
-        const EntityId cand = ecs_entity_at(&g->ecs, j);
-        if (cand.index == ECS_INVALID_INDEX || cand.index == hit_enemy.index) {
-            continue;
-        }
-        const TransformComp *tr = game_transform(g, cand);
-        const EnemyComp *en = game_enemy(g, cand);
-        if (tr == NULL || en == NULL || tr->dissolving) {
-            continue;
-        }
-        const float dx = tr->x - ox;
-        const float dy = tr->y - oy;
-        const float d2 = dx * dx + dy * dy;
-        if (d2 <= 160.0f * 160.0f && d2 < best_d2) {
-            best_d2 = d2;
-            best = cand;
-            bx = tr->x;
-            by = tr->y;
-        }
+    int32_t max_targets = g->internal.mods.thunder_proj_targets;
+    if (max_targets < 1) {
+        max_targets = 1;
+    } else if (max_targets > 8) {
+        max_targets = 8;
     }
 
-    if (best.index == ECS_INVALID_INDEX) {
-        return;
+    uint32_t already_hit[8];
+    int32_t hit_n = 0;
+
+    for (int32_t t = 0; t < max_targets; ++t) {
+        EntityId best = {ECS_INVALID_INDEX, 0};
+        float best_d2 = 160.0f * 160.0f + 1.0f;
+        float bx = 0.0f;
+        float by = 0.0f;
+
+        for (uint32_t j = 0; j < hw; ++j) {
+            const EntityId cand = ecs_entity_at(&g->ecs, j);
+            if (cand.index == ECS_INVALID_INDEX || cand.index == hit_enemy.index) {
+                continue;
+            }
+            bool used = false;
+            for (int32_t k = 0; k < hit_n; ++k) {
+                if (already_hit[k] == cand.index) {
+                    used = true;
+                    break;
+                }
+            }
+            if (used) {
+                continue;
+            }
+            const TransformComp *tr = game_transform(g, cand);
+            const EnemyComp *en = game_enemy(g, cand);
+            if (tr == NULL || en == NULL || tr->dissolving ||
+                (en->elite_flags & ELITE_STORMPROOF) != 0) {
+                continue;
+            }
+            const float dx = tr->x - ox;
+            const float dy = tr->y - oy;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= 160.0f * 160.0f && d2 < best_d2) {
+                best_d2 = d2;
+                best = cand;
+                bx = tr->x;
+                by = tr->y;
+            }
+        }
+
+        if (best.index == ECS_INVALID_INDEX) {
+            break;
+        }
+        already_hit[hit_n++] = best.index;
+        if (g->run.storm_zaps < META_MAX_COUNTERS) {
+            ++g->run.storm_zaps;
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_STORM_ZAP,
+                                     .x = ox,
+                                     .y = oy,
+                                     .x2 = bx,
+                                     .y2 = by,
+                                     .value = 0,
+                                     .flags = 0,
+                                 });
+        (void)combat_apply_damage(g, best, 10, DMG_STORM, 0.0f, 0.0f);
     }
-    if (g->run.storm_zaps < META_MAX_COUNTERS) {
-        ++g->run.storm_zaps;
-    }
-    (void)game_push_event(g, (GameEvent){
-                                 .type = EV_STORM_ZAP,
-                                 .x = ox,
-                                 .y = oy,
-                                 .x2 = bx,
-                                 .y2 = by,
-                                 .value = 0,
-                                 .flags = 0,
-                             });
-    (void)combat_apply_damage(g, best, 10, DMG_STORM, 0.0f, 0.0f);
 }
 
 void projectiles_step(GameState *g)
@@ -143,7 +172,7 @@ void projectiles_step(GameState *g)
                                             : 1.0f;
             if ((fsp > 48.0f && toward_center < 0.90f) || toward_center < 0.28f) {
                 proj->deflected = true;
-                if (proj->kind == PROJ_STORM_ORB) {
+                if (is_storm_proj_kind(proj->kind) || g->internal.mods.deflect_auto_electrify) {
                     proj->electrified = true;
                 }
                 vel->vx += fu_px * 0.55f;
@@ -152,7 +181,7 @@ void projectiles_step(GameState *g)
                 const float ddye[FLUID_MAX_CHANNELS] = {
                     0.35f,
                     proj->kind == PROJ_FIREBALL ? 0.72f : 0.16f,
-                    proj->kind == PROJ_STORM_ORB ? 0.85f : 0.0f,
+                    is_storm_proj_kind(proj->kind) ? 0.85f : 0.0f,
                     0.0f,
                 };
                 fluid_splat(&g->fluid, tr->x, tr->y, 3.0f,
@@ -193,7 +222,7 @@ void projectiles_step(GameState *g)
                 if (d2 >= 620.0f * 620.0f) {
                     continue;
                 }
-                const float sc = d2 * (een->def_id == ENEMY_BOSS_TENGU ? 0.65f : 1.0f);
+                const float sc = d2 * (game_is_boss_enemy(een->def_id) ? 0.65f : 1.0f);
                 if (sc < best_score) {
                     best_score = sc;
                     best = eid;
@@ -206,7 +235,8 @@ void projectiles_step(GameState *g)
                     const float ey = btr->y - tr->y;
                     const float ed = hypotf(ex, ey);
                     if (ed > 1e-6f) {
-                        const float steer = proj->burning ? 840.0f : 700.0f;
+                        const float steer =
+                            (proj->burning ? 840.0f : 700.0f) * g->internal.mods.homing_steer_mul;
                         vel->vx += (ex / ed) * steer * INK_FIXED_DT;
                         vel->vy += (ey / ed) * steer * INK_FIXED_DT;
                     }
@@ -215,7 +245,10 @@ void projectiles_step(GameState *g)
         }
 
         psp = hypotf(vel->vx, vel->vy);
-        const float max_sp = proj->burning ? 640.0f : (proj->deflected ? 550.0f : 365.0f);
+        const float base_max_sp = proj->burning ? 640.0f : (proj->deflected ? 550.0f : 365.0f);
+        const float max_sp = proj->deflected
+                                 ? (base_max_sp * g->internal.mods.deflected_max_speed_mul)
+                                 : base_max_sp;
         const float target_sp = ink_clampf(psp, 180.0f, max_sp);
         if (psp > 1e-6f) {
             vel->vx = (vel->vx / psp) * target_sp;
@@ -234,7 +267,7 @@ void projectiles_step(GameState *g)
             const float fdye[FLUID_MAX_CHANNELS] = {0.0f, ignite, 0.0f, 0.0f};
             fluid_splat(&g->fluid, tr->x, tr->y, dye[0] > 0.15f ? 3.4f : 2.3f, vel->vx * 0.012f,
                         vel->vy * 0.012f, fdye);
-        } else if (proj->kind == PROJ_STORM_ORB || proj->electrified) {
+        } else if (is_storm_proj_kind(proj->kind) || proj->electrified) {
             static const float k_sdye[FLUID_MAX_CHANNELS] = {0.0f, 0.0f, 0.65f, 0.0f};
             fluid_splat(&g->fluid, tr->x, tr->y, 2.6f, vel->vx * 0.01f, vel->vy * 0.01f, k_sdye);
         } else if (proj->deflected) {
@@ -258,7 +291,12 @@ void projectiles_step(GameState *g)
         }
 
         if (!proj->deflected && hypotf(sx - tr->x, sy - tr->y) < shrine_proj_r) {
-            combat_damage_shrine(g, tr->x, tr->y, 1);
+            if (g->internal.barrier_shield_ready) {
+                g->internal.barrier_shield_ready = false;
+                g->internal.barrier_shield_cd = 12.0f;
+            } else {
+                combat_damage_shrine(g, tr->x, tr->y, 1);
+            }
             ecs_destroy(&g->ecs, id);
             continue;
         }
@@ -274,7 +312,7 @@ void projectiles_step(GameState *g)
                 if (etr == NULL || een == NULL || etr->dissolving) {
                     continue;
                 }
-                const float hit_r = een->def_id == ENEMY_BOSS_TENGU ? 46.0f : 31.0f;
+                const float hit_r = game_is_boss_enemy(een->def_id) ? 46.0f : 31.0f;
                 const float ex = etr->x - tr->x;
                 const float ey = etr->y - tr->y;
                 if (ex * ex + ey * ey < hit_r * hit_r) {
@@ -291,7 +329,12 @@ void projectiles_step(GameState *g)
                                                                              0.0f};
                         fluid_splat(&g->fluid, hit_x, hit_y, 3.0f, 0.0f, 0.0f, k_hit_fire);
                     }
-                    if (proj->electrified || proj->kind == PROJ_STORM_ORB) {
+                    if (proj->burning && g->internal.mods.burning_proj_hit_splat) {
+                        static const float k_burn_hit[FLUID_MAX_CHANNELS] = {0.0f, 0.65f, 0.0f,
+                                                                             0.0f};
+                        fluid_splat(&g->fluid, hit_x, hit_y, 3.2f, 0.0f, 0.0f, k_burn_hit);
+                    }
+                    if (proj->electrified || is_storm_proj_kind(proj->kind)) {
                         trigger_electrified_bounce(g, eid, hit_x, hit_y, hw);
                     }
 

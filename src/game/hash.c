@@ -224,6 +224,12 @@ static uint64_t hash_run(const GameState *g)
         h = ink_hash_u32(h, (uint32_t)r->upgrades[i].id);
         h = hash_u8(h, r->upgrades[i].level);
     }
+    h = hash_i32(h, r->relic_count);
+    const int32_t rc =
+        r->relic_count > GAME_MAX_OWNED_RELICS ? GAME_MAX_OWNED_RELICS : r->relic_count;
+    for (int32_t i = 0; i < rc; ++i) {
+        h = ink_hash_u32(h, (uint32_t)r->relics[i]);
+    }
     h = ink_hash_u32(h, r->boss_id.index);
     h = ink_hash_u32(h, r->boss_id.gen);
     h = hash_bool(h, r->run_settled);
@@ -268,16 +274,57 @@ static uint64_t hash_internal(const GameInternal *in)
     h = ink_hash_f32(h, m->brush_force_mul);
     h = ink_hash_f32(h, m->stroke_cost_mul);
     h = ink_hash_f32(h, m->gale_impulse_mul);
+    h = ink_hash_f32(h, m->gale_cost_add);
+    h = ink_hash_f32(h, m->gale_fire_add);
+    h = ink_hash_f32(h, m->gale_end_blast_dmg);
+    h = ink_hash_f32(h, m->cyclone_storm_add);
+    h = ink_hash_f32(h, m->cyclone_storm_sustain);
     h = ink_hash_f32(h, m->ink_max_add);
     h = ink_hash_f32(h, m->ink_regen_mul);
+    h = hash_bool(h, m->ink_regen_no_delay);
     h = ink_hash_f32(h, m->burn_rate_mul);
+    h = ink_hash_f32(h, m->burn_base_dmg);
+    h = hash_bool(h, m->inferno_ember_on_kill);
+    h = ink_hash_f32(h, m->fire_dmg_mul);
     h = hash_i32(h, m->chain_hops_add);
     h = ink_hash_f32(h, m->chain_range_mul);
     h = ink_hash_f32(h, m->cyclone_radius_mul);
     h = ink_hash_f32(h, m->cyclone_duration_add);
+    h = hash_i32(h, m->maelstrom_bind_level);
     h = ink_hash_f32(h, m->cyclone_cd);
     h = ink_hash_f32(h, m->gale_cd);
     h = ink_hash_f32(h, m->surge_duration);
+    h = ink_hash_f32(h, m->chain_grace);
+    h = ink_hash_f32(h, m->orb_pull_radius);
+    h = hash_bool(h, m->cyclone_pulls_all_orbs);
+    h = ink_hash_f32(h, m->dry_force_override);
+    h = hash_bool(h, m->dry_zero_cost);
+    h = ink_hash_f32(h, m->dry_deflect_dmg_mul);
+    h = hash_i32(h, m->burning_proj_pierce);
+    h = hash_bool(h, m->burning_proj_hit_splat);
+    h = hash_i32(h, m->thunder_proj_targets);
+    h = hash_bool(h, m->deflect_auto_electrify);
+    h = ink_hash_f32(h, m->storm_zap_cd);
+    h = ink_hash_f32(h, m->thunderburst_thresh);
+    h = ink_hash_f32(h, m->thunderburst_radius_mul);
+    h = ink_hash_f32(h, m->homing_steer_mul);
+    h = ink_hash_f32(h, m->deflected_max_speed_mul);
+    h = ink_hash_f32(h, m->ink_mark_mul);
+    h = ink_hash_f32(h, m->ink_mark_duration);
+    h = hash_i32(h, m->shrine_max_hp_delta);
+    h = ink_hash_f32(h, m->shrine_invuln_add);
+    h = hash_bool(h, m->barrier_shield_enabled);
+    h = ink_hash_f32(h, m->stroke_ember_interval);
+    h = ink_hash_f32(h, m->stroke_ember_mul);
+    h = ink_hash_f32(h, m->relic_ember_interval);
+    h = ink_hash_f32(h, m->ink_damp_override);
+    h = ink_hash_f32(h, m->fire_damp_override);
+    h = hash_bool(h, m->twin_brush);
+    h = hash_bool(h, m->tengu_fan);
+    h = hash_bool(h, m->thunder_drum);
+    h = hash_bool(h, m->ink_dyed_shrine);
+    h = hash_bool(h, m->rosary_swirl);
+    h = hash_bool(h, m->wind_return);
 
     for (int i = 0; i < GAME_MAX_ACTIVE_CYCLONES; ++i) {
         const ActiveCyclone *c = &in->cyclones[i];
@@ -304,6 +351,40 @@ static uint64_t hash_internal(const GameInternal *in)
     h = ink_hash_f32(h, in->boss_vortex_t);
     h = ink_hash_f32(h, in->boss_vortex_x);
     h = ink_hash_f32(h, in->boss_vortex_y);
+
+    h = ink_hash_f32(h, in->relic_ember_dist);
+    for (int i = 0; i < GAME_THUNDERBURST_BLOCKS; ++i) {
+        h = ink_hash_f32(h, in->thunderburst_block_cd[i]);
+    }
+    h = ink_hash_f32(h, in->cataclysm_cd);
+    h = ink_hash_f32(h, in->barrier_shield_cd);
+    h = hash_bool(h, in->barrier_shield_ready);
+    h = ink_hash_f32(h, in->wind_return_cd);
+    h = ink_hash_u32(h, in->triggered_hints_mask);
+    for (int i = 0; i < ECS_MAX_ENTITIES; ++i) {
+        h = ink_hash_f32(h, in->maelstrom_bind_t[i]);
+    }
+
+    h = ink_hash_f32(h, in->wind_timer);
+    h = ink_hash_f32(h, in->wind_telegraph_t);
+    h = ink_hash_f32(h, in->wind_active_t);
+    h = hash_i32(h, in->wind_dir);
+    h = hash_i32(h, in->wave_elites_spawned);
+    h = ink_hash_u32(h, in->last_elite_flags);
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            h = ink_hash_f32(h, in->nue_trail_x[i][j]);
+        }
+    }
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            h = ink_hash_f32(h, in->nue_trail_y[i][j]);
+        }
+    }
+    for (int i = 0; i < 2; ++i) {
+        h = ink_hash_f32(h, in->nue_trail_t[i]);
+    }
+    h = ink_hash_f32(h, in->ryu_coil_t);
     return h;
 }
 

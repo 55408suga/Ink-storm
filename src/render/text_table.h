@@ -109,6 +109,7 @@ typedef enum {
     TEXT_SEAL_SLAY,
     TEXT_SEAL_DONE,
     TEXT_SHOWCASE_HEADER,
+    TEXT_P1_STUB,
     TEXT_COUNT
 } TextId;
 

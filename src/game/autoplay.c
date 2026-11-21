@@ -134,7 +134,7 @@ BrushInput game_autoplay_input(const GameState *g)
                     umb_x = tr->x;
                     umb_y = tr->y;
                 }
-            } else if (en->def_id == ENEMY_BOSS_TENGU) {
+            } else if (game_is_boss_enemy(en->def_id)) {
                 has_boss = true;
                 boss_x = tr->x;
                 boss_y = tr->y;
@@ -231,10 +231,12 @@ GameCommand game_autoplay_command(const GameState *g)
                             ? max_rlv
                             : g->config.meta_upgrade_lv[META_UPG_REROLLS];
     const int32_t act_rerolls = 1 + (int32_t)rlv;
-    if (g->run.reward.kind == REWARD_KIND_UPGRADE && g->run.rerolls_left == act_rerolls) {
+    const bool pickable_offer =
+        g->run.reward.kind == REWARD_KIND_UPGRADE || g->run.reward.kind == REWARD_KIND_RELIC;
+    if (pickable_offer && g->run.rerolls_left == act_rerolls) {
         return (GameCommand){.type = CMD_REROLL_REWARD, .arg = 0};
     }
-    if (g->run.reward.kind == REWARD_KIND_UPGRADE && g->run.reward.choice_count > 0) {
+    if (pickable_offer && g->run.reward.choice_count > 0) {
         return (GameCommand){
             .type = CMD_PICK_REWARD,
             .arg = (int32_t)(g->ticks % (uint64_t)g->run.reward.choice_count),

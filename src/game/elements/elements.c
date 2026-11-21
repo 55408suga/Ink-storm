@@ -174,19 +174,21 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         const float fire = sanitize_sample(dye[1]);
         const float storm = sanitize_sample(dye[2]);
 
-        if (ink > 0.28f) {
-            st->ink_mark_t = 3.0f;
+        if ((en->elite_flags & ELITE_INK_REPEL) != 0) {
+            st->ink_mark_t = 0.0f;
+        } else if (ink > 0.28f) {
+            st->ink_mark_t = g->internal.mods.ink_mark_duration;
         }
         if (storm > 0.25f) {
             st->charge_t = 2.0f;
         }
         if (fire > 0.42f) {
             st->burn_acc += INK_FIXED_DT;
-            const float interval = en->def_id == ENEMY_BOSS_TENGU ? 0.55f : 0.36f;
+            const float interval = game_is_boss_enemy(en->def_id) ? 0.55f : 0.36f;
             if (st->burn_acc + 1e-4f >= interval) {
                 st->burn_acc = 0.0f;
-                (void)combat_apply_damage(g, id, 10, DMG_FIRE, fu * FLUID_CELL_PX * 0.2f,
-                                          fv * FLUID_CELL_PX * 0.2f);
+                (void)combat_apply_damage_f(g, id, g->internal.mods.burn_base_dmg, DMG_FIRE,
+                                            fu * FLUID_CELL_PX * 0.2f, fv * FLUID_CELL_PX * 0.2f);
             }
         } else if (st->burn_acc > 0.0f) {
             st->burn_acc -= INK_FIXED_DT * 0.5f;
@@ -214,7 +216,8 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         const TransformComp *tr = game_transform(g, id);
         const StatusComp *st = game_status(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr == NULL || st == NULL || en == NULL || tr->dissolving) {
+        if (tr == NULL || st == NULL || en == NULL || tr->dissolving ||
+            (en->elite_flags & ELITE_STORMPROOF) != 0) {
             continue;
         }
 
@@ -264,7 +267,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
             continue;
         }
 
-        g->internal.storm_zap_cd = 0.54f;
+        g->internal.storm_zap_cd = g->internal.mods.storm_zap_cd;
         if (g->run.storm_zaps < META_MAX_COUNTERS) {
             ++g->run.storm_zaps;
         }
@@ -315,7 +318,8 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                 const TransformComp *ctr = game_transform(g, cand);
                 const StatusComp *cst = game_status(g, cand);
                 const EnemyComp *cen = game_enemy(g, cand);
-                if (ctr == NULL || cst == NULL || cen == NULL || ctr->dissolving) {
+                if (ctr == NULL || cst == NULL || cen == NULL || ctr->dissolving ||
+                    (cen->elite_flags & ELITE_STORMPROOF) != 0) {
                     continue;
                 }
                 if (cst->ink_mark_t <= 0.0f && cst->charge_t <= 0.0f) {
@@ -375,10 +379,11 @@ static void elements_stage5_projectiles(GameState *g)
 
         if (!proj->burning && fire > 0.36f && (proj->deflected || ink > 0.16f)) {
             proj->burning = true;
-            proj->pierce = 2;
+            proj->pierce = g->internal.mods.burning_proj_pierce;
             vel->vx *= 1.25f;
             vel->vy *= 1.25f;
-            clamp_proj_max_speed(vel, 640.0f);
+            const float max_mul = proj->deflected ? g->internal.mods.deflected_max_speed_mul : 1.0f;
+            clamp_proj_max_speed(vel, 640.0f * max_mul);
         }
         if (proj->deflected && !proj->electrified && storm > 0.25f) {
             proj->electrified = true;

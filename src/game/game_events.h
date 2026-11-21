@@ -58,6 +58,7 @@ typedef enum {
 #define EVF_ORB_AUTO (UINT32_C(1) << 10)
 #define EVF_RUN_ABORTED (UINT32_C(1) << 11)
 #define EVF_REWARD_REPAIR (UINT32_C(1) << 12)
+#define EVF_REWARD_RELIC (UINT32_C(1) << 13)
 
 typedef struct {
     GameEventType type;

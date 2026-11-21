@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 void rewards_generate_offer(GameState *g);
-bool rewards_pick_upgrade(GameState *g, int32_t choice_index);
+void rewards_generate_relic_offer(GameState *g);
+bool rewards_pick_reward(GameState *g, int32_t choice_index);
 bool rewards_reroll(GameState *g);
 bool rewards_repair_shrine(GameState *g);
 

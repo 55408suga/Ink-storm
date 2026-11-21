@@ -27,7 +27,7 @@
     - `game_internal.h` → 自己完結（`<stdbool.h>`, `<stdint.h>`, `fluid.h`, `ecs.h`, `game_ids.h`, `game_events.h` のみ）
     - `audio.h` → `struct GameState` の前方宣言のみ（`game.h` を include しない）
     - `render.h` → `raylib.h`, `game.h`, `ui_view.h`
-    - `ui_view.h` → `meta.h`（raylib 非依存）
+    - `ui_view.h` → `game_ids.h`, `meta.h`（raylib 非依存）
     - `cli.h` / `frame_clock.h` / `input_latch.h` / `save.h` / `text_table.h` → 標準ヘッダと `game.h` / `meta.h` のみ（raylib 非依存）
     - 全モジュールのヘッダファイル名は `src/` 全体および raylib ヘッダ名と重複させない。
 - **`ink_render` が所有するもの**:
@@ -168,6 +168,7 @@ typedef enum {
 | `game_debug_spawn_enemy(g, def, x, y)` | `EnemyDef` の生成関数で通常のスポーンと同じ Component・初期値を付与（位置の抽選のみ省略）。ボスなら `run.boss_id` も設定する |
 | `game_debug_spawn_projectile(g, kind, x, y, vx, vy)` | 通常の発射と同じ初期化で敵弾を生成する |
 | `game_debug_spawn_orb(g, x, y)` | 墨玉のドロップと同じ初期化で生成する |
+| `game_debug_start_act(g, act_index)` | 指定幕（`0..GAME_MAIN_ACT_COUNT-1`）へ切り替え、旧幕の残存 ECS エンティティを破棄した上で `waves_prepare_act(g)` を実行し `RUN_PHASE_ACT_TRANSITION` へ移す（範囲外は no-op） |
 | `game_debug_start_wave(g, wave_index)` | 現在の幕のウェーブ `wave_index` を通常のウェーブ開始と同じ処理で開始する（範囲外は no-op） |
 | `game_debug_force_wave_clear(g)` | `PLAYING` のみ有効。通常ウェーブはノルマ到達扱い、ボスウェーブは通常のダメージ経路でボスへ致死ダメージを与える（遷移は次ティックの段 8） |
 | `game_autoplay_input(g)` / `game_autoplay_command(g)` | 状態のみから決まる決定的な自動入力を返す（`g` を変更せず `g->rng` も消費しない） |
@@ -327,7 +328,7 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 - `RunConfig config`・`uint64_t rng`・`uint64_t ticks`・`RunPhase phase`・`float phase_t`・`float hitstop_t`
 - `PlayerState player`（墨・かすれ筆・筆先・CD・墨昇華）
 - `ShrineState shrines[GAME_MAX_SHRINES]`・`int32_t shrine_count`（基本 1 基使用、複数化余白）
-- `RunProgress run`（幕・ウェーブ・ノルマ・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`・所持アップグレード・`boss_id`・`run_settled`）
+- `RunProgress run`（幕・ウェーブ・ノルマ・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`・所持アップグレード・所持大遺物 `relics[]` / `relic_count`・`boss_id`・`run_settled`）
 - `GameEvent events[GAME_MAX_EVENTS]`・`int32_t event_count`・`uint32_t dropped_events`
 - `PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`・`int32_t pending_impulse_count`
 - `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離等を隔離し、描画・音・app は読まない）
@@ -360,8 +361,8 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 各コンテンツは `src/game/` 配下の専用ファイルへ `const` 指示付き初期化子配列として定義する。定義テーブルは表示文字列 ID（`text_id`）を持たず、`ink_render` が内容 ID（`EnemyDefId`, `UpgradeId`, `UpgradeAxis` 等）から文字列表を引く。
 - **`BrushStyleDef`**: `id`, 初期 `RunModifiers` 差分、推奨軸、固有フック
 - **`EnemyDef`**: `id`, `base_hp`, `radius`, `mass_tier`, `fluid_coupling`, `score`, `orb_count`, `ai_step_fn`, `spawn_fn`
-- **`UpgradeDef`**: `id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック
-- **`RelicDef`**: `id`, `unlock_bit`（`0`=初期解放、`1ULL<<k`=墨庵解放）, `apply_mods_fn`, 7 フック
+- **`UpgradeDef`**: `id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック（P1 本編は 24 種：各軸 5 種＋共通 4 種。残り 4 種は P2 で追加）
+- **`RelicDef`**: `id`, `unlock_bit`（`0`=初期解放、`1ULL<<k`=墨庵解放）, `apply_mods_fn`, 7 フック（P1 本編の `RelicId` は初期解放 9 種 `RELIC_COUNT = 9`。墨庵解放 6 種は P1 で購入・セーブ可能とし、ラン中効果は P2 で追加）
 - **`ActDef`**: `act_index`, `wave_count`（3）, `boss_def_id`, `setup_stage_fn`, ウェーブ敵重みテーブル
 
 ---
@@ -407,6 +408,7 @@ typedef enum {
 #define EVF_ORB_AUTO      (UINT32_C(1) << 10)
 #define EVF_RUN_ABORTED   (UINT32_C(1) << 11)
 #define EVF_REWARD_REPAIR (UINT32_C(1) << 12)
+#define EVF_REWARD_RELIC  (UINT32_C(1) << 13)
 
 typedef struct {
     GameEventType type;
@@ -424,13 +426,17 @@ typedef struct {
 | `EV_SLAM` | 衝突点 | 壁の法線または相手への向き | `EnemyDefId`（飛ばされた側） | `EVF_SLAM_WALL` / `EVF_SLAM_ENEMY` |
 | `EV_IGNITE` | 燃焼セルの重心（px） | — | 燃焼セル数 | 0（24 セル以上・3.2 秒間隔） |
 | `EV_STORM_ZAP` | 始点 | 終点 | ホップ番号（0 = 初撃） | 0 |
+| `EV_THUNDERBURST` | 爆雷ブロック内の爆雷セル重心（px） | `radius_px`（`72 * rmul`）, `0` | ブロック内の爆雷セル数（`>= 6`） | 0 |
+| `EV_CATACLYSM` | 共鳴ブロック内の共鳴セル重心（px） | `96.0f`, `0` | ブロック内の共鳴セル数（`>= 8`） | 0 |
 | `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 0 |
 | `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（16） | `EVF_ORB_AUTO`（自動回収時） |
 | `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
 | `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
 | `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号 | 0 |
 | `EV_WAVE_CLEAR` / `EV_ACT_CLEAR` | 社の位置 / ボスの位置 | — | `wave_index` / `act_index` | 0 |
-| `EV_REWARD_PICK` | — | — | `UpgradeId`、修繕は -1 | `EVF_REWARD_REPAIR` |
+| `EV_REWARD_PICK` | — | — | 強化札は `UpgradeId`、大遺物は `RelicId`、社修繕は -1 | 強化札=0、大遺物=`EVF_REWARD_RELIC`、修繕=`EVF_REWARD_REPAIR` |
+| `EV_HINT_TRIGGER` | 関連座標（なければ社の座標） | `0, 0` | `HintId`（`0..HINT_COUNT-1`） | 0 |
+| `EV_WIND_TELEGRAPH` | 風上の辺の中央座標（px） | 風向きの単位ベクトル `(dx, dy)` | 風向き番号（`0`:左→右、`1`:右→左、`2`:上→下、`3`:下→上） | 0 |
 | `EV_GAME_OVER` / `EV_VICTORY` | 社の位置 / — | — | 0 / `act_index` | `EVF_RUN_ABORTED` / 0 |
 | `EV_ENEMY_INTRO` | — | — | `EnemyDefId` | 0 |
 | `EV_REWARD_REROLL` | — | — | 残りリロール回数 | 0 |

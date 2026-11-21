@@ -87,6 +87,8 @@ typedef struct {
     RewardOffer reward;
     OwnedUpgrade upgrades[GAME_MAX_OWNED_UPGRADES];
     int32_t upgrade_count;
+    RelicId relics[GAME_MAX_OWNED_RELICS];
+    int32_t relic_count;
     EntityId boss_id;
     bool run_settled;
 } RunProgress;
@@ -146,6 +148,8 @@ UpgradeAxis game_upgrade_axis(UpgradeId id);
 uint8_t game_upgrade_max_level(UpgradeId id);
 uint8_t game_upgrade_level(const GameState *g, UpgradeId id);
 bool game_is_recommended_axis(BrushStyleId style, UpgradeAxis axis);
+bool game_has_relic(const GameState *g, RelicId id);
+bool game_is_boss_enemy(EnemyDefId id);
 
 EntityId game_spawn_entity(GameState *g, uint64_t comp_mask);
 bool game_add_components(GameState *g, EntityId id, uint64_t comp_mask);
@@ -173,6 +177,7 @@ EntityId game_debug_spawn_enemy(GameState *g, EnemyDefId def, float x, float y);
 EntityId game_debug_spawn_projectile(GameState *g, ProjKind kind, float x, float y, float vx,
                                      float vy);
 EntityId game_debug_spawn_orb(GameState *g, float x, float y);
+void game_debug_start_act(GameState *g, int32_t act_index);
 void game_debug_start_wave(GameState *g, int32_t wave_index);
 void game_debug_force_wave_clear(GameState *g);
 BrushInput game_autoplay_input(const GameState *g);

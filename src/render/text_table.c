@@ -120,6 +120,7 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_SEAL_SLAY] = {.ja = "討", .en = "S"},
     [TEXT_SEAL_DONE] = {.ja = "決", .en = "OK"},
     [TEXT_SHOWCASE_HEADER] = {.ja = "見本帳", .en = "Showcase"},
+    [TEXT_P1_STUB] = {.ja = "準備中", .en = "TBD"},
 };
 
 const char *text_get(TextId id, bool use_ja)
@@ -141,6 +142,13 @@ TextId text_enemy_name(EnemyDefId id)
         return TEXT_ENEMY_UMBRELLA_NAME;
     case ENEMY_BOSS_TENGU:
         return TEXT_ENEMY_BOSS_TENGU_NAME;
+    case ENEMY_LANTERN_STORM:
+    case ENEMY_KAMAITACHI:
+    case ENEMY_STONE_ONI:
+    case ENEMY_INK_LEECH:
+    case ENEMY_BOSS_NUE:
+    case ENEMY_BOSS_RYU:
+        return TEXT_P1_STUB;
     default:
         return TEXT_NONE;
     }
@@ -157,6 +165,13 @@ TextId text_enemy_intro(EnemyDefId id)
         return TEXT_ENEMY_UMBRELLA_INTRO;
     case ENEMY_BOSS_TENGU:
         return TEXT_ENEMY_BOSS_TENGU_INTRO;
+    case ENEMY_LANTERN_STORM:
+    case ENEMY_KAMAITACHI:
+    case ENEMY_STONE_ONI:
+    case ENEMY_INK_LEECH:
+    case ENEMY_BOSS_NUE:
+    case ENEMY_BOSS_RYU:
+        return TEXT_P1_STUB;
     default:
         return TEXT_NONE;
     }
@@ -189,6 +204,23 @@ TextId text_upgrade_name(UpgradeId id)
         return TEXT_UPG_RICH_INK_NAME;
     case UPG_LASTING_SURGE:
         return TEXT_UPG_LASTING_SURGE_NAME;
+    case UPG_FLAME_GALE:
+    case UPG_INFERNO:
+    case UPG_PHOENIX_ARROW:
+    case UPG_THUNDER_ARROW:
+    case UPG_SWIFT_THUNDER:
+    case UPG_THUNDERBURST_FUSE:
+    case UPG_MIGHTY_STROKE:
+    case UPG_MAELSTROM_BIND:
+    case UPG_TAILWIND:
+    case UPG_INK_MAGNET:
+    case UPG_CHAIN_PRIMER:
+    case UPG_DRY_MASTERY:
+    case UPG_SHRINE_WARD:
+    case UPG_DEEP_INK:
+    case UPG_DEEP_MARK:
+    case UPG_BARRIER:
+        return TEXT_P1_STUB;
     default:
         return TEXT_NONE;
     }
@@ -217,6 +249,23 @@ TextId text_upgrade_effect(UpgradeId id, int level)
         return (TextId)(TEXT_UPG_RICH_INK_LV1 + offset);
     case UPG_LASTING_SURGE:
         return (TextId)(TEXT_UPG_LASTING_SURGE_LV1 + offset);
+    case UPG_FLAME_GALE:
+    case UPG_INFERNO:
+    case UPG_PHOENIX_ARROW:
+    case UPG_THUNDER_ARROW:
+    case UPG_SWIFT_THUNDER:
+    case UPG_THUNDERBURST_FUSE:
+    case UPG_MIGHTY_STROKE:
+    case UPG_MAELSTROM_BIND:
+    case UPG_TAILWIND:
+    case UPG_INK_MAGNET:
+    case UPG_CHAIN_PRIMER:
+    case UPG_DRY_MASTERY:
+    case UPG_SHRINE_WARD:
+    case UPG_DEEP_INK:
+    case UPG_DEEP_MARK:
+    case UPG_BARRIER:
+        return TEXT_P1_STUB;
     default:
         return TEXT_NONE;
     }
