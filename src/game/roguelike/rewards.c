@@ -127,6 +127,9 @@ void rewards_generate_offer(GameState *g)
             weights[i] = w;
             total_weight += w;
         }
+        if (total_weight == 0) {
+            break;
+        }
         const uint64_t pick_val = ink_rng_next(&g->rng) % total_weight;
         uint64_t acc = 0;
         UpgradeId chosen = pool[pool_count - 1];

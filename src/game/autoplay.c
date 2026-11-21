@@ -231,8 +231,7 @@ GameCommand game_autoplay_command(const GameState *g)
                             ? max_rlv
                             : g->config.meta_upgrade_lv[META_UPG_REROLLS];
     const int32_t act_rerolls = 1 + (int32_t)rlv;
-    if (g->run.reward.kind == REWARD_KIND_UPGRADE && g->run.rerolls_left == act_rerolls &&
-        g->run.rerolls_left > 0) {
+    if (g->run.reward.kind == REWARD_KIND_UPGRADE && g->run.rerolls_left == act_rerolls) {
         return (GameCommand){.type = CMD_REROLL_REWARD, .arg = 0};
     }
     if (g->run.reward.kind == REWARD_KIND_UPGRADE && g->run.reward.choice_count > 0) {
