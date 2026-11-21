@@ -1,0 +1,78 @@
+#ifndef INK_RENDER_INTERNAL_H
+#define INK_RENDER_INTERNAL_H
+
+#include "palette.h"
+#include "render.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#define RENDER_FAULT_SHADER (UINT32_C(1) << 0)
+#define RENDER_FAULT_FONT (UINT32_C(1) << 1)
+
+typedef struct {
+    float w_max;
+    float w_min_ratio;
+    float entry;
+    float exit;
+    float dry;
+    uint32_t seed;
+} BrushProfile;
+
+typedef struct {
+    PaletteId color;
+    float alpha;
+} InkTone;
+
+typedef enum { SEAL_HAKUBUN = 0, SEAL_SHUBUN } SealStyle;
+
+/* Blend mode tracking (counts switches for F1 budget <= 12) */
+void render_set_blend(RenderState *r, int mode);
+void render_reset_blend(RenderState *r);
+
+/* Paper & background cache (paper.c) */
+void render_paper_init(RenderState *r);
+void render_paper_close(RenderState *r);
+void render_paper_draw_base(RenderState *r, int act_index);
+void render_paper_draw_bg(RenderState *r, int act_index);
+
+/* Fluid visualization (fluid_view.c) */
+void render_fluid_init(RenderState *r);
+void render_fluid_close(RenderState *r);
+void render_fluid_update_and_draw(RenderState *r, const GameState *g);
+
+/* Post-processing shader (post_fx.c) */
+void render_post_init(RenderState *r, const RenderOptions *opt);
+void render_post_close(RenderState *r);
+
+/* Fonts & text measurement cache (fonts.c) */
+void render_fonts_init(RenderState *r, const RenderOptions *opt);
+void render_fonts_close(RenderState *r);
+Vector2 render_measure_text(const RenderState *r, const char *text, float size, bool title_font);
+Vector2 render_measure_text_id(RenderState *r, TextId id, float size, bool title_font);
+void render_draw_text(const RenderState *r, const char *text, Vector2 pos, float size,
+                      PaletteId color, float alpha, bool title_font);
+void render_draw_text_id(const RenderState *r, TextId id, Vector2 pos, float size, PaletteId color,
+                         float alpha, bool title_font);
+void render_draw_text_centered(const RenderState *r, const char *text, Vector2 center, float size,
+                               PaletteId color, float alpha, bool title_font);
+void render_draw_number_fixed(const RenderState *r, const char *digits, Vector2 pos, float size,
+                              PaletteId color, float alpha);
+
+/* Entities (draw_entities.c) */
+void render_draw_entities(RenderState *r, const GameState *g, int act_index);
+
+/* VFX (vfx.c) */
+void render_vfx_draw_world(RenderState *r, const GameState *g);
+void render_vfx_draw_ui(RenderState *r, const GameState *g);
+Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
+
+/* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, xray.c) */
+void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_xray(const RenderState *r, const GameState *g);
+
+#endif

@@ -22,9 +22,13 @@ typedef struct {
     float prev_x, prev_y;
     float cur_x, cur_y;
     bool left_down;
+    bool paint_suppressed;
+    bool cyclone_pending;
+    bool gale_pending;
+    int32_t pick_pending;
+    bool repair_pending;
+    bool reroll_pending;
     bool confirm_pending;
-    GameCommandType pending_cmd;
-    int32_t pending_arg;
 } InputLatch;
 
 void input_latch_init(InputLatch *l, float x, float y);
