@@ -1,0 +1,81 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Official 6.2 release. Its raylib.h matches the host installation.
+  RAYLIB_REF: "02566453880e06bec97f5b8160fa6fe1e98397ca"
+
+jobs:
+  build-asan-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - &checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - &host-dependencies
+        name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build python3 \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev
+      - &raylib-cache
+        name: Cache raylib 6.2
+        id: raylib-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/opt/raylib-6.2
+          key: raylib-ubuntu-24.04-${{ runner.arch }}-x11-gl33-static-${{ env.RAYLIB_REF }}
+      - &raylib-build
+        name: Build and install raylib 6.2
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: |
+          source_dir="$(mktemp -d)"
+          trap 'rm -rf "$source_dir"' EXIT
+          curl --fail --show-error --silent --location --retry 3 \
+            "https://codeload.github.com/raysan5/raylib/tar.gz/${RAYLIB_REF}" \
+            --output "$source_dir/raylib.tar.gz"
+          tar -xzf "$source_dir/raylib.tar.gz" -C "$source_dir" --strip-components=1
+          cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
+            -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/.local/opt/raylib-6.2" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DBUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF -DUSE_EXTERNAL_GLFW=OFF \
+            -DGLFW_BUILD_X11=ON -DGLFW_BUILD_WAYLAND=OFF -DOPENGL_VERSION=3.3
+          cmake --build "$source_dir/build" --parallel
+          cmake --install "$source_dir/build"
+      - name: Build with ASan and UBSan and run CTest
+        run: |
+          cmake --preset asan
+          cmake --build --preset asan
+          ctest --preset asan --output-on-failure
+
+  static-analysis:
+    runs-on: ubuntu-24.04
+    steps:
+      - *checkout
+      - *host-dependencies
+      - *raylib-cache
+      - *raylib-build
+      - name: Install analysis tools
+        run: sudo apt-get install -y clang-format clang-tidy cppcheck glslang-tools shellcheck
+      - name: Check formatting, C sources, shaders and shell scripts
+        run: |
+          cmake --preset asan
+          cmake --build --preset asan --target format-check lint
+
+  submission-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - *checkout
+      - *host-dependencies
+      - *raylib-cache
+      - *raylib-build
+      - name: Verify submission archive with host Make and GCC
+        run: python3 tools/package_submission.py

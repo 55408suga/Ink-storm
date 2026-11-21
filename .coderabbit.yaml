@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "ja-JP"
+reviews:
+  profile: "assertive"
+  path_filters:
+    - "!third_party/**"
+    - "!assets/**"
+    - "!flake.lock"
+    - "!build/**"
+    - "!dist/**"
+  tools:
+    cppcheck:
+      enabled: true
+    shellcheck:
+      enabled: true
+    github-checks:
+      enabled: true
+  path_instructions:
+    - path: "src/core/**"
+      instructions: >-
+        C11 と標準ライブラリの範囲を守る。外部依存・可変グローバル状態・暗黙の副作用がないことを確認する。
+    - path: "src/fluid/**"
+      instructions: >-
+        raylib とゲーム固有ルール（敵、ダメージ、属性反応など）の混入を検出する。
+        格子の境界チェック、NaN・Inf の発生や発散を防ぐ処理を確認する。
+    - path: "src/ecs/**"
+      instructions: >-
+        Entity ID の世代チェック漏れ、ループ中の即時削除、配列の範囲外アクセスを確認する。
+    - path: "src/game/**"
+      instructions: >-
+        raylib.h、rand()、time()、未初期化状態の参照を検出する。更新が固定 60 Hz を保つことを確認する。
+    - path: "src/render/**"
+      instructions: >-
+        GameState を const 参照のみで読み、状態を書き換えないことを確認する。
+        シェーダの読み込みや描画先の作成に失敗した場合の通常描画へのフォールバックを確認する。
+    - path: "tools/package_submission.py"
+      instructions: >-
+        開発専用ファイル、AI 向け文書、テストが提出 zip に混入しないことを確認する。
+        展開先で Nix や CMake を使わず GNU Make とホスト GCC でビルドし、ヘッドレス起動まで検証すること。
+    - path: "tools/submission.mk"
+      instructions: >-
+        zip 内の提出対象だけを使い、GNU Make とホスト GCC でオフラインビルドできることを確認する。
+        開発専用ファイル、AI 向け文書、テスト、Nix、CMake への依存を追加しないこと。
+knowledge_base:
+  opt_out: false

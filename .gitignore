@@ -1,0 +1,11 @@
+/build/
+/dist/
+.direnv/
+.cache/
+__pycache__/
+compile_commands.json
+*.o
+*.a
+*.mp4
+*.mov
+*.wav
