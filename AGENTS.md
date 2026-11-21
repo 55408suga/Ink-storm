@@ -1,7 +1,7 @@
 # INKSTORM 開発規約
 
 INKSTORM（墨嵐）は C11 と raylib 6.2 で構築する 2D 水墨流体アクションゲーム。
-開発計画、アーキテクチャ方針、モジュール境界は [docs/PLAN.md](docs/PLAN.md) を正とする。
+開発計画・フェーズ進行・モジュール境界は [docs/PLAN.md](docs/PLAN.md) を起点とし、詳細は [docs/game-design.md](docs/game-design.md)（ゲーム仕様）・[docs/art-direction.md](docs/art-direction.md)（世界観・水墨表現）・[docs/architecture.md](docs/architecture.md)（技術契約）・[docs/qa-and-testing.md](docs/qa-and-testing.md)（テスト・検証基準）を参照する。
 フェーズごとの実装範囲と完了条件は [docs/tasks/](docs/tasks/) の指示書で確認する。
 
 ## 作業場所と担当範囲
