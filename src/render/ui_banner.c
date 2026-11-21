@@ -41,8 +41,9 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
             (Vector2){cx, 129.0f}, 40.0f, PAL_SUMI_SCORCH, a, true);
     }
 
-    /* Enemy intro strip at top (2.0s per queued enemy) */
-    if (r->intro_count > 0) {
+    /* Enemy intro strip at top (2.0s per queued enemy; waits for boss banner to avoid overlap) */
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f &&
+        (g->phase == RUN_PHASE_PLAYING || g->phase == RUN_PHASE_WAVE_AFTERMATH)) {
         const EnemyDefId eid = r->intro_queue[r->intro_head];
         const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
                                           : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);

@@ -75,8 +75,13 @@ void audio_consume_events(AudioState *audio, const struct GameState *game)
 
     const uint64_t tick_sample = audio->consumed_ticks * (uint64_t)AUDIO_SAMPLES_PER_TICK;
     audio->consumed_ticks++;
-    const uint64_t at_sample =
+    uint64_t at_sample =
         tick_sample >= audio->samples_rendered ? tick_sample : audio->samples_rendered;
+    const uint64_t max_lead = (uint64_t)AUDIO_SAMPLES_PER_TICK * 4u;
+    if (at_sample > audio->samples_rendered + max_lead) {
+        at_sample = audio->samples_rendered + max_lead;
+        audio->consumed_ticks = (at_sample / (uint64_t)AUDIO_SAMPLES_PER_TICK) + 1u;
+    }
 
     const BgmTrack next_bgm = desired_bgm_for_game(game);
     audio->bgm = next_bgm;

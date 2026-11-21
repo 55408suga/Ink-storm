@@ -81,8 +81,8 @@ static void populate_entities_and_projectiles(GameState *g, bool heavy_ink_60pct
             if (c == 1 && en != NULL) {
                 en->windup = 0.80f;
             }
-            if (c == 2 && hp != NULL) {
-                hp->flash_t = 0.22f;
+            if (hp != NULL) {
+                hp->flash_t = (c == 2) ? 0.22f : 0.0f;
             }
             if (r == 0 && c == 1 && st != NULL) {
                 st->ink_mark_t = 2.0f;
@@ -106,12 +106,14 @@ static void populate_entities_and_projectiles(GameState *g, bool heavy_ink_60pct
             bc->gale_dx = 0.0f;
             bc->gale_dy = 1.0f;
         }
-        if (c == 2 && hp != NULL) {
-            hp->flash_t = 0.22f;
+        if (hp != NULL) {
+            hp->flash_t = (c == 2) ? 0.22f : 0.0f;
         }
     }
     /* Clear boss_id on page 1/2 so normal wave HUD is also visible */
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    /* Clear spawn splats/swirls so Page 1 shows entities on clean washi paper */
+    fluid_reset(&g->fluid);
 
     /* Projectiles: 3 kinds x 4 states (normal, deflected, burning, electrified) */
     const ProjKind kinds[3] = {PROJ_ARROW, PROJ_FIREBALL, PROJ_STORM_ORB};

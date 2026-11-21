@@ -169,18 +169,30 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
 
             const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
             for (int t = 0; t < ticks; ++t) {
+                const RunPhase prev_phase = game->phase;
                 const BrushInput in = input_latch_take_tick(&latch);
-                const GameCommand cmd = input_latch_take_command(&latch, game->phase);
+                GameCommand cmd = input_latch_take_command(&latch, game->phase);
+                if (game->phase == RUN_PHASE_REWARD &&
+                    (render->reward_anim_t < 0.75f || render->reward_reroll_t > 0.0f)) {
+                    cmd = (GameCommand){.type = CMD_NONE, .arg = 0};
+                }
                 game_step(game, &in, &cmd);
                 audio_consume_events(audio, game);
                 render_consume_events(render, game);
                 render_update_vfx(render, game, INK_FIXED_DT);
                 app_after_tick(&ctx, game);
+                if (prev_phase == RUN_PHASE_REWARD && game->phase == RUN_PHASE_PLAYING) {
+                    frame_clock_reset(&clock);
+                    break;
+                }
             }
 
-            if ((game->phase == RUN_PHASE_VICTORY || game->phase == RUN_PHASE_GAME_OVER) &&
-                input_latch_take_confirm(&latch)) {
-                start_new_run(&ctx, game, render);
+            if (game->phase == RUN_PHASE_VICTORY || game->phase == RUN_PHASE_GAME_OVER) {
+                const bool confirmed = input_latch_take_confirm(&latch);
+                if (confirmed && render->victory_scroll_t >= 0.75f) {
+                    start_new_run(&ctx, game, render);
+                    frame_clock_reset(&clock);
+                }
             }
             audio_out_pump(&audio_out, audio);
         }
