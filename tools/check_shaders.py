@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -20,25 +19,90 @@ SHADER_STAGE_BY_EXT = {
     ".comp": "comp",
 }
 
-# Match one or more adjacent C string literals, e.g. static const char *FS = "..." "...";
-STRING_SEQ_RE = re.compile(r'(?:"(?:\\.|[^"\\])*"\s*)+', re.MULTILINE)
-SINGLE_STR_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
+def decode_c_string(raw: str) -> str:
+    return (
+        raw.replace(r"\\", "\x00")
+        .replace(r"\n", "\n")
+        .replace(r"\t", "\t")
+        .replace(r"\r", "\r")
+        .replace(r"\"", '"')
+        .replace("\x00", "\\")
+    )
 
 
-def decode_c_string_seq(raw: str) -> str:
-    parts: list[str] = []
-    for m in SINGLE_STR_RE.finditer(raw):
-        s = m.group(1)
-        s = (
-            s.replace(r"\\", "\x00")
-            .replace(r"\n", "\n")
-            .replace(r"\t", "\t")
-            .replace(r"\r", "\r")
-            .replace(r"\"", '"')
-            .replace("\x00", "\\")
-        )
-        parts.append(s)
-    return "".join(parts)
+def extract_c_string_seqs(text: str) -> list[tuple[int, str]]:
+    """Extract concatenated C string literals, treating whitespace and C comments as separators."""
+    results: list[tuple[int, str]] = []
+    n = len(text)
+    i = 0
+    line = 1
+    current_parts: list[str] = []
+    current_line = 0
+
+    def flush() -> None:
+        nonlocal current_parts, current_line
+        if current_parts:
+            results.append((current_line, "".join(current_parts)))
+            current_parts = []
+            current_line = 0
+
+    while i < n:
+        ch = text[i]
+        if ch.isspace():
+            if ch == "\n":
+                line += 1
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            i += 2
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                if text[i] == "\n":
+                    line += 1
+                i += 1
+            i = min(n, i + 2)
+            continue
+        if ch == '"':
+            if not current_parts:
+                current_line = line
+            i += 1
+            start = i
+            while i < n and text[i] != '"':
+                if text[i] == "\\" and i + 1 < n:
+                    if text[i + 1] == "\n":
+                        line += 1
+                    i += 2
+                else:
+                    if text[i] == "\n":
+                        line += 1
+                    i += 1
+            current_parts.append(decode_c_string(text[start:i]))
+            if i < n and text[i] == '"':
+                i += 1
+            continue
+        flush()
+        if ch == "'":
+            i += 1
+            while i < n and text[i] != "'":
+                if text[i] == "\\" and i + 1 < n:
+                    if text[i + 1] == "\n":
+                        line += 1
+                    i += 2
+                else:
+                    if text[i] == "\n":
+                        line += 1
+                    i += 1
+            if i < n and text[i] == "'":
+                i += 1
+            continue
+        i += 1
+
+    flush()
+    return results
 
 
 def guess_stage(source: str) -> str:
@@ -110,11 +174,9 @@ def main(argv: list[str]) -> int:
             continue
 
         text = path.read_text(encoding="utf-8", errors="ignore")
-        for idx, match in enumerate(STRING_SEQ_RE.finditer(text), start=1):
-            content = decode_c_string_seq(match.group(0))
+        for idx, (line_no, content) in enumerate(extract_c_string_seqs(text), start=1):
             if not content.lstrip().startswith("#version "):
                 continue
-            line_no = text.count("\n", 0, match.start()) + 1
             stage = guess_stage(content)
             checked += 1
             if not validate_glsl(glslang, content, stage, f"{path}:{line_no} (shader #{idx})"):

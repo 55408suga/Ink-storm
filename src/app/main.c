@@ -45,9 +45,26 @@ static int run_window(GameState *game, bool use_post, int smoke_frames)
     }
     SetTargetFPS(TICK_HZ);
 
+    const double step_dt = 1.0 / (double)TICK_HZ;
+    const double max_frame_dt = 0.25;
+    double accumulator = 0.0;
     const RenderState render = render_init(use_post, GetScreenWidth(), GetScreenHeight());
     while (smoke_frames > 0 || !WindowShouldClose()) {
-        game_step_smoke(game);
+        if (smoke_frames > 0) {
+            game_step_smoke(game);
+        } else {
+            double frame_dt = (double)GetFrameTime();
+            if (frame_dt < 0.0) {
+                frame_dt = 0.0;
+            } else if (frame_dt > max_frame_dt) {
+                frame_dt = max_frame_dt;
+            }
+            accumulator += frame_dt;
+            while (accumulator >= step_dt) {
+                game_step_smoke(game);
+                accumulator -= step_dt;
+            }
+        }
         render_draw(&render, game);
         if (smoke_frames > 0 && --smoke_frames == 0) {
             break;

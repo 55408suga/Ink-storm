@@ -10,7 +10,9 @@ description: >-
    フルの ASan/CTest・`format-check`・`lint`・`dist` は GitHub Actions CI に委譲し、ローカルで重複実行しない。コマンドは [AGENTS.md](../../../AGENTS.md) を参照する。
 2. コミットが依頼範囲に含まれる場合は Conventional Commits を使う。push と `gh pr create` は許可された場合に行い、
    PR 本文には変更範囲、設計上の判断、ローカル確認内容・CI 委譲項目を書く。
-3. PR 番号を調べ、対象の head に対する CI 結果および CodeRabbit レビューの完了と指摘を確認する。
+3. 本リポジトリはスター数条件により CodeRabbit の自動レビューがスキップされる場合があるため、PR 作成直後に
+   CodeRabbit チェックが `SKIPPED` のときは `gh pr comment "$pr" --body "@coderabbitai review"` で手動トリガする。
+4. PR 番号を調べ、対象の head に対する CI 結果および CodeRabbit レビューの完了と指摘を確認する。
 
 ```sh
 gh pr checks "$pr"
