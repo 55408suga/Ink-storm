@@ -1,9 +1,10 @@
-#include "audio.h"
 #include "core.h"
 #include "ecs.h"
 #include "fluid.h"
 #include "game.h"
 #include "unity.h"
+
+#include <string.h>
 
 void setUp(void) {}
 
@@ -26,39 +27,141 @@ static void test_splitmix64(void)
     TEST_ASSERT_FLOAT_WITHIN(0.0f, 0x1.c4415p-1f, ink_rng_f01(&seed));
 }
 
-static void test_game_advances_fluid_and_rng(void)
+static void test_hash_helpers(void)
 {
-    GameState *game = game_create(UINT64_C(7));
-    TEST_ASSERT_NOT_NULL(game);
-    TEST_ASSERT_EQUAL_UINT64(0, game->ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, game->fluid.steps);
-    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game->ecs));
+    TEST_ASSERT_EQUAL_HEX64(UINT64_C(0xcbf29ce484222325), ink_hash_bytes(INK_HASH_INIT, "", 0));
+    TEST_ASSERT_EQUAL_HEX64(UINT64_C(0xaf63dc4c8601ec8c), ink_hash_bytes(INK_HASH_INIT, "a", 1));
+    TEST_ASSERT_EQUAL_HEX64(UINT64_C(0x85944171f73967e8),
+                            ink_hash_bytes(INK_HASH_INIT, "foobar", 6));
 
-    game_step_smoke(game);
-    game_step_smoke(game);
+    const uint64_t from_u32 = ink_hash_u32(INK_HASH_INIT, UINT32_C(0x64636261));
+    const uint64_t from_str = ink_hash_bytes(INK_HASH_INIT, "abcd", 4);
+    TEST_ASSERT_EQUAL_HEX64(UINT64_C(0xfc179f83ee0724dd), from_u32);
+    TEST_ASSERT_EQUAL_HEX64(from_str, from_u32);
 
-    uint64_t expected_rng = 7;
-    ink_rng_next(&expected_rng);
-    ink_rng_next(&expected_rng);
-    TEST_ASSERT_EQUAL_UINT64(2, game->ticks);
-    TEST_ASSERT_EQUAL_UINT64(2, game->fluid.steps);
-    TEST_ASSERT_EQUAL_UINT64(expected_rng, game->rng);
-    TEST_ASSERT_EQUAL_UINT32(0, ecs_alive_count(&game->ecs));
-    TEST_ASSERT_TRUE(fluid_validate_finite(&game->fluid));
-    game_destroy(game);
+    const uint64_t h_pos_zero = ink_hash_f32(INK_HASH_INIT, 0.0f);
+    const uint64_t h_neg_zero = ink_hash_f32(INK_HASH_INIT, -0.0f);
+    TEST_ASSERT_EQUAL_HEX64(h_pos_zero, h_neg_zero);
+
+    const uint32_t nan_bits_a = UINT32_C(0x7fc00000);
+    const uint32_t nan_bits_b = UINT32_C(0xffc00001);
+    float nan_a = 0.0f;
+    float nan_b = 0.0f;
+    memcpy(&nan_a, &nan_bits_a, sizeof nan_a);
+    memcpy(&nan_b, &nan_bits_b, sizeof nan_b);
+    TEST_ASSERT_EQUAL_HEX64(ink_hash_f32(INK_HASH_INIT, nan_a), ink_hash_f32(INK_HASH_INIT, nan_b));
 }
 
-static void test_audio_writes_silence(void)
+static void test_game_init_and_hash_contract(void)
 {
-    AudioState audio;
-    int16_t samples[] = {16, -16, 23, -23};
-    const int16_t silence[] = {0, 0, 0, 0};
-    audio_init(&audio);
-    TEST_ASSERT_EQUAL_UINT64(0, audio.samples_rendered);
+    GameState *g1 = game_create(NULL);
+    GameState *g2 = game_create(NULL);
+    const RunConfig diff_cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(2));
+    GameState *g3 = game_create(&diff_cfg);
 
-    audio_render_silence(&audio, samples, sizeof samples / sizeof samples[0]);
-    TEST_ASSERT_EQUAL_INT16_ARRAY(silence, samples, sizeof samples / sizeof samples[0]);
-    TEST_ASSERT_EQUAL_UINT64(sizeof samples / sizeof samples[0], audio.samples_rendered);
+    TEST_ASSERT_NOT_NULL(g1);
+    TEST_ASSERT_NOT_NULL(g2);
+    TEST_ASSERT_NOT_NULL(g3);
+
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, g1->phase);
+    TEST_ASSERT_EQUAL_UINT64(0, g1->ticks);
+    TEST_ASSERT_EQUAL_INT32(1, g1->shrine_count);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 640.0f, g1->shrines[0].x);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 360.0f, g1->shrines[0].y);
+    TEST_ASSERT_EQUAL_INT32(8, g1->shrines[0].hp);
+    TEST_ASSERT_EQUAL_INT32(8, g1->shrines[0].max_hp);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 100.0f, g1->player.ink);
+    TEST_ASSERT_EQUAL_INT32(1, g1->run.rerolls_left);
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, g1->run.boss_id.index);
+
+    game_step(g1, NULL, NULL);
+    game_step(g1, NULL, NULL);
+    game_step(g2, NULL, NULL);
+    game_step(g2, NULL, NULL);
+    game_step(g3, NULL, NULL);
+    game_step(g3, NULL, NULL);
+
+    TEST_ASSERT_EQUAL_UINT64(2, g1->ticks);
+    TEST_ASSERT_TRUE(fluid_validate_finite(&g1->fluid));
+    TEST_ASSERT_EQUAL_HEX64(game_hash(g1), game_hash(g2));
+    TEST_ASSERT_NOT_EQUAL_UINT64(game_hash(g1), game_hash(g3));
+
+    game_destroy(g3);
+    game_destroy(g2);
+    game_destroy(g1);
+}
+
+static void test_abort_run_contract(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    game_step(g, NULL, NULL);
+    const uint64_t ticks_before = g->ticks;
+
+    const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
+    game_step(g, NULL, &abort_cmd);
+
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_GAME_OVER, g->phase);
+    TEST_ASSERT_EQUAL_UINT64(ticks_before, g->ticks);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, g->event_count);
+    TEST_ASSERT_EQUAL_INT(EV_GAME_OVER, g->events[0].type);
+    TEST_ASSERT_TRUE((g->events[0].flags & EVF_RUN_ABORTED) != 0);
+
+    /* Advance one idle tick in GAME_OVER so the transient event buffer is empty before checking
+     * that a repeated CMD_ABORT_RUN is a pure no-op. */
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_EQUAL_INT32(0, g->event_count);
+    const uint64_t h_before = game_hash(g);
+
+    game_step(g, NULL, &abort_cmd);
+    TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(g));
+    TEST_ASSERT_EQUAL_INT32(0, g->event_count);
+
+    game_destroy(g);
+}
+
+static void test_component_accessors_contract(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    const EntityId invalid_zero = game_spawn_entity(g, 0);
+    const EntityId invalid_bits = game_spawn_entity(g, UINT64_C(1) << 60);
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, invalid_zero.index);
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, invalid_bits.index);
+
+    const EntityId id = game_spawn_entity(g, COMP_TRANSFORM | COMP_HEALTH);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, id.index);
+    TEST_ASSERT_NOT_NULL(game_transform(g, id));
+    TEST_ASSERT_NOT_NULL(game_health(g, id));
+    TEST_ASSERT_NULL(game_proj(g, id));
+
+    ecs_destroy(&g->ecs, id);
+    TEST_ASSERT_NULL(game_transform(g, id));
+    TEST_ASSERT_NULL(game_health(g, id));
+
+    game_destroy(g);
+}
+
+static void test_event_queue_capacity_contract(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    const GameEvent ev = {.type = EV_KILL, .value = (int32_t)ENEMY_ARCHER};
+    for (int i = 0; i < 130; ++i) {
+        const bool pushed = game_push_event(g, ev);
+        if (i < GAME_MAX_EVENTS) {
+            TEST_ASSERT_TRUE(pushed);
+        } else {
+            TEST_ASSERT_FALSE(pushed);
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(GAME_MAX_EVENTS, g->event_count);
+    TEST_ASSERT_EQUAL_UINT32(2, g->dropped_events);
+
+    game_destroy(g);
 }
 
 int main(void)
@@ -66,7 +169,10 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_clamp);
     RUN_TEST(test_splitmix64);
-    RUN_TEST(test_game_advances_fluid_and_rng);
-    RUN_TEST(test_audio_writes_silence);
+    RUN_TEST(test_hash_helpers);
+    RUN_TEST(test_game_init_and_hash_contract);
+    RUN_TEST(test_abort_run_contract);
+    RUN_TEST(test_component_accessors_contract);
+    RUN_TEST(test_event_queue_capacity_contract);
     return UNITY_END();
 }
