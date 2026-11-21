@@ -15,6 +15,22 @@ static void advance_aftermath(GameState *g)
     }
 }
 
+static void advance_act_transition(GameState *g)
+{
+    for (int i = 0; i < 130 && g->phase == RUN_PHASE_ACT_TRANSITION; ++i) {
+        game_step(g, NULL, NULL);
+    }
+}
+
+static void assert_boss_alive(const GameState *g)
+{
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, g->run.boss_id.index);
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, g->run.boss_id));
+    const HealthComp *bhp = game_health(g, g->run.boss_id);
+    TEST_ASSERT_NOT_NULL(bhp);
+    TEST_ASSERT_GREATER_THAN_INT32(0, bhp->hp);
+}
+
 static void test_three_acts_boss_relic_and_transitions(void)
 {
     GameState *g = game_create(NULL);
@@ -25,6 +41,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
 
     /* Act 1 boss defeat -> Shrine HP +3 (capped at max_hp), aftermath 1.0s -> relic 3-choice. */
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive(g);
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
     g->shrines[0].hp = g->shrines[0].max_hp - 4;
     game_debug_force_wave_clear(g);
@@ -63,8 +80,15 @@ static void test_three_acts_boss_relic_and_transitions(void)
     }
     TEST_ASSERT_TRUE(saw_relic_pick);
 
+    /* Complete normal Act 2 transition before jumping to Act 2 boss wave. */
+    advance_act_transition(g);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.act_index);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.wave_index);
+
     /* Act 2 boss defeat -> Shrine HP clamped to max_hp, relic reroll + pick -> Act 3 transition. */
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive(g);
     g->shrines[0].hp = g->shrines[0].max_hp - 1;
     game_debug_force_wave_clear(g);
     game_step(g, NULL, NULL);
@@ -89,8 +113,15 @@ static void test_three_acts_boss_relic_and_transitions(void)
     TEST_ASSERT_EQUAL_INT32(2, g->run.act_index);
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, g->phase);
 
+    /* Complete normal Act 3 transition before jumping to Act 3 boss wave. */
+    advance_act_transition(g);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_EQUAL_INT32(2, g->run.act_index);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.wave_index);
+
     /* Act 3 boss defeat -> aftermath 1.0s -> VICTORY (no relic offer, cleared == true). */
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive(g);
     game_debug_force_wave_clear(g);
     game_step(g, NULL, NULL);
     TEST_ASSERT_EQUAL_INT32(3, g->run.acts_cleared);
@@ -113,6 +144,7 @@ static void test_boss_relic_fallback_advances_act(void)
     TEST_ASSERT_EQUAL_INT32((int32_t)RELIC_COUNT, g->run.relic_count);
 
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive(g);
     game_debug_force_wave_clear(g);
     game_step(g, NULL, NULL);
     advance_aftermath(g);
