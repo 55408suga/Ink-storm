@@ -85,8 +85,12 @@ Ink-storm/
 ├── AGENTS.md                 # AI エージェント開発規約（配布除外）
 ├── README.txt                # ビルド方法・操作方法
 ├── docs/
-│   ├── PLAN.md               # 本ファイル（全体計画・要件・タスク分割）
-│   └── tasks/                # フェーズ別タスク指示書
+│   ├── PLAN.md               # 本ファイル（全体方針・モジュール境界・確定状況・タスク分割のハブ）
+│   ├── game-design.md        # ゲーム仕様書（ラン構造・3幕・属性反応・筆スタイル・敵/ボス・ビルド・UI/アセット）
+│   ├── art-direction.md      # 世界観・アートディレクション仕様書（6本柱・パレット・3幕情景・筆プリミティブ・NG集）
+│   ├── architecture.md       # 技術設計書（Simulation Pipeline・Fluid API・Hybrid ECS・データスキーマ・セーブ）
+│   ├── qa-and-testing.md     # 品質保証・テスト・視覚回帰・デモ録画計画
+│   └── tasks/                # フェーズ・worktree 別タスク指示書
 ├── src/
 │   ├── core/                 # ターゲット: ink_core
 │   ├── fluid/                # ターゲット: ink_fluid
@@ -150,9 +154,62 @@ Phase 1（開発基盤・Nix・CMake/Ninja/CTest・Unity v2.6.0・最小スモ�
 
 ---
 
-## 6. これから相談して詳細化するセクション `[相談待ち]`
+## 6. ゲーム仕様・ローグライト拡張設計 `[確定]`
 
-- [ ] **Section 6**: ゲーム仕様・ローグライク拡張設計（ラン構造、アップグレード＆ビルド軸、新敵・新ボス・新属性、操作体系・UI/タイトル、BGM/SEアセット計画）
-- [ ] **Section 7**: Simulation Pipeline・Fluid Engine API・Hybrid ECS コンポーネント設計・イベント/コマンド設計
-- [ ] **Section 8**: 品質保証・テスト・視覚回帰・デモ録画構成
-- [ ] **Section 9**: Phase 2 以降の AI エージェント並列タスク分割表
+詳細仕様は **[docs/game-design.md](game-design.md)** へ分離して管理する。確定済みサマリ：
+
+- **ラン構造**: 全 3 幕 ×（通常 3 ウェーブ＋幕ボス 1）の幕×ウェーブ防衛型＋第 3 幕クリア後エンドレス解放。
+- **空間・流体連動**: 中央の社 1 基固定を基本としつつ、幕ごとに流体 `solid` 境界障害物・環境ギミックが変化（社位置・複数化の拡張余白を維持）。
+- **属性反応**: 3 属性深化（墨・炎・雷）— `墨×炎`（紅蓮墨嵐）、`墨×雷`（雷墨連鎖）、`炎×雷`（爆雷インパルス）、`墨×炎×雷`（三元共鳴）＋ビルドによる能動炎/雷注入。
+- **操作・筆スタイル**: 3 操作統一（左ドラッグ 風筆・右クリック 渦印・Space 風斬り）＋初期解放の筆スタイル 3 種（豪筆 / 朱筆 / 細筆）。
+- **報酬＆メタ進行**: ラン中は 2 層報酬（通常後＝強化 3 択、ボス後＝大遺物 3 択＋社回復、ショップなし）。ラン外ロビーにメタショップ（墨庵：小幅恒久強化＋追加遺物解放）を配置し、`RunConfig` 経由で決定性テスト/デモと分離。
+- **コンテンツ規模**: 通常敵 6〜7 種＋エリート変異＋固有幕ボス 3 体／4 ビルド軸（紅蓮・雷霆・烈風・墨道）＋通常アップグレード 24〜30 種＋大遺物 12〜15 種。
+- **幕ボス**: 大天狗（第 1 幕）／鵺（第 2 幕）／一筆龍（第 3 幕・霊峰の龍脈、多部位ボス、簡易版で代替可）。
+- **実装優先度**: P0＝第 1 幕の縦切り → P1＝3 幕本編 → P2＝任意枠・エンドレス・多部位版（詳細は game-design.md Section 12）。
+- **世界観・UI・アセット**: 日本語メイン UI（和風フリーフォント TTF 同梱＋ASCII フォールバック）、古典水墨様式に基づく余白と筆致・紙抜き縁・6 種筆プリミティブ（詳細は **[docs/art-direction.md](art-direction.md)**）、和楽器シンセ SE 拡張、外部ループ BGM（＋フォールバック）。
+
+---
+
+## 7. 技術アーキテクチャ設計 `[確定]`
+
+詳細仕様は **[docs/architecture.md](architecture.md)** へ分離して管理する。確定済みサマリ：
+
+- **責務境界**: `ink_game` が戦闘ラン（`GameState`）とメタ進行/墨庵/設定/ヒント（`MetaState`）を全集約し、`app` はウィンドウ・入力・UI 描画・ファイル I/O のみに徹する。見た目 VFX は `ink_render` が毎ティック直後に `events[]` から生成（専用 `vfx_rng` 付き、複数ティック時のイベント取りこぼし防止契約あり）。GLSL シェーダは `src/render/*.c` 埋め込みを標準とする。
+- **メモリ・性能予算**: 約 1.3〜1.5 MB のフラット固定長構造体（160×90・ECS 512）をトップレベルで 1 回だけヒープ確保（ラン中 `malloc` ゼロ）。Release 性能予算は `fluid_step < 2.0 ms/tick`、`game_step < 4.0 ms/tick`。
+- **Fluid Engine**: 汎用固定 4ch（3ch 使用＋1ch 余白）＋`solid[GN]` no-slip 境界＆法線クエリ＋薄い柱の壁横断を防ぐ短歩幅レイマーチ＋既定 12 反復＋`fluid_add_radial_impulse`（次ティック注入）＋`fluid_step()` → `elements_step()` → `fluid_sanitize_channels()` の直列連携。
+- **Hybrid ECS**: インデックスレジストリ型（`ink_ecs`＝世代 ID・64bit マスク・遅延削除・削除予約中アクセス拒否・昇順走査、`ink_game`＝型付き Component 固定配列＋検証付きアクセサ）。
+- **パイプライン・効果＆コマンド**: 戦闘更新の後に遅延削除フラッシュ＆遷移優先判定（敗北＞ボス撃破＞通常ノルマ）を配置。数値系は `RunModifiers` 集約＋ルール変更系は 7 限定フック。イベントは `GameEvent[128]`、UI 操作は値型 `GameCommand`（選択・リロール・社修繕・エンドレス代替・中断）へ統一し、候補不足時の代替規則・無効コマンド no-op 契約を明文化。
+- **セーブ仕様**: 依存ゼロの `key=value` テキスト（`version=1`・設定/ヒント統合・飽和加算・`run_settled` 二重精算防止・破損時フォールバック・原子的 `rename` 保存）、XDG 標準保存先（`--no-save` / `--save-path` 対応）。
+
+---
+
+## 8. 品質保証・テスト・視覚回帰計画 `[確定]`
+
+詳細基準は **[docs/qa-and-testing.md](qa-and-testing.md)** へ分離して管理する。確定済みサマリ：
+
+- **検証分担**: ローカルは変更範囲の最小ビルド＆関連テスト＋WSLg GPU 視覚確認・Release ベンチマーク・Nix 評価。フル ASan/UBSan + CTest・静的解析・配布 zip 検証は GitHub Actions CI へ委譲。
+- **自動テスト**: `test_core_smoke` / `test_cli_headless_smoke`（Phase 3 で本番 `game_step` 化）に加え、`test_fluid`（壁横断/角含む）・`test_ecs`（満杯/削除予約含む）・`test_roguelike_meta`（飽和加算/二重精算防止/候補不足含む）・`test_app_save`（原子的保存失敗時）・`test_elements`・`test_determinism_run`（初回差分ティック出力・複数ティックイベント消費）・`test_audio` を段階導入。
+- **性能・視覚・CLI**: Release ベンチ（`fluid_step < 2.0 ms/tick`, `game_step < 4.0 ms/tick`）、CLI 終了コード/セーブ隔離契約、4 描画経路（通常/`--no-post`/シェーダ失敗/フォント欠損）とコンタクトシート目視確認を個別ゲートで管理。
+
+---
+
+## 9. Phase 2 以降の AI エージェント並列タスク分割表 `[確定]`
+
+[game-design.md](game-design.md) §12 の実装優先度（**P0 縦切り → P1 本編 → P2 拡張**）と完全に整合させ、共有ファイルの競合を避けるため **「先行契約＆統合担当 → 並列 worktree → 合流ゲート」** の順で進める。
+
+### 9.1 フェーズ別タスク分割と完了ゲート
+
+| Phase（対応優先度） | ゴール | 並列 worktree / タスク | 主な担当範囲 | 完了ゲート |
+| :--- | :--- | :--- | :--- | :--- |
+| **Phase 2**<br>コアエンジン基盤 | 流体・ECS・メタの独立完成（2 並列＋統合） | **P2-A** (`wt-fluid`)<br>**P2-B** (`wt-ecs-meta`)<br>**P2-Int**（統合） | **A**: `src/fluid/*`, `tests/test_fluid.c`, 流体ベンチ<br>**B**: `src/ecs/*`, `src/game/meta.*`, `tests/test_ecs.c`, `tests/test_roguelike_meta.c`（メタ部）<br>**Int**: `game.c` / `main.c`（ヒープ確保化）/ `test_core_smoke.c` / `CMakeLists.txt` の新契約同期 | CI 全緑＋`fluid_step < 2.0 ms/tick`（Release） |
+| **Phase 3**<br>P0 縦切り（第 1 幕プレイアブル） | 第 1 幕通し（3 ウェーブ＋大天狗＋強化札 8 種＋報酬画面＋リザルト）を実機完走（契約確定→2 並列） | **P3-Pre**（契約確定）<br>**P3-A** (`wt-sim-p0`)<br>**P3-B** (`wt-render-audio-p0`) | **Pre**: `game.h` / `GameState` / `GameEvent` / `GameCommand` / `UiView` 枠を `main` に確定<br>**A**: 60Hz パイプライン、3 技、豪筆、墨経済・連殺・墨昇華、紅蓮/雷墨、弓妖・炎提灯・唐傘・大天狗、強化札 8 種（各軸 2 種）、報酬/リロール/修繕ロジック、`test_elements` / `test_determinism_run`<br>**B**: 和紙シェーダ、流体描画、rlgl 筆描画プリミティブ（`ink_stroke`/`ink_knockout` 等）、VFX プール、日本語文字列表＆フォント/ASCII フォールバック、報酬/リザルト UI、和楽器 SE＋BGM フォールバック、セーブ I/O（`test_app_save`）、`test_audio`、本番 `test_cli_headless_smoke` | 実ウィンドウで第 1 幕（戦闘→3 択→大天狗→リザルト）完走＋`test_determinism_run` 緑＋WSLg 4 経路確認＋CI 全緑 |
+| **Phase 4**<br>P1 本編完成 | 全 3 幕・筆 3 種・爆雷/三元共鳴・強化札 24 種・大遺物 9 種・ロビー墨庵・BGM 完成（最大 3 並列） | **P4-Pre**（契約確定）<br>**P4-A** (`wt-roguelike-p1`)<br>**P4-B** (`wt-acts-enemies-p1`)<br>**P4-C** (`wt-ui-assets-p1`) | **Pre**: 追加イベント・敵/札/遺物 ID・`UiView` 拡張枠を確定<br>**A**: 朱筆・細筆、爆雷・三元共鳴（`elements` 拡張）、強化札 24 種・大遺物 9 種、`RunModifiers`＋7 フック拡充<br>**B**: 第 2 幕（鳥居/岩柱 `solid`・鵺）、第 3 幕（山颪・霊柱・一筆龍簡易版）、雷提灯・鎌鼬・石鬼・墨吸い・エリート変異<br>**C**: タイトル/ロビー・筆選択・墨庵ショップ・ポーズ（`Esc` ポーズ化に伴う `AGENTS.md`/`README.txt` の終了操作表記更新含む）・初回操作ヒント UI、外部和風フォント・外部 BGM・`assets/LICENSES.txt` | 全 3 幕クリア＆墨庵購入/セーブが通し動作＋CI 全緑＋WSLg 視覚確認 |
+| **Phase 5**<br>P2 拡張（任意・本編拡張） | 全カタログ・エンドレス・多部位ボス・設定拡充（2 並列） | **P5-A** (`wt-p2-content`)<br>**P5-B** (`wt-p2-boss-endless`) | **A**: 狐符、強化札 28 種・大遺物 15 種（墨庵解放 6 種含む）、設定画面拡充<br>**B**: エンドレスモード（第 4 幕以降ループ・候補枯渇代替）、一筆龍の多部位版 | 全 28 札/15 遺物・エンドレス・多部位ボス動作＋CI 全緑 |
+| **Phase 6**<br>仕上げ・デモ・配布検証 | 自動デモ・視覚回帰・性能調整・最終配布（順次合流） | **P6-A** (`wt-demo-polish`)<br>**P6-B**（合流後・同一コミット） | **A**: `--demo` / `--snap`、`F1` X 線仕上げ、難易度・数値バランス・性能最終調整<br>**B**: P6-A の `main` 合流後、**同一コミット**で `README.txt`・`assets/LICENSES.txt`・`dist/inkstorm-src.zip`（素 `make` + `--headless-smoke`）検証およびデモ動画収録＆コンタクトシート目視 | 性能予算達成（`< 2.0` / `< 4.0 ms/tick`）＋コンタクトシート目視 OK＋配布 zip 合格 |
+
+### 9.2 共有ファイル所有・合流ルール
+- **共有ファイル（`CMakeLists.txt`, `src/fluid/fluid.h`, `src/ecs/ecs.h`, `src/game/game.h`, `src/game/meta.h`, `src/render/render.h`, `src/app/main.c`）**:
+  - 各 Phase の着手前に **先行契約（`*-Pre`）** として型・enum・関数シグネチャの枠を `main` に確定してから並列 worktree を切る。
+  - Phase 2 のように既存 API シグネチャ自体が変わる場合（例：`fluid_init`、`GameState` のヒープ確保化）は、呼び出し側（`game.c`, `main.c`, `test_core_smoke.c`）と `CMakeLists.txt` の同期を **統合担当（`*-Int`）** が一括実施する。
+  - 並列 worktree は原則として独立した `.c` ファイル・サブディレクトリ（例：`src/game/roguelike/`, `src/game/enemies/`, `src/render/ui_*.c`）を編集する。
+- **タスク指示書**: 各タスク着手前に `docs/tasks/phaseX-*.md` を切り出し、変更許可ファイル・完了条件・テスト対象を明示してからエージェントへ委譲する。
