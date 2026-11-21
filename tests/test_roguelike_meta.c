@@ -1,4 +1,7 @@
+#include "game.h"
 #include "meta.h"
+#include "roguelike/rewards.h"
+#include "roguelike/upgrades.h"
 #include "unity.h"
 
 #include <string.h>
@@ -476,6 +479,280 @@ static void test_null_meta_inputs(void)
     TEST_ASSERT_FALSE(meta_deserialize(NULL, "version=1"));
 }
 
+static void enter_reward_phase(GameState *g)
+{
+    game_debug_start_wave(g, 0);
+    g->phase = RUN_PHASE_REWARD;
+    g->phase_t = 0.0f;
+    rewards_generate_offer(g);
+}
+
+static void test_run_reward_offer_rules(void)
+{
+    for (uint64_t seed = 1; seed <= 200; ++seed) {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, seed);
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+
+        enter_reward_phase(g);
+        const RewardOffer *off = &g->run.reward;
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_UPGRADE, off->kind);
+        TEST_ASSERT_EQUAL_INT32(3, off->choice_count);
+
+        /* All 3 choices distinct and below max level. */
+        TEST_ASSERT_NOT_EQUAL_INT32(off->choice_ids[0], off->choice_ids[1]);
+        TEST_ASSERT_NOT_EQUAL_INT32(off->choice_ids[0], off->choice_ids[2]);
+        TEST_ASSERT_NOT_EQUAL_INT32(off->choice_ids[1], off->choice_ids[2]);
+
+        bool has_recommended = false;
+        UpgradeAxis axes[3];
+        for (int i = 0; i < 3; ++i) {
+            const UpgradeId id = (UpgradeId)off->choice_ids[i];
+            TEST_ASSERT_TRUE(game_upgrade_level(g, id) < game_upgrade_max_level(id));
+            axes[i] = game_upgrade_axis(id);
+            if (game_is_recommended_axis(BRUSH_STYLE_HEAVY, axes[i])) {
+                has_recommended = true;
+            }
+        }
+        TEST_ASSERT_TRUE(has_recommended);
+        /* At least 2 distinct axes among the 3 choices. */
+        TEST_ASSERT_TRUE(axes[0] != axes[1] || axes[0] != axes[2] || axes[1] != axes[2]);
+
+        /* Maxed (Lv3) upgrade must never be offered. */
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        }
+        rewards_generate_offer(g);
+        for (int i = 0; i < off->choice_count; ++i) {
+            TEST_ASSERT_NOT_EQUAL_INT32((int32_t)UPG_EMBER_TIP, off->choice_ids[i]);
+        }
+
+        game_destroy(g);
+    }
+}
+
+static void test_run_reward_reproducibility(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x4242));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+
+    enter_reward_phase(a);
+    enter_reward_phase(b);
+    TEST_ASSERT_EQUAL_UINT32(a->run.reward.serial, b->run.reward.serial);
+    TEST_ASSERT_EQUAL_INT32_ARRAY(a->run.reward.choice_ids, b->run.reward.choice_ids,
+                                  GAME_MAX_REWARD_CHOICES);
+
+    const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
+    game_step(a, NULL, &reroll);
+    game_step(b, NULL, &reroll);
+    TEST_ASSERT_EQUAL_UINT32(a->run.reward.serial, b->run.reward.serial);
+    TEST_ASSERT_EQUAL_INT32_ARRAY(a->run.reward.choice_ids, b->run.reward.choice_ids,
+                                  GAME_MAX_REWARD_CHOICES);
+
+    const GameCommand pick = {.type = CMD_PICK_REWARD, .arg = 1};
+    game_step(a, NULL, &pick);
+    game_step(b, NULL, &pick);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+
+    game_destroy(b);
+    game_destroy(a);
+}
+
+static void test_run_reward_reroll(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    enter_reward_phase(g);
+
+    TEST_ASSERT_EQUAL_INT32(1, g->run.rerolls_left);
+    const uint32_t serial0 = g->run.reward.serial;
+    const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
+    game_step(g, NULL, &reroll);
+
+    TEST_ASSERT_EQUAL_INT32(0, g->run.rerolls_left);
+    TEST_ASSERT_EQUAL_UINT32(serial0 + 1u, g->run.reward.serial);
+    TEST_ASSERT_EQUAL_INT32(1, g->event_count);
+    TEST_ASSERT_EQUAL_INT(EV_REWARD_REROLL, g->events[0].type);
+    TEST_ASSERT_EQUAL_INT32(0, g->events[0].value);
+
+    /* With 0 rerolls left, another reroll is a strict no-op. */
+    game_step(g, NULL, NULL);
+    const uint64_t h_before = game_hash(g);
+    game_step(g, NULL, &reroll);
+    TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(g));
+
+    game_destroy(g);
+}
+
+static void test_run_reward_repair_shrine(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    /* Full HP: repair is not available and command is a no-op. */
+    enter_reward_phase(g);
+    TEST_ASSERT_FALSE(g->run.reward.repair_available);
+    game_step(g, NULL, NULL);
+    const uint64_t h_full = game_hash(g);
+    const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+    game_step(g, NULL, &repair);
+    TEST_ASSERT_EQUAL_HEX64(h_full, game_hash(g));
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_REWARD, g->phase);
+
+    /* Damaged shrine: repair heals +1, emits EV_REWARD_PICK(-1, EVF_REWARD_REPAIR), starts next
+     * wave. */
+    g->shrines[0].hp = g->shrines[0].max_hp - 2;
+    rewards_generate_offer(g);
+    TEST_ASSERT_TRUE(g->run.reward.repair_available);
+    const int32_t hp_before = g->shrines[0].hp;
+
+    game_step(g, NULL, &repair);
+    TEST_ASSERT_EQUAL_INT32(hp_before + 1, g->shrines[0].hp);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    bool found_repair_ev = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_REWARD_PICK && g->events[i].value == -1 &&
+            (g->events[i].flags & EVF_REWARD_REPAIR) != 0) {
+            found_repair_ev = true;
+        }
+    }
+    TEST_ASSERT_TRUE(found_repair_ev);
+
+    game_destroy(g);
+}
+
+static void test_run_reward_invalid_commands_noop(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    enter_reward_phase(g);
+    game_step(g, NULL, NULL);
+
+    const uint64_t h_reward = game_hash(g);
+    const uint64_t rng_reward = g->rng;
+    const GameCommand invalid_cmds[] = {
+        {.type = CMD_PICK_REWARD, .arg = -1},
+        {.type = CMD_PICK_REWARD, .arg = g->run.reward.choice_count},
+        {.type = CMD_PICK_REWARD, .arg = 3},
+        {.type = CMD_START_ENDLESS, .arg = 0},
+        {.type = CMD_PICK_ENDLESS_CRYSTAL, .arg = 0},
+    };
+    for (size_t i = 0; i < sizeof invalid_cmds / sizeof invalid_cmds[0]; ++i) {
+        game_step(g, NULL, &invalid_cmds[i]);
+        TEST_ASSERT_EQUAL_HEX64(h_reward, game_hash(g));
+        TEST_ASSERT_EQUAL_HEX64(rng_reward, g->rng);
+    }
+
+    /* CMD_PICK_REWARD during PLAYING is also a no-op compared to CMD_NONE. */
+    GameState *p1 = game_create(NULL);
+    GameState *p2 = game_create(NULL);
+    game_debug_start_wave(p1, 0);
+    game_debug_start_wave(p2, 0);
+    const GameCommand pick0 = {.type = CMD_PICK_REWARD, .arg = 0};
+    game_step(p1, NULL, NULL);
+    game_step(p2, NULL, &pick0);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(p1), game_hash(p2));
+
+    game_destroy(p2);
+    game_destroy(p1);
+    game_destroy(g);
+}
+
+static void test_run_reward_candidate_shortage(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    /* Max out 7 upgrades -> only 1 choice offered. */
+    for (int id = 0; id < (int)UPG_COUNT - 1; ++id) {
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, (UpgradeId)id));
+        }
+    }
+    enter_reward_phase(g);
+    TEST_ASSERT_EQUAL_INT(REWARD_KIND_UPGRADE, g->run.reward.kind);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.reward.choice_count);
+    TEST_ASSERT_EQUAL_INT32((int32_t)(UPG_COUNT - 1), g->run.reward.choice_ids[0]);
+
+    /* Max out the 8th upgrade -> REWARD_KIND_FALLBACK, 0 choices, repair_available even at full HP.
+     */
+    for (int lv = 0; lv < 3; ++lv) {
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, (UpgradeId)(UPG_COUNT - 1)));
+    }
+    g->shrines[0].hp = g->shrines[0].max_hp;
+    rewards_generate_offer(g);
+    TEST_ASSERT_EQUAL_INT(REWARD_KIND_FALLBACK, g->run.reward.kind);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.reward.choice_count);
+    TEST_ASSERT_TRUE(g->run.reward.repair_available);
+
+    const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+    game_step(g, NULL, &repair);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.wave_index);
+    TEST_ASSERT_EQUAL_INT32(g->shrines[0].max_hp, g->shrines[0].hp);
+
+    game_destroy(g);
+}
+
+static void test_run_reward_empty_filter_fallback(void)
+{
+    /* 0 owned upgrades: filter 2.4 (< 0.4 owned) falls back cleanly and yields 3 choices. */
+    for (uint64_t seed = 1; seed <= 30; ++seed) {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, seed);
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.upgrade_count);
+        enter_reward_phase(g);
+        TEST_ASSERT_EQUAL_INT32(3, g->run.reward.choice_count);
+        game_destroy(g);
+    }
+
+    /* All recommended-axis upgrades maxed on first offer: filter 2.2 falls back and yields 3
+     * choices. */
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(77));
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+    for (int id = 0; id < (int)UPG_COUNT; ++id) {
+        if (game_is_recommended_axis(BRUSH_STYLE_HEAVY, game_upgrade_axis((UpgradeId)id))) {
+            for (int lv = 0; lv < 3; ++lv) {
+                TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, (UpgradeId)id));
+            }
+        }
+    }
+    enter_reward_phase(g);
+    TEST_ASSERT_EQUAL_INT(REWARD_KIND_UPGRADE, g->run.reward.kind);
+    TEST_ASSERT_EQUAL_INT32(3, g->run.reward.choice_count);
+    game_destroy(g);
+}
+
+static void test_run_modifiers_calculation(void)
+{
+    RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(1));
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_GREAT_VORTEX));
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_GREAT_VORTEX));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.30f, g->internal.mods.cyclone_radius_mul);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.4f, g->internal.mods.cyclone_duration_add);
+
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_LASTING_SURGE));
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_LASTING_SURGE));
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_LASTING_SURGE));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 6.6f, g->internal.mods.surge_duration);
+    game_destroy(g);
+
+    cfg.meta_upgrade_lv[META_UPG_INK_MAX] = 2;
+    GameState *g_meta = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g_meta);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g_meta->player.ink_max);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g_meta->player.ink);
+    game_destroy(g_meta);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -495,5 +772,13 @@ int main(void)
     RUN_TEST(test_shake_scale_thresholds);
     RUN_TEST(test_invalid_saves_reset_every_field);
     RUN_TEST(test_null_meta_inputs);
+    RUN_TEST(test_run_reward_offer_rules);
+    RUN_TEST(test_run_reward_reproducibility);
+    RUN_TEST(test_run_reward_reroll);
+    RUN_TEST(test_run_reward_repair_shrine);
+    RUN_TEST(test_run_reward_invalid_commands_noop);
+    RUN_TEST(test_run_reward_candidate_shortage);
+    RUN_TEST(test_run_reward_empty_filter_fallback);
+    RUN_TEST(test_run_modifiers_calculation);
     return UNITY_END();
 }

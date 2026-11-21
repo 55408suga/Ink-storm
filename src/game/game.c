@@ -1,6 +1,14 @@
 #include "game.h"
 
+#include "combat/damage.h"
 #include "core.h"
+#include "elements/elements.h"
+#include "enemies/enemy_defs.h"
+#include "enemies/projectiles.h"
+#include "player/player_skills.h"
+#include "roguelike/rewards.h"
+#include "roguelike/upgrades.h"
+#include "roguelike/waves.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -17,6 +25,119 @@ static bool brush_input_is_finite(const BrushInput *in)
 {
     return in != NULL && isfinite(in->mx) && isfinite(in->my) && isfinite(in->pmx) &&
            isfinite(in->pmy);
+}
+
+static void step_dissolving_entities(GameState *g)
+{
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX) {
+            continue;
+        }
+        TransformComp *tr = game_transform_mut(g, id);
+        if (tr == NULL || !tr->dissolving) {
+            continue;
+        }
+        tr->dissolve_t += INK_FIXED_DT;
+        if (tr->dissolve_t + 0.5f * INK_FIXED_DT >= 0.6f) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+}
+
+static void handle_command(GameState *g, const GameCommand *cmd)
+{
+    if (cmd == NULL || (unsigned)cmd->type > (unsigned)CMD_ABORT_RUN) {
+        return;
+    }
+    switch (cmd->type) {
+    case CMD_PICK_REWARD:
+        (void)rewards_pick_upgrade(g, cmd->arg);
+        break;
+    case CMD_REROLL_REWARD:
+        (void)rewards_reroll(g);
+        break;
+    case CMD_REPAIR_SHRINE:
+        (void)rewards_repair_shrine(g);
+        break;
+    case CMD_ABORT_RUN:
+        if (g->phase != RUN_PHASE_VICTORY && g->phase != RUN_PHASE_GAME_OVER) {
+            g->phase = RUN_PHASE_GAME_OVER;
+            g->phase_t = 0.0f;
+            const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+            const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+            (void)game_push_event(g, (GameEvent){
+                                         .type = EV_GAME_OVER,
+                                         .x = sx,
+                                         .y = sy,
+                                         .value = 0,
+                                         .flags = EVF_RUN_ABORTED,
+                                     });
+        }
+        break;
+    case CMD_NONE:
+    case CMD_PICK_ENDLESS_CRYSTAL:
+    case CMD_START_ENDLESS:
+    default:
+        break;
+    }
+}
+
+static void step_aftermath(GameState *g)
+{
+    g->player.painting = false;
+    g->player.stroke_speed = 0.0f;
+
+    if (g->run.chain_t > 0.0f) {
+        g->run.chain_t -= INK_FIXED_DT;
+        if (g->run.chain_t <= 1e-4f) {
+            g->run.chain_t = 0.0f;
+            g->run.chain = 0;
+        }
+    }
+    if (g->player.surge_t > 0.0f) {
+        g->player.surge_t -= INK_FIXED_DT;
+        if (g->player.surge_t <= 1e-4f) {
+            g->player.surge_t = 0.0f;
+        }
+    }
+
+    fluid_step(&g->fluid, INK_FIXED_DT);
+    fluid_sanitize_channels(&g->fluid);
+    step_dissolving_entities(g);
+    ecs_flush_destroy(&g->ecs);
+
+    g->phase_t += INK_FIXED_DT;
+    if (g->phase_t + 0.5f * INK_FIXED_DT >= 1.0f) {
+        if (g->internal.wave_clear_is_boss) {
+            g->phase = RUN_PHASE_VICTORY;
+            g->phase_t = 0.0f;
+            (void)game_push_event(g, (GameEvent){
+                                         .type = EV_VICTORY,
+                                         .value = g->run.act_index,
+                                         .flags = 0,
+                                     });
+        } else {
+            rewards_generate_offer(g);
+            g->phase = RUN_PHASE_REWARD;
+            g->phase_t = 0.0f;
+        }
+    }
+    ++g->ticks;
+}
+
+static void step_pending_impulses(GameState *g)
+{
+    int32_t count = g->pending_impulse_count;
+    if (count > GAME_MAX_PENDING_IMPULSE) {
+        count = GAME_MAX_PENDING_IMPULSE;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        const PendingImpulse *imp = &g->pending_impulses[i];
+        fluid_add_radial_impulse(&g->fluid, imp->x, imp->y, imp->rad_cells, imp->peak_speed);
+    }
+    g->pending_impulse_count = 0;
 }
 
 GameState *game_create(const RunConfig *cfg)
@@ -52,8 +173,8 @@ void game_init(GameState *g, const RunConfig *cfg)
     const uint8_t hp_lv = clamp_meta_lv(&g->config, META_UPG_SHRINE_HP);
     g->shrine_count = 1;
     g->shrines[0] = (ShrineState){
-        .x = 640.0f,
-        .y = 360.0f,
+        .x = (float)INK_SCREEN_W * 0.5f,
+        .y = (float)INK_SCREEN_H * 0.5f,
         .hit_radius_proj = 32.0f,
         .hit_radius_contact = 42.0f,
         .hp = 8 + (int32_t)hp_lv,
@@ -61,12 +182,13 @@ void game_init(GameState *g, const RunConfig *cfg)
         .invuln_t = 0.0f,
     };
 
-    const uint8_t ink_lv = clamp_meta_lv(&g->config, META_UPG_INK_MAX);
-    g->player.ink_max = 100.0f + 10.0f * (float)ink_lv;
-    g->player.ink = g->player.ink_max;
-
     const uint8_t reroll_lv = clamp_meta_lv(&g->config, META_UPG_REROLLS);
     g->run.rerolls_left = 1 + (int32_t)reroll_lv;
+
+    g->player.cursor_x = g->shrines[0].x;
+    g->player.cursor_y = g->shrines[0].y;
+    roguelike_recompute_modifiers(g);
+    g->player.ink = g->player.ink_max;
 }
 
 void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
@@ -74,60 +196,119 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
     if (g == NULL) {
         return;
     }
+
+    /* Step 1: Event clear, input validation, command handling, stopping-phase branch. */
     g->event_count = 0;
-
     const BrushInput *valid_in = brush_input_is_finite(in) ? in : NULL;
-    const GameCommandType cmd_type =
-        (cmd != NULL && (unsigned)cmd->type <= (unsigned)CMD_ABORT_RUN) ? cmd->type : CMD_NONE;
-
-    if (cmd_type == CMD_ABORT_RUN && g->phase != RUN_PHASE_VICTORY &&
-        g->phase != RUN_PHASE_GAME_OVER) {
-        g->phase = RUN_PHASE_GAME_OVER;
-        g->phase_t = 0.0f;
-        const float sx = g->shrine_count > 0 ? g->shrines[0].x : 640.0f;
-        const float sy = g->shrine_count > 0 ? g->shrines[0].y : 360.0f;
-        (void)game_push_event(g, (GameEvent){
-                                     .type = EV_GAME_OVER,
-                                     .x = sx,
-                                     .y = sy,
-                                     .value = 0,
-                                     .flags = EVF_RUN_ABORTED,
-                                 });
-    }
+    handle_command(g, cmd);
 
     if (g->phase == RUN_PHASE_REWARD || g->phase == RUN_PHASE_VICTORY ||
         g->phase == RUN_PHASE_GAME_OVER) {
         return;
     }
 
-    if (g->phase == RUN_PHASE_ACT_TRANSITION) {
+    if (g->phase == RUN_PHASE_SHRINE_BREAK) {
         g->phase_t += INK_FIXED_DT;
-        if (g->phase_t + 0.5f * INK_FIXED_DT >= 2.0f) {
-            g->phase = RUN_PHASE_PLAYING;
+        if (g->phase_t + 0.5f * INK_FIXED_DT >= 1.5f) {
+            g->phase = RUN_PHASE_GAME_OVER;
             g->phase_t = 0.0f;
         }
-    } else if (g->phase == RUN_PHASE_PLAYING) {
-        g->phase_t += INK_FIXED_DT;
-        g->player.painting = false;
-        if (valid_in != NULL) {
-            g->player.cursor_x = valid_in->mx;
-            g->player.cursor_y = valid_in->my;
-            if (valid_in->paint) {
-                const float mid_x = 0.5f * (valid_in->pmx + valid_in->mx);
-                const float mid_y = 0.5f * (valid_in->pmy + valid_in->my);
-                const float fx = ink_clampf((valid_in->mx - valid_in->pmx) * 0.58f, -46.0f, 46.0f);
-                const float fy = ink_clampf((valid_in->my - valid_in->pmy) * 0.58f, -46.0f, 46.0f);
-                static const float ink_dye[FLUID_MAX_CHANNELS] = {0.4f, 0.0f, 0.0f, 0.0f};
-                fluid_splat(&g->fluid, mid_x, mid_y, 3.7f, fx, fy, ink_dye);
-                g->player.painting = true;
-            }
-        }
-        fluid_step(&g->fluid, INK_FIXED_DT);
-        fluid_sanitize_channels(&g->fluid);
-    } else {
-        g->phase_t += INK_FIXED_DT;
+        ++g->ticks;
+        return;
     }
 
+    if (g->phase == RUN_PHASE_ACT_TRANSITION) {
+        if (!g->internal.act_prepared) {
+            waves_prepare_act(g);
+        }
+        g->phase_t += INK_FIXED_DT;
+        if (g->phase_t + 0.5f * INK_FIXED_DT >= 2.0f) {
+            waves_start_wave(g, 0);
+        }
+        ecs_flush_destroy(&g->ecs);
+        ++g->ticks;
+        return;
+    }
+
+    if (g->phase == RUN_PHASE_WAVE_AFTERMATH) {
+        step_aftermath(g);
+        return;
+    }
+
+    /* Step 2: Hitstop (ticks and phase_t advance; steps 3..8 skipped while active). */
+    g->phase_t += INK_FIXED_DT;
+    if (g->hitstop_t > 0.0f) {
+        g->hitstop_t -= INK_FIXED_DT;
+        if (g->hitstop_t <= 1e-4f) {
+            g->hitstop_t = 0.0f;
+        }
+        ++g->ticks;
+        return;
+    }
+
+    /* Step 3: Pending impulses & player skills / ink economy. */
+    step_pending_impulses(g);
+    player_skills_step(g, valid_in);
+
+    /* Step 4: Fluid simulation step. */
+    fluid_step(&g->fluid, INK_FIXED_DT);
+
+    /* Step 5: Elemental reactions & channel sanitization. */
+    elements_step(g);
+    fluid_sanitize_channels(&g->fluid);
+
+    /* Step 6: Wave reinforcement spawns. */
+    waves_step_spawns(g);
+
+    /* Step 7: ECS combat systems (ascending index order). */
+    enemies_ai_step(g);
+    projectiles_step(g);
+    combat_physics_and_slams_step(g);
+    combat_orbs_step(g);
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+
+    /* Step 8: Flush deferred destroys and evaluate transition priority. */
     ecs_flush_destroy(&g->ecs);
+    if (g->run.boss_id.index != ECS_INVALID_INDEX && !ecs_is_alive(&g->ecs, g->run.boss_id)) {
+        g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    }
+
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+
+    if (g->shrine_count > 0 && g->shrines[0].hp <= 0) {
+        g->phase = RUN_PHASE_SHRINE_BREAK;
+        g->phase_t = 0.0f;
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_GAME_OVER,
+                                     .x = sx,
+                                     .y = sy,
+                                     .value = 0,
+                                     .flags = 0,
+                                 });
+    } else if (g->run.wave_index == GAME_BOSS_WAVE_INDEX &&
+               g->run.boss_id.index == ECS_INVALID_INDEX) {
+        ++g->run.acts_cleared;
+        g->internal.wave_clear_is_boss = true;
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_ACT_CLEAR,
+                                     .x = g->internal.last_boss_x,
+                                     .y = g->internal.last_boss_y,
+                                     .value = g->run.act_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+    } else if (g->run.wave_index < GAME_BOSS_WAVE_INDEX && g->run.wave_kills >= g->run.wave_quota) {
+        g->internal.wave_clear_is_boss = false;
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_WAVE_CLEAR,
+                                     .x = sx,
+                                     .y = sy,
+                                     .value = g->run.wave_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+    }
+
     ++g->ticks;
 }
