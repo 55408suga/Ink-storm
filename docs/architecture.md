@@ -152,7 +152,8 @@ typedef enum {
 8. **遅延削除フラッシュ & 遷移優先判定（戦闘確定）**
    - `ecs_flush_destroy(&g->ecs)` で削除予約済みエンティティを一括回収し `gen++`。
    - **同一ティック同時発生の遷移優先順位**（上にある条件が勝つ）：
-     1. **社 HP == 0（敗北最優先）**：全戦闘を停止し `RUN_PHASE_SHRINE_BREAK`（1.5 秒）へ遷移（`EV_GAME_OVER` 予定）。
+     1. **社 HP == 0（敗北最優先）**：全戦闘を停止し `RUN_PHASE_SHRINE_BREAK`（1.5 秒）へ遷移（`EV_GAME_OVER` 発行）。
+     - ※ 各幕開始（`waves_prepare_act`）および各ウェーブ開始（`waves_start_wave`）時に `hitstop_t` と `pending_impulse_count` をリセットし、前ウェーブ／前幕終了時のヒットストップや保留インパルスを持ち越さない。
      2. **ボス撃破**（ボスウェーブ中）：墨玉 8＋社 HP +3（第 1・2 幕、または第 3 幕は勝利リザルトへ）。残存敵/敵弾へ墨還り開始し `RUN_PHASE_WAVE_AFTERMATH` へ遷移（`EV_WAVE_CLEAR` / `EV_ACT_CLEAR`）。
      3. **通常ウェーブノルマ到達**：残存敵/敵弾へ墨還り開始し `RUN_PHASE_WAVE_AFTERMATH` へ遷移（`EV_WAVE_CLEAR`）。
    - `g->ticks++`。

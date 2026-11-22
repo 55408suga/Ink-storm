@@ -55,7 +55,7 @@ void boss_ryu_spawn(GameState *g, EntityId id)
     g->internal.last_boss_x = tr->x;
     g->internal.last_boss_y = tr->y;
 
-    static const float k_swirl_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.35f, 0.35f, 0.0f};
+    static const float k_swirl_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.35f, 0.0f, 0.0f};
     fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 52.0f, k_swirl_dye);
 }
 
@@ -80,7 +80,7 @@ void boss_ryu_step(GameState *g, EntityId id)
             boss->telegraph = 0.0f;
             boss->telegraph_pattern = 0;
             boss->gale_t = 0.0f;
-            static const float k_phase_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.5f, 0.5f, 0.0f};
+            static const float k_phase_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
             fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 50.0f, k_phase_dye);
             (void)game_push_event(g, (GameEvent){
                                          .type = EV_BOSS_PHASE,
