@@ -48,7 +48,6 @@ void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
                         PAL_SUMI_SCORCH, 0.98f, false);
 
     float y = build_panel.y + 62.0f;
-    char buf[96];
     if (g->run.upgrade_count <= 0) {
         render_draw_text_id(r, TEXT_PAUSE_NONE, (Vector2){build_panel.x + 28.0f, y}, 18.0f,
                             PAL_SUMI_LIGHT, 0.92f, false);
@@ -56,6 +55,7 @@ void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
     } else {
         const int32_t shown = g->run.upgrade_count < 12 ? g->run.upgrade_count : 12;
         for (int32_t i = 0; i < shown; ++i) {
+            char buf[96];
             const OwnedUpgrade *ou = &g->run.upgrades[i];
             const int col = i % 2;
             const int row = i / 2;
