@@ -116,8 +116,8 @@ void boss_ryu_step(GameState *g, EntityId id)
     const int32_t ph_step = (int32_t)floorf(22.0f * speed_mul * slow + 0.5f);
     en->phase = (en->phase + (ph_step > 0 ? ph_step : 1)) % 6283;
 
-    float tx = sx;
-    float ty = 150.0f;
+    float tx;
+    float ty;
     if (g->internal.ryu_coil_t > 0.0f) {
         tx = sx + cosf(ph * 3.0f) * 240.0f;
         ty = sy + sinf(ph * 3.0f) * 240.0f;

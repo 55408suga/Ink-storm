@@ -29,8 +29,8 @@ static void pick_vortex_target(const GameState *g, float ex, float ey, float *ou
 
     /* Otherwise target the densest non-solid ink patch on the canvas (coarse stride 4). */
     const float *ink_ch = fluid_channel_const(&g->fluid, 0);
-    float best_ink = 0.15f;
     if (ink_ch != NULL) {
+        float best_ink = 0.15f;
         for (int gy = 4; gy < FLUID_H - 4; gy += 4) {
             const int row = gy * FLUID_W;
             for (int gx = 4; gx < FLUID_W - 4; gx += 4) {
