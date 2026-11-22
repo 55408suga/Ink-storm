@@ -29,11 +29,12 @@ EntityId projectiles_spawn(GameState *g, ProjKind kind, float x, float y, float 
     if (vel != NULL) {
         vel->vx = vx;
         vel->vy = vy;
-        vel->fluid_coupling = 1.0f;
+        vel->fluid_coupling = (kind == PROJ_WIND_SICKLE) ? 1.5f : 1.0f;
     }
     ProjComp *proj = game_proj_mut(g, id);
     if (proj != NULL) {
         proj->kind = kind;
+        proj->bounces_left = (kind == PROJ_BOUNCE_ORB) ? 2 : 0;
         proj->trail_n = 1;
         proj->trail[0] = (GameVec2){x, y};
     }
@@ -170,7 +171,13 @@ void projectiles_step(GameState *g)
             const float toward_center = (tcd > 1e-6f && psp > 1e-6f)
                                             ? ((vel->vx * tcx + vel->vy * tcy) / (psp * tcd))
                                             : 1.0f;
-            if ((fsp > 48.0f && toward_center < 0.90f) || toward_center < 0.28f) {
+            /* Bounce orbs require actual fluid flow to deflect so wall bounces do not self-deflect.
+             */
+            const bool deflect_hit =
+                (proj->kind == PROJ_BOUNCE_ORB)
+                    ? (fsp > 48.0f && toward_center < 0.90f)
+                    : ((fsp > 48.0f && toward_center < 0.90f) || toward_center < 0.28f);
+            if (deflect_hit) {
                 proj->deflected = true;
                 if (is_storm_proj_kind(proj->kind) || g->internal.mods.deflect_auto_electrify) {
                     proj->electrified = true;
@@ -258,9 +265,60 @@ void projectiles_step(GameState *g)
             vel->vy = 0.0f;
         }
 
+        const float prev_x = tr->x;
+        const float prev_y = tr->y;
         tr->x += vel->vx * INK_FIXED_DT;
         tr->y += vel->vy * INK_FIXED_DT;
         tr->facing = atan2f(vel->vy, vel->vx);
+
+        const bool hit_outer =
+            tr->x < FLUID_CELL_PX || tr->x >= (float)INK_SCREEN_W - FLUID_CELL_PX ||
+            tr->y < FLUID_CELL_PX || tr->y >= (float)INK_SCREEN_H - FLUID_CELL_PX;
+        const bool hit_solid = !hit_outer && fluid_is_solid(&g->fluid, tr->x, tr->y);
+
+        if (proj->kind == PROJ_BOUNCE_ORB && (hit_outer || hit_solid)) {
+            if (proj->bounces_left > 0) {
+                --proj->bounces_left;
+                float nx = 0.0f;
+                float ny = 0.0f;
+                if (hit_outer) {
+                    if (tr->x < FLUID_CELL_PX) {
+                        nx += 1.0f;
+                    } else if (tr->x >= (float)INK_SCREEN_W - FLUID_CELL_PX) {
+                        nx -= 1.0f;
+                    }
+                    if (tr->y < FLUID_CELL_PX) {
+                        ny += 1.0f;
+                    } else if (tr->y >= (float)INK_SCREEN_H - FLUID_CELL_PX) {
+                        ny -= 1.0f;
+                    }
+                    const float nlen = hypotf(nx, ny);
+                    if (nlen > 1e-6f) {
+                        nx /= nlen;
+                        ny /= nlen;
+                    }
+                } else if (!fluid_solid_normal(&g->fluid, tr->x, tr->y, &nx, &ny)) {
+                    nx = -vel->vx / target_sp;
+                    ny = -vel->vy / target_sp;
+                }
+                const float vn = vel->vx * nx + vel->vy * ny;
+                if (vn < 0.0f) {
+                    vel->vx -= 2.0f * vn * nx;
+                    vel->vy -= 2.0f * vn * ny;
+                }
+                tr->x = ink_clampf(prev_x, FLUID_CELL_PX + 1.0f,
+                                   (float)INK_SCREEN_W - FLUID_CELL_PX - 1.0f);
+                tr->y = ink_clampf(prev_y, FLUID_CELL_PX + 1.0f,
+                                   (float)INK_SCREEN_H - FLUID_CELL_PX - 1.0f);
+                tr->facing = atan2f(vel->vy, vel->vx);
+            } else {
+                ecs_destroy(&g->ecs, id);
+                continue;
+            }
+        } else if (hit_solid) {
+            ecs_destroy(&g->ecs, id);
+            continue;
+        }
 
         if (proj->kind == PROJ_FIREBALL || proj->burning) {
             const float ignite = dye[0] > 0.15f ? 0.78f : 0.34f;
@@ -280,14 +338,6 @@ void projectiles_step(GameState *g)
         } else {
             memmove(proj->trail, proj->trail + 1, sizeof(GameVec2) * (PROJ_TRAIL_LEN - 1));
             proj->trail[PROJ_TRAIL_LEN - 1] = (GameVec2){tr->x, tr->y};
-        }
-
-        const bool in_interior =
-            tr->x >= FLUID_CELL_PX && tr->x < (float)INK_SCREEN_W - FLUID_CELL_PX &&
-            tr->y >= FLUID_CELL_PX && tr->y < (float)INK_SCREEN_H - FLUID_CELL_PX;
-        if (in_interior && fluid_is_solid(&g->fluid, tr->x, tr->y)) {
-            ecs_destroy(&g->ecs, id);
-            continue;
         }
 
         if (!proj->deflected && hypotf(sx - tr->x, sy - tr->y) < shrine_proj_r) {

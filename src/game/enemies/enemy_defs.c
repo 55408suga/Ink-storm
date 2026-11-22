@@ -1,5 +1,8 @@
 #include "enemies/enemy_defs.h"
 
+#include "core.h"
+
+#include <math.h>
 #include <stddef.h>
 
 static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
@@ -60,6 +63,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 0.0f,
             .score = 140,
             .orb_count = 2,
+            .spawn_fn = lantern_storm_spawn,
+            .ai_step_fn = lantern_storm_step,
         },
     [ENEMY_KAMAITACHI] =
         {
@@ -70,6 +75,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 1.5f,
             .score = 160,
             .orb_count = 1,
+            .spawn_fn = kamaitachi_spawn,
+            .ai_step_fn = kamaitachi_step,
         },
     [ENEMY_STONE_ONI] =
         {
@@ -80,6 +87,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 0.3f,
             .score = 300,
             .orb_count = 3,
+            .spawn_fn = stone_oni_spawn,
+            .ai_step_fn = stone_oni_step,
         },
     [ENEMY_INK_LEECH] =
         {
@@ -90,6 +99,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 1.5f,
             .score = 220,
             .orb_count = 3,
+            .spawn_fn = ink_leech_spawn,
+            .ai_step_fn = ink_leech_step,
         },
     [ENEMY_BOSS_NUE] =
         {
@@ -100,6 +111,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 0.0f,
             .score = 1500,
             .orb_count = 8,
+            .spawn_fn = boss_nue_spawn,
+            .ai_step_fn = boss_nue_step,
         },
     [ENEMY_BOSS_RYU] =
         {
@@ -110,6 +123,8 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .fluid_coupling = 0.0f,
             .score = 1500,
             .orb_count = 8,
+            .spawn_fn = boss_ryu_spawn,
+            .ai_step_fn = boss_ryu_step,
         },
 };
 
@@ -170,6 +185,78 @@ EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
     return id;
 }
 
+void enemy_apply_elite(GameState *g, EntityId id, uint32_t elite_flags)
+{
+    if (g == NULL || !ecs_is_alive(&g->ecs, id)) {
+        return;
+    }
+    TransformComp *tr = game_transform_mut(g, id);
+    VelocityComp *vel = game_velocity_mut(g, id);
+    HealthComp *hp = game_health_mut(g, id);
+    EnemyComp *en = game_enemy_mut(g, id);
+    if (tr == NULL || vel == NULL || hp == NULL || en == NULL) {
+        return;
+    }
+    const EnemyDef *def = enemy_def_get(en->def_id);
+    if (def == NULL || game_is_boss_enemy(en->def_id)) {
+        return;
+    }
+
+    uint32_t flags = elite_flags & ELITE_ALL_MASK;
+    if (def->mass_tier == MASS_TURRET) {
+        flags &= ~ELITE_RIGID;
+    }
+
+    en->is_elite = true;
+    en->elite_flags = (en->elite_flags & ~ELITE_ALL_MASK) | flags;
+
+    const int32_t elite_hp = (int32_t)floorf((float)def->base_hp * 2.5f + 0.5f);
+    hp->max_hp = elite_hp;
+    hp->hp = elite_hp;
+    tr->radius = def->radius * 1.2f;
+
+    vel->mass_tier = def->mass_tier;
+    if ((flags & ELITE_RIGID) != 0u) {
+        if (vel->mass_tier == MASS_LIGHT) {
+            vel->mass_tier = MASS_MEDIUM;
+        } else if (vel->mass_tier == MASS_MEDIUM) {
+            vel->mass_tier = MASS_HEAVY;
+        }
+    }
+}
+
+static void step_elite_ink_repel(GameState *g, float ex, float ey)
+{
+    float *ink_ch = fluid_channel_mut(&g->fluid, 0);
+    if (ink_ch == NULL) {
+        return;
+    }
+    const int cx = (int)(ex / FLUID_CELL_PX);
+    const int cy = (int)(ey / FLUID_CELL_PX);
+    const int x0 = cx - 6 < 1 ? 1 : cx - 6;
+    const int x1 = cx + 6 > FLUID_W - 2 ? FLUID_W - 2 : cx + 6;
+    const int y0 = cy - 6 < 1 ? 1 : cy - 6;
+    const int y1 = cy + 6 > FLUID_H - 2 ? FLUID_H - 2 : cy + 6;
+    const float keep = 1.0f - 0.20f * INK_FIXED_DT;
+
+    for (int gy = y0; gy <= y1; ++gy) {
+        const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
+        const float dy = cell_y - ey;
+        const int row = gy * FLUID_W;
+        for (int gx = x0; gx <= x1; ++gx) {
+            const int idx = row + gx;
+            if (g->fluid.solid[idx] != 0) {
+                continue;
+            }
+            const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
+            const float dx = cell_x - ex;
+            if (dx * dx + dy * dy <= 48.0f * 48.0f && isfinite(ink_ch[idx])) {
+                ink_ch[idx] *= keep;
+            }
+        }
+    }
+}
+
 void enemies_ai_step(GameState *g)
 {
     if (g == NULL) {
@@ -185,6 +272,9 @@ void enemies_ai_step(GameState *g)
         const EnemyComp *en = game_enemy(g, id);
         if (tr == NULL || en == NULL || tr->dissolving) {
             continue;
+        }
+        if ((en->elite_flags & ELITE_INK_REPEL) != 0u) {
+            step_elite_ink_repel(g, tr->x, tr->y);
         }
         const EnemyDef *def = enemy_def_get(en->def_id);
         if (def != NULL && def->ai_step_fn != NULL) {

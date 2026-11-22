@@ -52,10 +52,10 @@ void umbrella_step(GameState *g, EntityId id)
     fluid_sample(&g->fluid, tr->x, tr->y, &fu, &fv, NULL);
     const float fu_px = fu * FLUID_CELL_PX;
     const float fv_px = fv * FLUID_CELL_PX;
-    vel->vx += fu_px * 3.8f * INK_FIXED_DT;
-    vel->vy += fv_px * 3.8f * INK_FIXED_DT;
+    vel->vx += fu_px * vel->fluid_coupling * INK_FIXED_DT;
+    vel->vy += fv_px * vel->fluid_coupling * INK_FIXED_DT;
 
-    if (hypotf(fu_px, fv_px) > 105.0f && st->knockback_t < 0.90f) {
+    if (vel->mass_tier == MASS_LIGHT && hypotf(fu_px, fv_px) > 105.0f && st->knockback_t < 0.90f) {
         st->knockback_t = 0.90f;
     }
 }

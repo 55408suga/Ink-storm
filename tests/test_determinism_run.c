@@ -21,8 +21,8 @@ static const char *const k_section_names[GAME_HASH_SECTION_COUNT] = {
 typedef struct {
     int32_t event_counts[EV_TYPE_COUNT];
     bool saw_ink_below_max;
-    int32_t boss_max_hp;
-    int32_t boss_hp_before_clear;
+    int32_t boss_max_hp[GAME_MAIN_ACT_COUNT];
+    int32_t boss_min_hp[GAME_MAIN_ACT_COUNT];
     int32_t total_steps;
 } RunTelemetry;
 
@@ -88,91 +88,78 @@ static void advance_until_phase(GameState *a, GameState *b, RunPhase target, int
     TEST_ASSERT_EQUAL_INT(target, b->phase);
 }
 
-static void test_full_run_determinism_sanity_and_settlement(void)
+static void run_act_deterministically(GameState *a, GameState *b, int32_t act_idx,
+                                      RunTelemetry *tel)
 {
-    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x1234));
-    GameState *a = game_create(&cfg);
-    GameState *b = game_create(&cfg);
-    TEST_ASSERT_NOT_NULL(a);
-    TEST_ASSERT_NOT_NULL(b);
-    a->run.act_count = 1;
-    b->run.act_count = 1;
-
-    RunTelemetry tel = {0};
-
-    /* Act transition must complete in exactly 120 ticks. */
+    /* Act 1 transition runs 120 ticks from game_init; Act 2/3 run 1 tick inside CMD_PICK_REWARD
+     * plus 119 subsequent ticks (120 ticks total). */
     int trans_ticks = 0;
     while (a->phase == RUN_PHASE_ACT_TRANSITION && trans_ticks < 200) {
-        step_pair_and_assert(a, b, NULL, &tel);
+        step_pair_and_assert(a, b, NULL, tel);
         ++trans_ticks;
     }
-    TEST_ASSERT_EQUAL_INT(120, trans_ticks);
+    const int expected_trans = (act_idx == 0) ? 120 : 119;
+    TEST_ASSERT_EQUAL_INT(expected_trans, trans_ticks);
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, a->phase);
+    TEST_ASSERT_EQUAL_INT32(act_idx, a->run.act_index);
 
-    /* Wave 1: 480 ticks -> force clear -> REWARD -> reroll -> pick 0. */
-    for (int i = 0; i < 480 && a->phase == RUN_PHASE_PLAYING; ++i) {
-        step_pair_and_assert(a, b, NULL, &tel);
-    }
-    if (a->phase == RUN_PHASE_PLAYING) {
-        game_debug_force_wave_clear(a);
-        game_debug_force_wave_clear(b);
-    }
-    advance_until_phase(a, b, RUN_PHASE_REWARD, 120, &tel);
-    const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
-    step_pair_and_assert(a, b, &reroll, &tel);
-    const GameCommand pick0 = {.type = CMD_PICK_REWARD, .arg = 0};
-    step_pair_and_assert(a, b, &pick0, &tel);
-    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, a->phase);
+    /* Three normal waves per act. */
+    for (int32_t w = 0; w < GAME_BOSS_WAVE_INDEX; ++w) {
+        const int wave_ticks = act_idx == 0 ? 420 : 300;
+        for (int i = 0; i < wave_ticks && a->phase == RUN_PHASE_PLAYING; ++i) {
+            /* Keep shrine healthy across all 3 acts during automated soak. */
+            if (a->shrines[0].hp <= 2) {
+                a->shrines[0].hp = a->shrines[0].max_hp;
+                b->shrines[0].hp = b->shrines[0].max_hp;
+            }
+            step_pair_and_assert(a, b, NULL, tel);
+        }
+        if (a->phase == RUN_PHASE_PLAYING) {
+            game_debug_force_wave_clear(a);
+            game_debug_force_wave_clear(b);
+        }
+        advance_until_phase(a, b, RUN_PHASE_REWARD, 120, tel);
 
-    /* Wave 2: 480 ticks -> force clear -> REWARD -> repair (or verify noop then pick 1). */
-    for (int i = 0; i < 480 && a->phase == RUN_PHASE_PLAYING; ++i) {
-        step_pair_and_assert(a, b, NULL, &tel);
-    }
-    if (a->phase == RUN_PHASE_PLAYING) {
-        game_debug_force_wave_clear(a);
-        game_debug_force_wave_clear(b);
-    }
-    advance_until_phase(a, b, RUN_PHASE_REWARD, 120, &tel);
-    const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
-    if (a->run.reward.repair_available) {
-        step_pair_and_assert(a, b, &repair, &tel);
-    } else {
-        /* Advance one idle tick so transient events clear before testing no-op hash stability. */
-        step_pair_and_assert(a, b, NULL, &tel);
-        const uint64_t h_before = game_hash(a);
-        step_pair_and_assert(a, b, &repair, &tel);
-        TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(a));
-        const GameCommand pick1 = {.type = CMD_PICK_REWARD, .arg = 1};
-        step_pair_and_assert(a, b, &pick1, &tel);
-    }
-    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, a->phase);
+        if (act_idx == 0 && w == 0) {
+            const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
+            step_pair_and_assert(a, b, &reroll, tel);
+        }
+        if (act_idx == 0 && w == 1 && !a->run.reward.repair_available) {
+            /* Verify no-op CMD_REPAIR_SHRINE preserves exact hash when shrine is full. */
+            step_pair_and_assert(a, b, NULL, tel);
+            const uint64_t h_before = game_hash(a);
+            const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+            step_pair_and_assert(a, b, &repair, tel);
+            TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(a));
+        }
 
-    /* Wave 3: 480 ticks -> force clear -> REWARD -> pick 2 (clamped to choice_count - 1). */
-    for (int i = 0; i < 480 && a->phase == RUN_PHASE_PLAYING; ++i) {
-        step_pair_and_assert(a, b, NULL, &tel);
+        const GameCommand cmd = game_autoplay_command(a);
+        step_pair_and_assert(a, b, &cmd, tel);
+        if (a->phase == RUN_PHASE_REWARD) {
+            /* Autoplay may reroll first; issue the follow-up pick command. */
+            const GameCommand pick = game_autoplay_command(a);
+            step_pair_and_assert(a, b, &pick, tel);
+        }
+        TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, a->phase);
     }
-    if (a->phase == RUN_PHASE_PLAYING) {
-        game_debug_force_wave_clear(a);
-        game_debug_force_wave_clear(b);
-    }
-    advance_until_phase(a, b, RUN_PHASE_REWARD, 120, &tel);
-    const int32_t pick2_arg = a->run.reward.choice_count > 2 ? 2 : (a->run.reward.choice_count - 1);
-    const GameCommand pick2 = {.type = CMD_PICK_REWARD, .arg = pick2_arg};
-    step_pair_and_assert(a, b, &pick2, &tel);
-    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, a->phase);
 
-    /* Boss wave: 720 ticks -> check boss HP dropped -> force clear -> VICTORY. */
+    /* Boss wave. */
     const HealthComp *boss_hp0 = game_health(a, a->run.boss_id);
     TEST_ASSERT_NOT_NULL(boss_hp0);
-    tel.boss_max_hp = boss_hp0->max_hp;
-    tel.boss_hp_before_clear = boss_hp0->hp;
+    tel->boss_max_hp[act_idx] = boss_hp0->max_hp;
+    tel->boss_min_hp[act_idx] = boss_hp0->hp;
 
-    for (int i = 0; i < 720 && a->phase == RUN_PHASE_PLAYING; ++i) {
-        step_pair_and_assert(a, b, NULL, &tel);
+    const int boss_ticks = act_idx == 0 ? 600 : 480;
+    for (int i = 0; i < boss_ticks && a->phase == RUN_PHASE_PLAYING; ++i) {
+        if (a->shrines[0].hp <= 2) {
+            a->shrines[0].hp = a->shrines[0].max_hp;
+            b->shrines[0].hp = b->shrines[0].max_hp;
+        }
+        step_pair_and_assert(a, b, NULL, tel);
         if (a->run.boss_id.index != ECS_INVALID_INDEX) {
             const HealthComp *bhp = game_health(a, a->run.boss_id);
-            if (bhp != NULL && bhp->hp < tel.boss_hp_before_clear) {
-                tel.boss_hp_before_clear = bhp->hp;
+            if (bhp != NULL && bhp->hp < tel->boss_min_hp[act_idx]) {
+                tel->boss_min_hp[act_idx] = bhp->hp;
             }
         }
     }
@@ -180,29 +167,59 @@ static void test_full_run_determinism_sanity_and_settlement(void)
         game_debug_force_wave_clear(a);
         game_debug_force_wave_clear(b);
     }
-    advance_until_phase(a, b, RUN_PHASE_VICTORY, 120, &tel);
 
-    /* Case 2: Sanity assertions across the full run. */
+    if (act_idx + 1 < GAME_MAIN_ACT_COUNT) {
+        /* Boss defeat -> Shrine HP +3 -> Relic 3-choice -> next Act transition. */
+        advance_until_phase(a, b, RUN_PHASE_REWARD, 120, tel);
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, a->run.reward.kind);
+        const GameCommand pick_relic = {.type = CMD_PICK_REWARD, .arg = 0};
+        step_pair_and_assert(a, b, &pick_relic, tel);
+        TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, a->phase);
+    } else {
+        advance_until_phase(a, b, RUN_PHASE_VICTORY, 120, tel);
+    }
+}
+
+static void test_full_run_determinism_sanity_and_settlement(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x1234));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT32(GAME_MAIN_ACT_COUNT, a->run.act_count);
+
+    RunTelemetry tel = {0};
+
+    for (int32_t act = 0; act < GAME_MAIN_ACT_COUNT; ++act) {
+        run_act_deterministically(a, b, act, &tel);
+    }
+
+    /* Full 3-act campaign sanity assertions. */
+    TEST_ASSERT_EQUAL_INT32(3, a->run.acts_cleared);
+    TEST_ASSERT_EQUAL_INT32(2, a->run.relic_count);
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, tel.event_counts[EV_KILL]);
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, tel.event_counts[EV_DEFLECT]);
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, tel.event_counts[EV_CYCLONE]);
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, tel.event_counts[EV_GALE]);
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, tel.event_counts[EV_IGNITE] +
                                               tel.event_counts[EV_STORM_ZAP]);
-    TEST_ASSERT_EQUAL_INT32(1, tel.event_counts[EV_BOSS_ENTER]);
-    TEST_ASSERT_EQUAL_INT32(3, tel.event_counts[EV_REWARD_PICK]);
+    TEST_ASSERT_EQUAL_INT32(3, tel.event_counts[EV_BOSS_ENTER]);
+    TEST_ASSERT_EQUAL_INT32(3, tel.event_counts[EV_ACT_CLEAR]);
     TEST_ASSERT_EQUAL_INT32(1, tel.event_counts[EV_VICTORY]);
     TEST_ASSERT_TRUE(tel.saw_ink_below_max);
-    TEST_ASSERT_TRUE(tel.boss_hp_before_clear < tel.boss_max_hp);
+    TEST_ASSERT_TRUE(tel.boss_min_hp[0] < tel.boss_max_hp[0]);
 
-    /* Case 3: Settlement after VICTORY. */
+    /* Settlement after full 3-act VICTORY: from_acts == 30 + 40 + 50 == 120. */
     MetaState meta;
     meta_init_default(&meta);
     const MetaRunResult res = game_run_result(a);
+    TEST_ASSERT_TRUE(res.cleared);
+    TEST_ASSERT_EQUAL_INT32(3, res.acts_cleared);
     const MetaSettleBreakdown expected = meta_calc_crystals(&res);
     MetaSettleBreakdown actual = {0};
     TEST_ASSERT_TRUE(meta_settle_run(&meta, a, &actual));
-    TEST_ASSERT_EQUAL_INT32(30, actual.from_acts);
+    TEST_ASSERT_EQUAL_INT32(120, actual.from_acts);
     TEST_ASSERT_EQUAL_INT32(expected.total_crystals, actual.total_crystals);
     TEST_ASSERT_EQUAL_INT32(expected.from_kills, actual.from_kills);
     TEST_ASSERT_EQUAL_INT32(expected.from_chain, actual.from_chain);
