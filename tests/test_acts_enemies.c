@@ -720,8 +720,10 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_EQUAL_INT32(0, rboss->phase_idx);
 
     ren->fire_cd = 0.01f;
-    game_step(g, NULL, NULL);
-    /* Boss spawn swirl must not self-trigger Cataclysm or Thunderburst without player input. */
+    for (int t = 0; t < 6; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    /* Boss spawn swirl must not self-trigger Cataclysm or Thunderburst across multiple ticks. */
     TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
     TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
     int32_t strike_n = 0;
@@ -781,6 +783,13 @@ static void test_boss_nue_and_boss_ryu(void)
         }
     }
     TEST_ASSERT_TRUE(saw_ryu_phase);
+
+    /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst without player input. */
+    for (int t = 0; t < 6; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
 
     /* Clear phase invuln and verify Cataclysm damage x2: 80 -> 160. */
     rhp->invuln_t = 0.0f;
