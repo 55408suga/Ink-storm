@@ -2,6 +2,7 @@
 
 #include "combat/damage.h"
 #include "core.h"
+#include "roguelike/upgrades.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -25,6 +26,38 @@ static void clamp_proj_max_speed(VelocityComp *vel, float max_sp)
         const float scale = max_sp / sp;
         vel->vx *= scale;
         vel->vy *= scale;
+    }
+}
+
+static float mass_explosion_multiplier(const VelocityComp *vel, const EnemyComp *en)
+{
+    if (en != NULL && en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1) {
+        return 0.55f;
+    }
+    if (vel == NULL) {
+        return 0.0f;
+    }
+    switch (vel->mass_tier) {
+    case MASS_LIGHT:
+        return 1.0f;
+    case MASS_MEDIUM:
+        return 0.75f;
+    case MASS_HEAVY:
+        return 0.55f;
+    case MASS_TURRET:
+    case MASS_BOSS:
+    default:
+        return 0.0f;
+    }
+}
+
+static void decay_cd(float *cd)
+{
+    if (*cd > 0.0f) {
+        *cd -= INK_FIXED_DT;
+        if (*cd <= 1e-4f) {
+            *cd = 0.0f;
+        }
     }
 }
 
@@ -96,15 +129,427 @@ static int32_t elements_stage1_cells(GameState *g)
         if (g->run.ignitions < META_MAX_COUNTERS) {
             ++g->run.ignitions;
         }
+        const float cx = blaze_sum_x / (float)blazing_cells;
+        const float cy = blaze_sum_y / (float)blazing_cells;
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_IGNITE,
-                                     .x = blaze_sum_x / (float)blazing_cells,
-                                     .y = blaze_sum_y / (float)blazing_cells,
+                                     .x = cx,
+                                     .y = cy,
                                      .value = blazing_cells,
                                      .flags = 0,
                                  });
+        upgrades_fire_on_reaction(g, REACT_BLAZING, cx, cy, (float)blazing_cells);
     }
     return storm_cells;
+}
+
+static int32_t elements_stage2_cataclysm(GameState *g)
+{
+    if (g->internal.cataclysm_cd > 0.0f) {
+        return -1;
+    }
+    float *ink_ch = fluid_channel_mut(&g->fluid, 0);
+    float *fire_ch = fluid_channel_mut(&g->fluid, 1);
+    float *storm_ch = fluid_channel_mut(&g->fluid, 2);
+    if (ink_ch == NULL || fire_ch == NULL || storm_ch == NULL) {
+        return -1;
+    }
+
+    const uint8_t *solid = g->fluid.solid;
+    int32_t counts[GAME_THUNDERBURST_BLOCKS] = {0};
+    float sum_val[GAME_THUNDERBURST_BLOCKS] = {0};
+    float sum_x[GAME_THUNDERBURST_BLOCKS] = {0};
+    float sum_y[GAME_THUNDERBURST_BLOCKS] = {0};
+
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        const int row = y * FLUID_W;
+        const int by = y / 8;
+        const float cy = ((float)y + 0.5f) * FLUID_CELL_PX;
+        for (int x = 1; x < FLUID_W - 1; ++x) {
+            const int idx = row + x;
+            if (solid[idx] != 0) {
+                continue;
+            }
+            const float ink = ink_ch[idx];
+            const float fire = fire_ch[idx];
+            const float storm = storm_ch[idx];
+            if (!isfinite(ink) || !isfinite(fire) || !isfinite(storm)) {
+                continue;
+            }
+            if (ink > 0.30f && fire > 0.30f && storm > 0.30f) {
+                const int b = by * GAME_THUNDERBURST_BLOCKS_X + (x / 8);
+                ++counts[b];
+                sum_val[b] += ink + fire + storm;
+                sum_x[b] += ((float)x + 0.5f) * FLUID_CELL_PX;
+                sum_y[b] += cy;
+            }
+        }
+    }
+
+    int32_t best_b = -1;
+    for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        if (counts[b] < 8) {
+            continue;
+        }
+        if (best_b < 0 || counts[b] > counts[best_b] ||
+            (counts[b] == counts[best_b] && sum_val[b] > sum_val[best_b])) {
+            best_b = b;
+        }
+    }
+    if (best_b < 0) {
+        return -1;
+    }
+
+    const int32_t count = counts[best_b];
+    const float cx_px = sum_x[best_b] / (float)count;
+    const float cy_px = sum_y[best_b] / (float)count;
+
+    if (g->pending_impulse_count < GAME_MAX_PENDING_IMPULSE) {
+        g->pending_impulses[g->pending_impulse_count++] = (PendingImpulse){
+            .x = cx_px,
+            .y = cy_px,
+            .rad_cells = 12.0f,
+            .peak_speed = 90.0f,
+        };
+    }
+
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX) {
+            continue;
+        }
+        const TransformComp *tr = game_transform(g, id);
+        const EnemyComp *en = game_enemy(g, id);
+        if (tr == NULL || en == NULL || tr->dissolving) {
+            continue;
+        }
+        const float dx = tr->x - cx_px;
+        const float dy = tr->y - cy_px;
+        const float d = hypotf(dx, dy);
+        if (d > 140.0f) {
+            continue;
+        }
+        const float nx = d < 1e-4f ? 1.0f : (dx / d);
+        const float ny = d < 1e-4f ? 0.0f : (dy / d);
+        VelocityComp *vel = game_velocity_mut(g, id);
+        StatusComp *st = game_status_mut(g, id);
+        const float kmul = mass_explosion_multiplier(vel, en);
+        if (kmul > 0.0f && vel != NULL && st != NULL) {
+            const float imp = 620.0f * kmul;
+            vel->vx += nx * imp;
+            vel->vy += ny * imp;
+            if (st->knockback_t < 1.0f) {
+                st->knockback_t = 1.0f;
+            }
+        }
+        const uint32_t elite_flags = en->elite_flags;
+        (void)combat_apply_damage(g, id, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, nx * 620.0f,
+                                  ny * 620.0f);
+        if (ecs_is_alive(&g->ecs, id) && (elite_flags & ELITE_INK_REPEL) == 0) {
+            StatusComp *st_after = game_status_mut(g, id);
+            if (st_after != NULL) {
+                st_after->ink_mark_t = g->internal.mods.ink_mark_duration;
+            }
+        }
+    }
+
+    typedef struct {
+        EntityId id;
+        float d2;
+        float x;
+        float y;
+    } CataclysmBoltTarget;
+    CataclysmBoltTarget top[4] = {0};
+    int32_t top_n = 0;
+    const float bolt_rad2 = 260.0f * 260.0f;
+
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id)) {
+            continue;
+        }
+        const TransformComp *tr = game_transform(g, id);
+        const EnemyComp *en = game_enemy(g, id);
+        if (tr == NULL || en == NULL || tr->dissolving) {
+            continue;
+        }
+        const float dx = tr->x - cx_px;
+        const float dy = tr->y - cy_px;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 > bolt_rad2) {
+            continue;
+        }
+        int32_t pos = top_n;
+        while (pos > 0 && d2 < top[pos - 1].d2) {
+            if (pos < 4) {
+                top[pos] = top[pos - 1];
+            }
+            --pos;
+        }
+        if (pos < 4) {
+            top[pos] = (CataclysmBoltTarget){.id = id, .d2 = d2, .x = tr->x, .y = tr->y};
+            if (top_n < 4) {
+                ++top_n;
+            }
+        }
+    }
+
+    for (int32_t k = 0; k < top_n; ++k) {
+        if (!ecs_is_alive(&g->ecs, top[k].id)) {
+            continue;
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_STORM_ZAP,
+                                     .x = cx_px,
+                                     .y = cy_px,
+                                     .x2 = top[k].x,
+                                     .y2 = top[k].y,
+                                     .value = 0,
+                                     .flags = 0,
+                                 });
+        (void)combat_apply_damage(g, top[k].id, 30, DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
+    }
+
+    const float dye_rad_px = 12.0f * FLUID_CELL_PX;
+    const float dye_rad_px2 = dye_rad_px * dye_rad_px;
+    int gx0 = (int)floorf((cx_px - dye_rad_px) / FLUID_CELL_PX);
+    int gx1 = (int)ceilf((cx_px + dye_rad_px) / FLUID_CELL_PX);
+    int gy0 = (int)floorf((cy_px - dye_rad_px) / FLUID_CELL_PX);
+    int gy1 = (int)ceilf((cy_px + dye_rad_px) / FLUID_CELL_PX);
+    if (gx0 < 1) {
+        gx0 = 1;
+    }
+    if (gx1 > FLUID_W - 2) {
+        gx1 = FLUID_W - 2;
+    }
+    if (gy0 < 1) {
+        gy0 = 1;
+    }
+    if (gy1 > FLUID_H - 2) {
+        gy1 = FLUID_H - 2;
+    }
+    for (int gy = gy0; gy <= gy1; ++gy) {
+        const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
+        const float dy = cell_y - cy_px;
+        const int row = gy * FLUID_W;
+        for (int gx = gx0; gx <= gx1; ++gx) {
+            const int idx = row + gx;
+            if (solid[idx] != 0) {
+                continue;
+            }
+            const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
+            const float dx = cell_x - cx_px;
+            if (dx * dx + dy * dy <= dye_rad_px2) {
+                if (isfinite(ink_ch[idx])) {
+                    ink_ch[idx] *= 0.5f;
+                }
+                if (isfinite(fire_ch[idx])) {
+                    fire_ch[idx] *= 0.2f;
+                }
+                if (isfinite(storm_ch[idx])) {
+                    storm_ch[idx] *= 0.2f;
+                }
+            }
+        }
+    }
+
+    g->internal.cataclysm_cd = 2.0f;
+    if (g->hitstop_t < 0.06f) {
+        g->hitstop_t = 0.06f;
+    }
+    if (g->run.cataclysms < META_MAX_COUNTERS) {
+        ++g->run.cataclysms;
+    }
+    (void)game_push_event(g, (GameEvent){
+                                 .type = EV_CATACLYSM,
+                                 .x = cx_px,
+                                 .y = cy_px,
+                                 .x2 = dye_rad_px,
+                                 .y2 = 0.0f,
+                                 .value = count,
+                                 .flags = 0,
+                             });
+    upgrades_fire_on_reaction(g, REACT_CATACLYSM, cx_px, cy_px, (float)count);
+    return best_b;
+}
+
+static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
+{
+    float *fire_ch = fluid_channel_mut(&g->fluid, 1);
+    float *storm_ch = fluid_channel_mut(&g->fluid, 2);
+    if (fire_ch == NULL || storm_ch == NULL) {
+        return;
+    }
+
+    const uint8_t *solid = g->fluid.solid;
+    const float thresh = g->internal.mods.thunderburst_thresh;
+    const float rmul = g->internal.mods.thunderburst_radius_mul > 0.0f
+                           ? g->internal.mods.thunderburst_radius_mul
+                           : 1.0f;
+
+    int32_t counts[GAME_THUNDERBURST_BLOCKS] = {0};
+    float sum_x[GAME_THUNDERBURST_BLOCKS] = {0};
+    float sum_y[GAME_THUNDERBURST_BLOCKS] = {0};
+
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        const int row = y * FLUID_W;
+        const int by = y / 8;
+        const float cy = ((float)y + 0.5f) * FLUID_CELL_PX;
+        for (int x = 1; x < FLUID_W - 1; ++x) {
+            const int idx = row + x;
+            if (solid[idx] != 0) {
+                continue;
+            }
+            const float fire = fire_ch[idx];
+            const float storm = storm_ch[idx];
+            if (!isfinite(fire) || !isfinite(storm)) {
+                continue;
+            }
+            if (fire > thresh && storm > thresh) {
+                const int b = by * GAME_THUNDERBURST_BLOCKS_X + (x / 8);
+                ++counts[b];
+                sum_x[b] += ((float)x + 0.5f) * FLUID_CELL_PX;
+                sum_y[b] += cy;
+            }
+        }
+    }
+
+    typedef struct {
+        int32_t b;
+        int32_t count;
+    } BurstBlock;
+    BurstBlock top[3] = {0};
+    int32_t top_n = 0;
+
+    for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        if (b == cataclysm_block || g->internal.thunderburst_block_cd[b] > 0.0f || counts[b] < 6) {
+            continue;
+        }
+        int32_t pos = top_n;
+        while (pos > 0 && counts[b] > top[pos - 1].count) {
+            if (pos < 3) {
+                top[pos] = top[pos - 1];
+            }
+            --pos;
+        }
+        if (pos < 3) {
+            top[pos] = (BurstBlock){.b = b, .count = counts[b]};
+            if (top_n < 3) {
+                ++top_n;
+            }
+        }
+    }
+
+    const float dmg_rad_px = 96.0f * rmul;
+    const float dye_rad_cells = 9.0f * rmul;
+    const float dye_rad_px = dye_rad_cells * FLUID_CELL_PX;
+    const float dye_rad_px2 = dye_rad_px * dye_rad_px;
+    const uint32_t hw = g->ecs.high_water;
+
+    for (int32_t t = 0; t < top_n; ++t) {
+        const int32_t b = top[t].b;
+        const int32_t count = top[t].count;
+        const float cx_px = sum_x[b] / (float)count;
+        const float cy_px = sum_y[b] / (float)count;
+
+        if (g->pending_impulse_count < GAME_MAX_PENDING_IMPULSE) {
+            g->pending_impulses[g->pending_impulse_count++] = (PendingImpulse){
+                .x = cx_px,
+                .y = cy_px,
+                .rad_cells = dye_rad_cells,
+                .peak_speed = 60.0f,
+            };
+        }
+
+        for (uint32_t i = 0; i < hw; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id)) {
+                continue;
+            }
+            const TransformComp *tr = game_transform(g, id);
+            const EnemyComp *en = game_enemy(g, id);
+            if (tr == NULL || en == NULL || tr->dissolving) {
+                continue;
+            }
+            const float dx = tr->x - cx_px;
+            const float dy = tr->y - cy_px;
+            const float d = hypotf(dx, dy);
+            if (d > dmg_rad_px) {
+                continue;
+            }
+            const float nx = d < 1e-4f ? 1.0f : (dx / d);
+            const float ny = d < 1e-4f ? 0.0f : (dy / d);
+            VelocityComp *vel = game_velocity_mut(g, id);
+            StatusComp *st = game_status_mut(g, id);
+            const float kmul = mass_explosion_multiplier(vel, en);
+            if (kmul > 0.0f && vel != NULL && st != NULL) {
+                const float imp = 520.0f * kmul;
+                vel->vx += nx * imp;
+                vel->vy += ny * imp;
+                if (st->knockback_t < 1.0f) {
+                    st->knockback_t = 1.0f;
+                }
+            }
+            (void)combat_apply_damage(g, id, 30, DMG_FIRE | DMG_STORM, nx * 520.0f, ny * 520.0f);
+        }
+
+        int gx0 = (int)floorf((cx_px - dye_rad_px) / FLUID_CELL_PX);
+        int gx1 = (int)ceilf((cx_px + dye_rad_px) / FLUID_CELL_PX);
+        int gy0 = (int)floorf((cy_px - dye_rad_px) / FLUID_CELL_PX);
+        int gy1 = (int)ceilf((cy_px + dye_rad_px) / FLUID_CELL_PX);
+        if (gx0 < 1) {
+            gx0 = 1;
+        }
+        if (gx1 > FLUID_W - 2) {
+            gx1 = FLUID_W - 2;
+        }
+        if (gy0 < 1) {
+            gy0 = 1;
+        }
+        if (gy1 > FLUID_H - 2) {
+            gy1 = FLUID_H - 2;
+        }
+        for (int gy = gy0; gy <= gy1; ++gy) {
+            const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
+            const float dy = cell_y - cy_px;
+            const int row = gy * FLUID_W;
+            for (int gx = gx0; gx <= gx1; ++gx) {
+                const int idx = row + gx;
+                if (solid[idx] != 0) {
+                    continue;
+                }
+                const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
+                const float dx = cell_x - cx_px;
+                if (dx * dx + dy * dy <= dye_rad_px2) {
+                    if (isfinite(fire_ch[idx])) {
+                        fire_ch[idx] *= 0.3f;
+                    }
+                    if (isfinite(storm_ch[idx])) {
+                        storm_ch[idx] *= 0.2f;
+                    }
+                }
+            }
+        }
+
+        g->internal.thunderburst_block_cd[b] = 0.8f;
+        if (g->hitstop_t < 0.03f) {
+            g->hitstop_t = 0.03f;
+        }
+        if (g->run.thunderbursts < META_MAX_COUNTERS) {
+            ++g->run.thunderbursts;
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_THUNDERBURST,
+                                     .x = cx_px,
+                                     .y = cy_px,
+                                     .x2 = dye_rad_px,
+                                     .y2 = 0.0f,
+                                     .value = count,
+                                     .flags = 0,
+                                 });
+        upgrades_fire_on_reaction(g, REACT_THUNDERBURST, cx_px, cy_px, (float)count);
+    }
 }
 
 static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
@@ -123,48 +568,18 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
             continue;
         }
 
-        if (st->ink_mark_t > 0.0f) {
-            st->ink_mark_t -= INK_FIXED_DT;
-            if (st->ink_mark_t <= 1e-4f) {
-                st->ink_mark_t = 0.0f;
-            }
-        }
-        if (st->charge_t > 0.0f) {
-            st->charge_t -= INK_FIXED_DT;
-            if (st->charge_t <= 1e-4f) {
-                st->charge_t = 0.0f;
-            }
-        }
-        if (st->knockback_t > 0.0f) {
-            st->knockback_t -= INK_FIXED_DT;
-            if (st->knockback_t <= 1e-4f) {
-                st->knockback_t = 0.0f;
-            }
-        }
-        if (st->stun_t > 0.0f) {
-            st->stun_t -= INK_FIXED_DT;
-            if (st->stun_t <= 1e-4f) {
-                st->stun_t = 0.0f;
-            }
-        }
-        if (st->barrier_t > 0.0f) {
-            st->barrier_t -= INK_FIXED_DT;
-            if (st->barrier_t <= 1e-4f) {
-                st->barrier_t = 0.0f;
-            }
-        }
+        decay_cd(&st->ink_mark_t);
+        decay_cd(&st->charge_t);
+        decay_cd(&st->knockback_t);
+        decay_cd(&st->stun_t);
+        decay_cd(&st->barrier_t);
         if (hp->flash_t > 0.0f) {
             hp->flash_t -= INK_FIXED_DT * 2.6f;
             if (hp->flash_t <= 1e-4f) {
                 hp->flash_t = 0.0f;
             }
         }
-        if (hp->invuln_t > 0.0f) {
-            hp->invuln_t -= INK_FIXED_DT;
-            if (hp->invuln_t <= 1e-4f) {
-                hp->invuln_t = 0.0f;
-            }
-        }
+        decay_cd(&hp->invuln_t);
 
         float fu = 0.0f;
         float fv = 0.0f;
@@ -352,6 +767,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
             cur_x = next_x;
             cur_y = next_y;
         }
+        upgrades_fire_on_reaction(g, REACT_TEMPEST, cur_x, cur_y, (float)visited_n);
         break;
     }
 }
@@ -402,23 +818,21 @@ void elements_step(GameState *g)
     if (g == NULL) {
         return;
     }
-    if (g->internal.ignite_callout_cd > 0.0f) {
-        g->internal.ignite_callout_cd -= INK_FIXED_DT;
-        if (g->internal.ignite_callout_cd <= 1e-4f) {
-            g->internal.ignite_callout_cd = 0.0f;
-        }
-    }
-    if (g->internal.storm_zap_cd > 0.0f) {
-        g->internal.storm_zap_cd -= INK_FIXED_DT;
-        if (g->internal.storm_zap_cd <= 1e-4f) {
-            g->internal.storm_zap_cd = 0.0f;
-        }
+    decay_cd(&g->internal.ignite_callout_cd);
+    decay_cd(&g->internal.storm_zap_cd);
+    decay_cd(&g->internal.cataclysm_cd);
+    for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        decay_cd(&g->internal.thunderburst_block_cd[b]);
     }
 
     /* Stage 1: cell reactions (Blazing Inkstorm + Tempest Lightning growth). */
     const int32_t storm_cells = elements_stage1_cells(g);
 
-    /* Stage 2 (Cataclysm) and Stage 3 (Thunderburst) are reserved for Phase 4. */
+    /* Stage 2: Cataclysm (ink x fire x storm, 8x8 block, global 2.0s CD). */
+    const int32_t cataclysm_block = elements_stage2_cataclysm(g);
+
+    /* Stage 3: Thunderburst (fire x storm, 8x8 block, max 3/tick, excludes cataclysm block). */
+    elements_stage3_thunderburst(g, cataclysm_block);
 
     /* Stage 4: enemy statuses, burn ticks, and Tempest Lightning chains. */
     elements_stage4_enemies(g, storm_cells);

@@ -14,27 +14,20 @@ static uint8_t clamp_meta_level(const RunConfig *cfg, MetaUpgradeKind kind)
     return lv > max_lv ? max_lv : lv;
 }
 
-static void ember_tip_on_stroke(const StrokeHookArgs *a)
+static void ember_tip_apply_add(RunModifiers *mods, uint8_t lv)
 {
-    GameState *g = a->g;
-    if (g->player.dry || a->lv == 0 || a->lv > 3) {
+    if (lv < 1 || lv > 3) {
         return;
     }
     static const float k_intervals[3] = {160.0f, 120.0f, 80.0f};
-    static const float k_mults[3] = {1.0f, 1.0f, 1.5f};
-    const float interval = k_intervals[a->lv - 1];
-    const float fire_amt = 0.5f * k_mults[a->lv - 1];
-    const float dye[FLUID_MAX_CHANNELS] = {0.0f, fire_amt, 0.0f, 0.0f};
-
-    g->internal.ember_tip_dist += a->dist;
-    int32_t bursts = 0;
-    while (g->internal.ember_tip_dist >= interval && bursts < 8) {
-        g->internal.ember_tip_dist -= interval;
-        fluid_splat(&g->fluid, a->x, a->y, 2.5f, 0.0f, 0.0f, dye);
-        ++bursts;
+    static const float k_ember_mul[3] = {0.75f, 0.5625f, 0.421875f};
+    if (mods->stroke_ember_interval > 0.0f) {
+        mods->stroke_ember_interval *= k_ember_mul[lv - 1];
+    } else {
+        mods->stroke_ember_interval = k_intervals[lv - 1];
     }
-    if (g->internal.ember_tip_dist >= interval) {
-        g->internal.ember_tip_dist = fmodf(g->internal.ember_tip_dist, interval);
+    if (lv >= 3) {
+        mods->stroke_ember_mul = 1.5f;
     }
 }
 
@@ -46,6 +39,84 @@ static void wildfire_apply_mul(RunModifiers *mods, uint8_t lv)
     }
 }
 
+static void flame_gale_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_fire[3] = {0.25f, 0.35f, 0.50f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->gale_fire_add += k_fire[lv - 1];
+    if (lv >= 3) {
+        mods->gale_end_blast_dmg = 20.0f;
+    }
+}
+
+static void flame_gale_on_gale(const GaleHookArgs *a)
+{
+    GameState *g = a->g;
+    if (a->lv < 3 || g->internal.mods.gale_end_blast_dmg <= 0.0f) {
+        return;
+    }
+    const float ex = a->x + a->dx * 220.0f;
+    const float ey = a->y + a->dy * 220.0f;
+    static const float k_blast_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.8f, 0.0f, 0.0f};
+    fluid_splat(&g->fluid, ex, ey, 4.5f, 0.0f, 0.0f, k_blast_dye);
+
+    const float rad2 = 48.0f * 48.0f;
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id)) {
+            continue;
+        }
+        const TransformComp *tr = game_transform(g, id);
+        const EnemyComp *en = game_enemy(g, id);
+        if (tr == NULL || en == NULL || tr->dissolving) {
+            continue;
+        }
+        const float dx = tr->x - ex;
+        const float dy = tr->y - ey;
+        if (dx * dx + dy * dy <= rad2) {
+            (void)combat_apply_damage_f(g, id, g->internal.mods.gale_end_blast_dmg,
+                                        DMG_FIRE | DMG_SECONDARY, 0.0f, 0.0f);
+        }
+    }
+}
+
+static void inferno_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_dmg[3] = {14.0f, 18.0f, 22.0f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->burn_base_dmg = k_dmg[lv - 1];
+    if (lv >= 3) {
+        mods->inferno_ember_on_kill = true;
+    }
+}
+
+static void inferno_on_kill(const KillHookArgs *a)
+{
+    GameState *g = a->g;
+    if (a->lv < 3 || (a->dmg_flags & DMG_FIRE) == 0) {
+        return;
+    }
+    static const float k_inferno_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.75f, 0.0f, 0.0f};
+    fluid_splat(&g->fluid, a->x, a->y, 3.5f, 0.0f, 0.0f, k_inferno_dye);
+}
+
+static void phoenix_arrow_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const int32_t k_pierce[3] = {3, 4, 5};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->burning_proj_pierce = k_pierce[lv - 1];
+    if (lv >= 3) {
+        mods->burning_proj_hit_splat = true;
+    }
+}
+
 static void charged_seal_on_cyclone(const CycloneHookArgs *a)
 {
     static const float k_storm[3] = {0.30f, 0.45f, 0.60f};
@@ -53,10 +124,14 @@ static void charged_seal_on_cyclone(const CycloneHookArgs *a)
         return;
     }
     if (a->storm_add != NULL) {
-        *a->storm_add += k_storm[a->lv - 1];
+        if (a->g->config.brush_style == BRUSH_STYLE_QUILL) {
+            *a->storm_add += 0.15f * (float)a->lv;
+        } else {
+            *a->storm_add += k_storm[a->lv - 1];
+        }
     }
     if (a->lv >= 3 && a->storm_sustain_add != NULL) {
-        *a->storm_sustain_add += k_storm[2];
+        *a->storm_sustain_add += 0.60f;
     }
 }
 
@@ -71,6 +146,41 @@ static void chain_lightning_apply_mul(RunModifiers *mods, uint8_t lv)
 {
     if (lv >= 3) {
         mods->chain_range_mul *= 1.3f;
+    }
+}
+
+static void thunder_arrow_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const int32_t k_targets[3] = {2, 3, 3};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->thunder_proj_targets = k_targets[lv - 1];
+    if (lv >= 3) {
+        mods->deflect_auto_electrify = true;
+    }
+}
+
+static void swift_thunder_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_cd[3] = {0.45f, 0.38f, 0.30f};
+    if (lv >= 1 && lv <= 3) {
+        mods->storm_zap_cd = k_cd[lv - 1];
+    }
+}
+
+static void thunderburst_fuse_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_thresh[3] = {0.26f, 0.22f, 0.18f};
+    if (lv >= 1 && lv <= 3) {
+        mods->thunderburst_thresh = k_thresh[lv - 1];
+    }
+}
+
+static void thunderburst_fuse_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 3) {
+        mods->thunderburst_radius_mul *= 1.30f;
     }
 }
 
@@ -150,6 +260,166 @@ static void slam_shockwave_on_hit(const HitHookArgs *a)
     }
 }
 
+static void mighty_stroke_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_muls[3] = {1.15f, 1.30f, 1.45f};
+    if (lv >= 1 && lv <= 3) {
+        mods->brush_force_mul *= k_muls[lv - 1];
+    }
+}
+
+static void maelstrom_bind_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 1 && lv <= 3) {
+        mods->maelstrom_bind_level = (int32_t)lv;
+    }
+}
+
+static void maelstrom_bind_on_tick(const TickHookArgs *a)
+{
+    GameState *g = a->g;
+    if (a->lv < 1 || a->lv > 3) {
+        return;
+    }
+
+    for (uint32_t idx = 0; idx < ECS_MAX_ENTITIES; ++idx) {
+        const EntityId id = ecs_entity_at(&g->ecs, idx);
+        if (id.index == ECS_INVALID_INDEX || !ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
+            g->internal.maelstrom_bind_t[idx] = 0.0f;
+            continue;
+        }
+        const TransformComp *tr = game_transform(g, id);
+        if (tr == NULL || tr->dissolving) {
+            g->internal.maelstrom_bind_t[idx] = 0.0f;
+            continue;
+        }
+        if (g->internal.maelstrom_bind_t[idx] > 0.0f) {
+            g->internal.maelstrom_bind_t[idx] -= a->dt;
+            if (g->internal.maelstrom_bind_t[idx] <= 1e-4f) {
+                g->internal.maelstrom_bind_t[idx] = 0.0f;
+            }
+        }
+    }
+
+    const float pull_rad = 140.0f * g->internal.mods.cyclone_radius_mul;
+    const float pull_rad2 = pull_rad * pull_rad;
+    const float blend = ink_clampf(6.0f * a->dt, 0.0f, 1.0f);
+    const uint32_t hw = g->ecs.high_water;
+
+    for (int32_t c = 0; c < GAME_MAX_ACTIVE_CYCLONES; ++c) {
+        const ActiveCyclone *ac = &g->internal.cyclones[c];
+        if (!ac->active) {
+            continue;
+        }
+        for (uint32_t i = 0; i < hw; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index == ECS_INVALID_INDEX) {
+                continue;
+            }
+            const TransformComp *tr = game_transform(g, id);
+            VelocityComp *vel = game_velocity_mut(g, id);
+            const EnemyComp *en = game_enemy(g, id);
+            if (tr == NULL || vel == NULL || en == NULL || tr->dissolving) {
+                continue;
+            }
+            const bool eligible =
+                vel->mass_tier == MASS_LIGHT || (a->lv >= 2 && vel->mass_tier == MASS_MEDIUM);
+            if (!eligible) {
+                continue;
+            }
+            const float dx = ac->x - tr->x;
+            const float dy = ac->y - tr->y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 > pull_rad2) {
+                continue;
+            }
+            float target_vx = 0.0f;
+            float target_vy = 0.0f;
+            if (d2 > 1e-8f) {
+                const float inv_d = 1.0f / sqrtf(d2);
+                target_vx = dx * inv_d * 240.0f;
+                target_vy = dy * inv_d * 240.0f;
+            }
+            vel->vx += (target_vx - vel->vx) * blend;
+            vel->vy += (target_vy - vel->vy) * blend;
+            g->internal.maelstrom_bind_t[id.index] = 1.0f;
+        }
+    }
+
+    for (uint32_t i = 0; i < hw; ++i) {
+        if (g->internal.maelstrom_bind_t[i] <= 0.0f) {
+            continue;
+        }
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX) {
+            continue;
+        }
+        StatusComp *st = game_status_mut(g, id);
+        if (st != NULL && st->stun_t < 0.15f) {
+            st->stun_t = 0.15f;
+        }
+    }
+
+    if (a->lv >= 3) {
+        const float collide_rad2 = 32.0f * 32.0f;
+        for (uint32_t i = 0; i < hw; ++i) {
+            if (g->internal.maelstrom_bind_t[i] <= 0.0f) {
+                continue;
+            }
+            const EntityId id_a = ecs_entity_at(&g->ecs, i);
+            if (id_a.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id_a)) {
+                continue;
+            }
+            const TransformComp *tr_a = game_transform(g, id_a);
+            const EnemyComp *en_a = game_enemy(g, id_a);
+            if (tr_a == NULL || en_a == NULL || tr_a->dissolving) {
+                continue;
+            }
+            for (uint32_t j = i + 1; j < hw; ++j) {
+                if (g->internal.maelstrom_bind_t[j] <= 0.0f) {
+                    continue;
+                }
+                const EntityId id_b = ecs_entity_at(&g->ecs, j);
+                if (id_b.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id_b)) {
+                    continue;
+                }
+                const TransformComp *tr_b = game_transform(g, id_b);
+                const EnemyComp *en_b = game_enemy(g, id_b);
+                if (tr_b == NULL || en_b == NULL || tr_b->dissolving) {
+                    continue;
+                }
+                const float dx = tr_b->x - tr_a->x;
+                const float dy = tr_b->y - tr_a->y;
+                if (dx * dx + dy * dy <= collide_rad2) {
+                    g->internal.maelstrom_bind_t[i] = 0.0f;
+                    g->internal.maelstrom_bind_t[j] = 0.0f;
+                    if (ecs_is_alive(&g->ecs, id_a)) {
+                        (void)combat_apply_damage(g, id_a, 40, DMG_PHYSICAL | DMG_SECONDARY, 0.0f,
+                                                  0.0f);
+                    }
+                    if (ecs_is_alive(&g->ecs, id_b)) {
+                        (void)combat_apply_damage(g, id_b, 40, DMG_PHYSICAL | DMG_SECONDARY, 0.0f,
+                                                  0.0f);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+static void tailwind_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_steer[3] = {1.30f, 1.60f, 2.00f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->homing_steer_mul *= k_steer[lv - 1];
+    if (lv >= 3) {
+        mods->deflected_max_speed_mul *= 1.20f;
+    }
+}
+
 static void rich_ink_on_kill(const KillHookArgs *a)
 {
     GameState *g = a->g;
@@ -171,13 +441,104 @@ static void lasting_surge_apply_add(RunModifiers *mods, uint8_t lv)
     }
 }
 
+static void ink_magnet_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_rad[3] = {170.0f, 210.0f, 250.0f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->orb_pull_radius = k_rad[lv - 1];
+    if (lv >= 3) {
+        mods->cyclone_pulls_all_orbs = true;
+    }
+}
+
+static void chain_primer_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_grace[3] = {3.20f, 3.80f, 4.50f};
+    if (lv >= 1 && lv <= 3) {
+        mods->chain_grace = k_grace[lv - 1];
+    }
+}
+
+static void dry_mastery_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_force[3] = {0.75f, 1.00f, 1.00f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->dry_force_override = k_force[lv - 1];
+    if (lv >= 3) {
+        mods->dry_zero_cost = true;
+    }
+}
+
+static void dry_mastery_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 3) {
+        mods->dry_deflect_dmg_mul *= 1.20f;
+    }
+}
+
+static void shrine_ward_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 1 && lv <= 3) {
+        mods->shrine_max_hp_delta += (int32_t)lv;
+    }
+}
+
+static void deep_ink_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_add[3] = {15.0f, 30.0f, 45.0f};
+    if (lv >= 1 && lv <= 3) {
+        mods->ink_max_add += k_add[lv - 1];
+    }
+}
+
+static void deep_mark_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_mul[3] = {2.20f, 2.40f, 2.60f};
+    static const float k_dur[3] = {1.0f, 2.0f, 3.0f};
+    if (lv >= 1 && lv <= 3) {
+        mods->ink_mark_mul = k_mul[lv - 1];
+        mods->ink_mark_duration += k_dur[lv - 1];
+    }
+}
+
+static void barrier_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_invuln[3] = {0.30f, 0.60f, 0.90f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->shrine_invuln_add += k_invuln[lv - 1];
+    if (lv >= 3) {
+        mods->barrier_shield_enabled = true;
+    }
+}
+
+static void barrier_on_tick(const TickHookArgs *a)
+{
+    GameState *g = a->g;
+    if (a->lv < 3 || !g->internal.mods.barrier_shield_enabled || g->internal.barrier_shield_ready) {
+        return;
+    }
+    if (g->internal.barrier_shield_cd > 0.0f) {
+        g->internal.barrier_shield_cd -= a->dt;
+    }
+    if (g->internal.barrier_shield_cd <= 1e-4f) {
+        g->internal.barrier_shield_cd = 0.0f;
+        g->internal.barrier_shield_ready = true;
+    }
+}
+
 static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
     [UPG_EMBER_TIP] =
         {
             .id = UPG_EMBER_TIP,
             .axis = AXIS_BLAZE,
             .max_level = 3,
-            .on_stroke = ember_tip_on_stroke,
+            .apply_mods_add = ember_tip_apply_add,
         },
     [UPG_WILDFIRE] =
         {
@@ -230,22 +591,124 @@ static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
             .max_level = 3,
             .apply_mods_add = lasting_surge_apply_add,
         },
-    [UPG_FLAME_GALE] = {.id = UPG_FLAME_GALE, .axis = AXIS_BLAZE, .max_level = 3},
-    [UPG_INFERNO] = {.id = UPG_INFERNO, .axis = AXIS_BLAZE, .max_level = 3},
-    [UPG_PHOENIX_ARROW] = {.id = UPG_PHOENIX_ARROW, .axis = AXIS_BLAZE, .max_level = 3},
-    [UPG_THUNDER_ARROW] = {.id = UPG_THUNDER_ARROW, .axis = AXIS_THUNDER, .max_level = 3},
-    [UPG_SWIFT_THUNDER] = {.id = UPG_SWIFT_THUNDER, .axis = AXIS_THUNDER, .max_level = 3},
-    [UPG_THUNDERBURST_FUSE] = {.id = UPG_THUNDERBURST_FUSE, .axis = AXIS_THUNDER, .max_level = 3},
-    [UPG_MIGHTY_STROKE] = {.id = UPG_MIGHTY_STROKE, .axis = AXIS_GALE, .max_level = 3},
-    [UPG_MAELSTROM_BIND] = {.id = UPG_MAELSTROM_BIND, .axis = AXIS_GALE, .max_level = 3},
-    [UPG_TAILWIND] = {.id = UPG_TAILWIND, .axis = AXIS_GALE, .max_level = 3},
-    [UPG_INK_MAGNET] = {.id = UPG_INK_MAGNET, .axis = AXIS_INKWAY, .max_level = 3},
-    [UPG_CHAIN_PRIMER] = {.id = UPG_CHAIN_PRIMER, .axis = AXIS_INKWAY, .max_level = 3},
-    [UPG_DRY_MASTERY] = {.id = UPG_DRY_MASTERY, .axis = AXIS_INKWAY, .max_level = 3},
-    [UPG_SHRINE_WARD] = {.id = UPG_SHRINE_WARD, .axis = AXIS_COMMON, .max_level = 3},
-    [UPG_DEEP_INK] = {.id = UPG_DEEP_INK, .axis = AXIS_COMMON, .max_level = 3},
-    [UPG_DEEP_MARK] = {.id = UPG_DEEP_MARK, .axis = AXIS_COMMON, .max_level = 3},
-    [UPG_BARRIER] = {.id = UPG_BARRIER, .axis = AXIS_COMMON, .max_level = 3},
+    [UPG_FLAME_GALE] =
+        {
+            .id = UPG_FLAME_GALE,
+            .axis = AXIS_BLAZE,
+            .max_level = 3,
+            .apply_mods_add = flame_gale_apply_add,
+            .on_gale = flame_gale_on_gale,
+        },
+    [UPG_INFERNO] =
+        {
+            .id = UPG_INFERNO,
+            .axis = AXIS_BLAZE,
+            .max_level = 3,
+            .apply_mods_add = inferno_apply_add,
+            .on_kill = inferno_on_kill,
+        },
+    [UPG_PHOENIX_ARROW] =
+        {
+            .id = UPG_PHOENIX_ARROW,
+            .axis = AXIS_BLAZE,
+            .max_level = 3,
+            .apply_mods_add = phoenix_arrow_apply_add,
+        },
+    [UPG_THUNDER_ARROW] =
+        {
+            .id = UPG_THUNDER_ARROW,
+            .axis = AXIS_THUNDER,
+            .max_level = 3,
+            .apply_mods_add = thunder_arrow_apply_add,
+        },
+    [UPG_SWIFT_THUNDER] =
+        {
+            .id = UPG_SWIFT_THUNDER,
+            .axis = AXIS_THUNDER,
+            .max_level = 3,
+            .apply_mods_add = swift_thunder_apply_add,
+        },
+    [UPG_THUNDERBURST_FUSE] =
+        {
+            .id = UPG_THUNDERBURST_FUSE,
+            .axis = AXIS_THUNDER,
+            .max_level = 3,
+            .apply_mods_add = thunderburst_fuse_apply_add,
+            .apply_mods_mul = thunderburst_fuse_apply_mul,
+        },
+    [UPG_MIGHTY_STROKE] =
+        {
+            .id = UPG_MIGHTY_STROKE,
+            .axis = AXIS_GALE,
+            .max_level = 3,
+            .apply_mods_mul = mighty_stroke_apply_mul,
+        },
+    [UPG_MAELSTROM_BIND] =
+        {
+            .id = UPG_MAELSTROM_BIND,
+            .axis = AXIS_GALE,
+            .max_level = 3,
+            .apply_mods_add = maelstrom_bind_apply_add,
+            .on_tick = maelstrom_bind_on_tick,
+        },
+    [UPG_TAILWIND] =
+        {
+            .id = UPG_TAILWIND,
+            .axis = AXIS_GALE,
+            .max_level = 3,
+            .apply_mods_mul = tailwind_apply_mul,
+        },
+    [UPG_INK_MAGNET] =
+        {
+            .id = UPG_INK_MAGNET,
+            .axis = AXIS_INKWAY,
+            .max_level = 3,
+            .apply_mods_add = ink_magnet_apply_add,
+        },
+    [UPG_CHAIN_PRIMER] =
+        {
+            .id = UPG_CHAIN_PRIMER,
+            .axis = AXIS_INKWAY,
+            .max_level = 3,
+            .apply_mods_add = chain_primer_apply_add,
+        },
+    [UPG_DRY_MASTERY] =
+        {
+            .id = UPG_DRY_MASTERY,
+            .axis = AXIS_INKWAY,
+            .max_level = 3,
+            .apply_mods_add = dry_mastery_apply_add,
+            .apply_mods_mul = dry_mastery_apply_mul,
+        },
+    [UPG_SHRINE_WARD] =
+        {
+            .id = UPG_SHRINE_WARD,
+            .axis = AXIS_COMMON,
+            .max_level = 3,
+            .apply_mods_add = shrine_ward_apply_add,
+        },
+    [UPG_DEEP_INK] =
+        {
+            .id = UPG_DEEP_INK,
+            .axis = AXIS_COMMON,
+            .max_level = 3,
+            .apply_mods_add = deep_ink_apply_add,
+        },
+    [UPG_DEEP_MARK] =
+        {
+            .id = UPG_DEEP_MARK,
+            .axis = AXIS_COMMON,
+            .max_level = 3,
+            .apply_mods_add = deep_mark_apply_add,
+        },
+    [UPG_BARRIER] =
+        {
+            .id = UPG_BARRIER,
+            .axis = AXIS_COMMON,
+            .max_level = 3,
+            .apply_mods_add = barrier_apply_add,
+            .on_tick = barrier_on_tick,
+        },
 };
 
 void roguelike_recompute_modifiers(GameState *g)
@@ -289,7 +752,22 @@ void roguelike_recompute_modifiers(GameState *g)
         owned_n = GAME_MAX_OWNED_UPGRADES;
     }
 
-    /* Pass 1: all additions (meta -> owned upgrades -> owned relics). */
+    /* Pass 1: brush base/additions -> meta -> owned upgrades -> owned relics. */
+    switch (g->config.brush_style) {
+    case BRUSH_STYLE_EMBER:
+        mods.stroke_ember_interval = 120.0f;
+        mods.stroke_ember_mul = 1.0f;
+        mods.gale_fire_add += 0.35f;
+        break;
+    case BRUSH_STYLE_QUILL:
+        mods.cyclone_cd = 1.10f;
+        mods.cyclone_storm_add += 0.55f;
+        break;
+    case BRUSH_STYLE_HEAVY:
+    default:
+        break;
+    }
+
     const uint8_t ink_max_lv = clamp_meta_level(&g->config, META_UPG_INK_MAX);
     mods.ink_max_add += 10.0f * (float)ink_max_lv;
     for (int32_t i = 0; i < owned_n; ++i) {
@@ -302,10 +780,24 @@ void roguelike_recompute_modifiers(GameState *g)
     relics_apply_modifiers_add(g, &mods);
 
     /* Pass 2: all multiplications (brush -> meta -> owned upgrades -> owned relics). */
-    mods.brush_radius_mul *= 1.25f;
-    mods.brush_force_mul *= 1.20f;
-    mods.stroke_cost_mul *= 1.15f;
-    mods.gale_impulse_mul *= 1.25f;
+    switch (g->config.brush_style) {
+    case BRUSH_STYLE_EMBER:
+        mods.stroke_cost_mul *= 1.20f;
+        break;
+    case BRUSH_STYLE_QUILL:
+        mods.brush_radius_mul *= 0.80f;
+        mods.brush_force_mul *= 0.90f;
+        mods.stroke_cost_mul *= 0.70f;
+        mods.orb_pull_radius *= 1.30f;
+        break;
+    case BRUSH_STYLE_HEAVY:
+    default:
+        mods.brush_radius_mul *= 1.25f;
+        mods.brush_force_mul *= 1.20f;
+        mods.stroke_cost_mul *= 1.15f;
+        mods.gale_impulse_mul *= 1.25f;
+        break;
+    }
 
     const uint8_t regen_lv = clamp_meta_level(&g->config, META_UPG_INK_REGEN);
     mods.ink_regen_mul *= 1.0f + 0.10f * (float)regen_lv;
@@ -356,22 +848,28 @@ bool roguelike_grant_upgrade(GameState *g, UpgradeId id)
     if (owned_n > GAME_MAX_OWNED_UPGRADES) {
         owned_n = GAME_MAX_OWNED_UPGRADES;
     }
+    bool granted = false;
     for (int32_t i = 0; i < owned_n; ++i) {
         if (g->run.upgrades[i].id == id) {
             if (g->run.upgrades[i].level >= max_lv) {
                 return false;
             }
             ++g->run.upgrades[i].level;
-            roguelike_recompute_modifiers(g);
-            return true;
+            granted = true;
+            break;
         }
     }
-    if (owned_n >= GAME_MAX_OWNED_UPGRADES) {
-        return false;
+    if (!granted) {
+        if (owned_n >= GAME_MAX_OWNED_UPGRADES) {
+            return false;
+        }
+        g->run.upgrades[owned_n] = (OwnedUpgrade){.id = id, .level = 1};
+        g->run.upgrade_count = owned_n + 1;
     }
-    g->run.upgrades[owned_n] = (OwnedUpgrade){.id = id, .level = 1};
-    g->run.upgrade_count = owned_n + 1;
     roguelike_recompute_modifiers(g);
+    if (id == UPG_SHRINE_WARD && g->shrine_count > 0 && g->shrines[0].hp < g->shrines[0].max_hp) {
+        ++g->shrines[0].hp;
+    }
     return true;
 }
 

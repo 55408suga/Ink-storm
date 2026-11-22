@@ -1,9 +1,16 @@
+#include "combat/damage.h"
+#include "core.h"
+#include "elements/elements.h"
 #include "game.h"
 #include "meta.h"
+#include "player/player_skills.h"
+#include "roguelike/hints.h"
+#include "roguelike/relics.h"
 #include "roguelike/rewards.h"
 #include "roguelike/upgrades.h"
 #include "unity.h"
 
+#include <math.h>
 #include <string.h>
 
 void setUp(void) {}
@@ -753,6 +760,803 @@ static void test_run_modifiers_calculation(void)
     game_destroy(g_meta);
 }
 
+static void clear_test_entities(GameState *g)
+{
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+}
+
+static int count_ev(const GameState *g, GameEventType type)
+{
+    int n = 0;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == type) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+static float sample_channel(const GameState *g, int ch, float x, float y)
+{
+    float dye[FLUID_MAX_CHANNELS] = {0};
+    fluid_sample(&g->fluid, x, y, NULL, NULL, dye);
+    return dye[ch];
+}
+
+static void test_brush_styles_and_stacking(void)
+{
+    /* 1. Heavy Brush */
+    {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(11));
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.25f, g->internal.mods.brush_radius_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.brush_force_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.15f, g->internal.mods.stroke_cost_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.25f, g->internal.mods.gale_impulse_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.mods.stroke_ember_interval);
+
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 160.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 80.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->internal.mods.stroke_ember_mul);
+        game_destroy(g);
+    }
+
+    /* 2. Ember Brush: 120px ember (non-dry only), gale fire +0.35, Ember Tip stacking without
+     * double injection. */
+    {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_EMBER, UINT64_C(12));
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.stroke_cost_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.35f, g->internal.mods.gale_fire_add);
+
+        /* Non-dry stroke of 125px injects fire at brush position. */
+        const BrushInput stroke1 = {
+            .pmx = 200.0f, .pmy = 300.0f, .mx = 325.0f, .my = 300.0f, .paint = true};
+        player_skills_step(g, &stroke1);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 325.0f, 300.0f) > 0.10f);
+
+        /* Dry stroke of 150px must NOT inject fire. */
+        fluid_reset(&g->fluid);
+        g->internal.ember_tip_dist = 0.0f;
+        g->player.ink = 10.0f;
+        const BrushInput dry_stroke = {
+            .pmx = 200.0f, .pmy = 300.0f, .mx = 350.0f, .my = 300.0f, .paint = true};
+        player_skills_step(g, &dry_stroke);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, sample_channel(g, 1, 350.0f, 300.0f));
+
+        /* Gale injects fire (0.35) along its trajectory. */
+        fluid_reset(&g->fluid);
+        g->player.ink = 100.0f;
+        g->player.gale_cd = 0.0f;
+        g->player.aim_x = 1.0f;
+        g->player.aim_y = 0.0f;
+        const BrushInput gale_in = {
+            .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .gale = true};
+        player_skills_step(g, &gale_in);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 460.0f, 300.0f) > 0.10f);
+
+        /* Ember Brush x Ember Tip Lv1/2/3: 90 / 67.5 / 50.625px, no double injection. */
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 90.0f, g->internal.mods.stroke_ember_interval);
+        fluid_reset(&g->fluid);
+        g->internal.ember_tip_dist = 0.0f;
+        g->player.ink = 100.0f;
+        const BrushInput st95 = {
+            .pmx = 200.0f, .pmy = 200.0f, .mx = 295.0f, .my = 200.0f, .paint = true};
+        player_skills_step(g, &st95);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 5.0f, g->internal.ember_tip_dist);
+        const float fire_once = sample_channel(g, 1, 295.0f, 200.0f);
+        TEST_ASSERT_TRUE(fire_once > 0.10f && fire_once < 0.70f);
+
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 67.5f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 50.625f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->internal.mods.stroke_ember_mul);
+
+        /* Ember Brush x Flame Gale: 0.35 + 0.25 / 0.35 / 0.50 */
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_FLAME_GALE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.60f, g->internal.mods.gale_fire_add);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_FLAME_GALE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.70f, g->internal.mods.gale_fire_add);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_FLAME_GALE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.85f, g->internal.mods.gale_fire_add);
+        game_destroy(g);
+    }
+
+    /* 3. Quill Brush: CD 1.1s, storm 0.55, Charged Seal +0.15/lv + Lv3 sustain, Ink Magnet x1.3. */
+    {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_QUILL, UINT64_C(13));
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.80f, g->internal.mods.brush_radius_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.90f, g->internal.mods.brush_force_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.70f, g->internal.mods.stroke_cost_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.10f, g->internal.mods.cyclone_cd);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.55f, g->internal.mods.cyclone_storm_add);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 169.0f, g->internal.mods.orb_pull_radius);
+
+        const BrushInput cyc_in = {
+            .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .cyclone = true};
+        player_skills_step(g, &cyc_in);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.10f, g->player.cyclone_cd);
+        TEST_ASSERT_TRUE(sample_channel(g, 2, 420.0f, 300.0f) > 0.05f);
+
+        /* Quill x Charged Seal Lv1/2/3: 0.70 / 0.85 / 1.00 + Lv3 sustain 0.60 */
+        const float expected_storm[3] = {0.70f, 0.85f, 1.00f};
+        for (int lv = 1; lv <= 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_CHARGED_SEAL));
+            float storm_add = g->internal.mods.cyclone_storm_add;
+            float storm_sustain = g->internal.mods.cyclone_storm_sustain;
+            upgrades_fire_on_cyclone(g, 400.0f, 300.0f, &storm_add, &storm_sustain);
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, expected_storm[lv - 1], storm_add);
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, lv >= 3 ? 0.60f : 0.0f, storm_sustain);
+        }
+
+        /* Quill x Ink Magnet Lv1/2/3: 221 / 273 / 325px */
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_INK_MAGNET));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 170.0f * 1.3f, g->internal.mods.orb_pull_radius);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_INK_MAGNET));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 210.0f * 1.3f, g->internal.mods.orb_pull_radius);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_INK_MAGNET));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 325.0f, g->internal.mods.orb_pull_radius);
+        game_destroy(g);
+    }
+}
+
+static void test_p1_upgrades_all_16(void)
+{
+    /* Flame Gale Lv3 endpoint blast */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_FLAME_GALE));
+        }
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.50f, g->internal.mods.gale_fire_add);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 20.0f, g->internal.mods.gale_end_blast_dmg);
+
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 300.0f + 220.0f, 300.0f);
+        fluid_reset(&g->fluid);
+        g->player.aim_x = 1.0f;
+        g->player.aim_y = 0.0f;
+        const BrushInput in = {
+            .pmx = 300.0f, .pmy = 300.0f, .mx = 300.0f, .my = 300.0f, .gale = true};
+        player_skills_step(g, &in);
+        TEST_ASSERT_EQUAL_INT32(70, game_health(g, e)->hp);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 520.0f, 300.0f) > 0.25f);
+        game_destroy(g);
+    }
+
+    /* Inferno Lv1/2/3 burn dmg + Lv3 fire-kill ember splat */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        const float expected[3] = {14.0f, 18.0f, 22.0f};
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_INFERNO));
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, expected[lv], g->internal.mods.burn_base_dmg);
+        }
+        TEST_ASSERT_TRUE(g->internal.mods.inferno_ember_on_kill);
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_ARCHER, 400.0f, 300.0f);
+        fluid_reset(&g->fluid);
+        (void)combat_apply_damage(g, e, 25, DMG_FIRE, 0.0f, 0.0f);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 400.0f, 300.0f) > 0.50f);
+        game_destroy(g);
+    }
+
+    /* Phoenix Arrow + Thunder Arrow + Swift Thunder + Mighty Stroke + Tailwind + Chain Primer +
+     * Deep Ink + Deep Mark */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+
+        for (int lv = 1; lv <= 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_PHOENIX_ARROW));
+            TEST_ASSERT_EQUAL_INT32(lv + 2, g->internal.mods.burning_proj_pierce);
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_THUNDER_ARROW));
+            TEST_ASSERT_EQUAL_INT32(lv == 1 ? 2 : 3, g->internal.mods.thunder_proj_targets);
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_SWIFT_THUNDER));
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_MIGHTY_STROKE));
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_TAILWIND));
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_CHAIN_PRIMER));
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_DEEP_INK));
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_DEEP_MARK));
+        }
+        TEST_ASSERT_TRUE(g->internal.mods.burning_proj_hit_splat);
+        TEST_ASSERT_TRUE(g->internal.mods.deflect_auto_electrify);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.30f, g->internal.mods.storm_zap_cd);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.20f * 1.45f, g->internal.mods.brush_force_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.00f, g->internal.mods.homing_steer_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.deflected_max_speed_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 4.50f, g->internal.mods.chain_grace);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 145.0f, g->player.ink_max);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.60f, g->internal.mods.ink_mark_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 6.0f, g->internal.mods.ink_mark_duration);
+
+        /* Gale deflect auto-electrifies PROJ_ARROW when Thunder Arrow Lv3 is owned. */
+        const EntityId p =
+            game_debug_spawn_projectile(g, PROJ_ARROW, 380.0f, 300.0f, -150.0f, 0.0f);
+        g->player.aim_x = 1.0f;
+        g->player.aim_y = 0.0f;
+        const BrushInput gin = {
+            .pmx = 300.0f, .pmy = 300.0f, .mx = 300.0f, .my = 300.0f, .gale = true};
+        player_skills_step(g, &gin);
+        TEST_ASSERT_TRUE(game_proj(g, p)->deflected);
+        TEST_ASSERT_TRUE(game_proj(g, p)->electrified);
+        game_destroy(g);
+    }
+
+    /* Maelstrom Bind Lv1 (light), Lv2 (medium), Lv3 (collision 40 dmg + no re-trigger) */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_MAELSTROM_BIND));
+        const EntityId light_e = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 460.0f, 300.0f);
+        const EntityId med_e = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 460.0f, 340.0f);
+        g->internal.cyclones[0] = (ActiveCyclone){.active = true,
+                                                  .x = 400.0f,
+                                                  .y = 300.0f,
+                                                  .rad_cells = 13.0f,
+                                                  .life = 0.5f,
+                                                  .max_life = 0.72f};
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_TRUE(g->internal.maelstrom_bind_t[light_e.index] > 0.5f);
+        TEST_ASSERT_TRUE(game_status(g, light_e)->stun_t >= 0.15f - 1e-5f);
+        TEST_ASSERT_TRUE(game_velocity(g, light_e)->vx < 0.0f);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.maelstrom_bind_t[med_e.index]);
+
+        /* Lv2 binds medium too. */
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_MAELSTROM_BIND));
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_TRUE(g->internal.maelstrom_bind_t[med_e.index] > 0.5f);
+
+        /* Lv3: two bound enemies within 32px collide -> 40 dmg each, bind consumed, no repeat. */
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_MAELSTROM_BIND));
+        clear_test_entities(g);
+        g->internal.cyclones[0].active = false;
+        const EntityId a = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 400.0f, 300.0f);
+        const EntityId b = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 420.0f, 300.0f);
+        game_health_mut(g, a)->hp = 100;
+        game_health_mut(g, b)->hp = 100;
+        g->internal.maelstrom_bind_t[a.index] = 1.0f;
+        g->internal.maelstrom_bind_t[b.index] = 1.0f;
+
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_EQUAL_INT32(60, game_health(g, a)->hp);
+        TEST_ASSERT_EQUAL_INT32(60, game_health(g, b)->hp);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.maelstrom_bind_t[a.index]);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.maelstrom_bind_t[b.index]);
+
+        /* Second tick must not deal collision damage again. */
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_EQUAL_INT32(60, game_health(g, a)->hp);
+        TEST_ASSERT_EQUAL_INT32(60, game_health(g, b)->hp);
+        game_destroy(g);
+    }
+
+    /* Ink Magnet Lv3: cyclone pulls orbs across the entire screen (> 220px) at 360px/s. */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_INK_MAGNET));
+        }
+        const EntityId orb = game_debug_spawn_orb(g, 900.0f, 300.0f);
+        game_velocity_mut(g, orb)->vx = 0.0f;
+        game_velocity_mut(g, orb)->vy = 0.0f;
+        const BrushInput cyc = {
+            .pmx = 200.0f, .pmy = 300.0f, .mx = 200.0f, .my = 300.0f, .cyclone = true};
+        player_skills_step(g, &cyc);
+        TEST_ASSERT_FLOAT_WITHIN(1.0f, -360.0f, game_velocity(g, orb)->vx);
+        game_destroy(g);
+    }
+
+    /* Dry Mastery Lv1/2/3: dry zero cost, painting at ink == 0, dry deflected dmg x1.2. */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_DRY_MASTERY));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.75f, g->internal.mods.dry_force_override);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_DRY_MASTERY));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.00f, g->internal.mods.dry_force_override);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_DRY_MASTERY));
+        TEST_ASSERT_TRUE(g->internal.mods.dry_zero_cost);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.dry_deflect_dmg_mul);
+
+        g->player.ink = 0.0f;
+        const BrushInput st = {
+            .pmx = 300.0f, .pmy = 300.0f, .mx = 340.0f, .my = 300.0f, .paint = true};
+        player_skills_step(g, &st);
+        TEST_ASSERT_TRUE(g->player.painting);
+        TEST_ASSERT_TRUE(g->player.dry);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->player.ink);
+
+        g->player.ink = 15.0f;
+        player_skills_step(g, &st);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 15.0f, g->player.ink);
+
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 500.0f, 300.0f);
+        const int32_t dealt = combat_apply_damage(g, e, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0, 0);
+        TEST_ASSERT_EQUAL_INT32(24, dealt);
+        game_destroy(g);
+    }
+
+    /* Shrine Ward Lv1/2/3: max_hp +1/+2/+3 and immediate +1 heal after recompute. */
+    {
+        GameState *g = game_create(NULL);
+        g->shrines[0].hp = 6;
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_SHRINE_WARD));
+        TEST_ASSERT_EQUAL_INT32(9, g->shrines[0].max_hp);
+        TEST_ASSERT_EQUAL_INT32(7, g->shrines[0].hp);
+        g->shrines[0].hp = 9;
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_SHRINE_WARD));
+        TEST_ASSERT_EQUAL_INT32(10, g->shrines[0].max_hp);
+        TEST_ASSERT_EQUAL_INT32(10, g->shrines[0].hp);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_SHRINE_WARD));
+        TEST_ASSERT_EQUAL_INT32(11, g->shrines[0].max_hp);
+        TEST_ASSERT_EQUAL_INT32(11, g->shrines[0].hp);
+        game_destroy(g);
+    }
+
+    /* Barrier Lv1/2/3: invuln +0.3/+0.6/+0.9 and Lv3 12s shield absorbs 1 enemy projectile. */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        for (int lv = 0; lv < 3; ++lv) {
+            TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_BARRIER));
+        }
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.90f, g->internal.mods.shrine_invuln_add);
+        TEST_ASSERT_TRUE(g->internal.mods.barrier_shield_enabled);
+
+        /* First tick charges the shield immediately (cd == 0). */
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_TRUE(g->internal.barrier_shield_ready);
+
+        /* Un-deflected projectile hits shrine -> absorbed, shrine HP intact, 12s CD starts. */
+        const int32_t hp0 = g->shrines[0].hp;
+        (void)game_debug_spawn_projectile(g, PROJ_ARROW, g->shrines[0].x - 10.0f, g->shrines[0].y,
+                                          200.0f, 0.0f);
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_EQUAL_INT32(hp0, g->shrines[0].hp);
+        TEST_ASSERT_FALSE(g->internal.barrier_shield_ready);
+        TEST_ASSERT_TRUE(g->internal.barrier_shield_cd > 11.9f);
+
+        /* 718 more ticks (< 12s total) -> still not ready; 719th tick -> ready again. */
+        for (int t = 0; t < 718; ++t) {
+            upgrades_fire_on_tick(g, INK_FIXED_DT);
+        }
+        TEST_ASSERT_FALSE(g->internal.barrier_shield_ready);
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_TRUE(g->internal.barrier_shield_ready);
+        game_destroy(g);
+    }
+}
+
+static void test_p1_relics_all_9(void)
+{
+    /* 1. Vermilion Inkstone + 8. Lingering Ink (dye_damp sync & combination) */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_VERMILION_INKSTONE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.980f, g->fluid.cfg.dye_damp[0]);
+        const BrushInput st205 = {
+            .pmx = 200.0f, .pmy = 200.0f, .mx = 405.0f, .my = 200.0f, .paint = true};
+        player_skills_step(g, &st205);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 405.0f, 200.0f) > 0.10f);
+
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_LINGERING_INK));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.988f, g->fluid.cfg.dye_damp[0]);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 5.0f, g->internal.mods.ink_mark_duration);
+        game_destroy(g);
+
+        GameState *g2 = game_create(NULL);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g2, RELIC_LINGERING_INK));
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.993f, g2->fluid.cfg.dye_damp[0]);
+        game_destroy(g2);
+    }
+
+    /* 2. Thunder Drum: cyclone lightning 40 dmg + storm 1.0 + EV_STORM_ZAP */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_THUNDER_DRUM));
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 420.0f, 300.0f);
+        fluid_reset(&g->fluid);
+        g->event_count = 0;
+        const BrushInput cyc = {
+            .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .cyclone = true};
+        player_skills_step(g, &cyc);
+        TEST_ASSERT_EQUAL_INT32(50, game_health(g, e)->hp);
+        TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_STORM_ZAP));
+        TEST_ASSERT_TRUE(sample_channel(g, 2, 400.0f, 300.0f) > 0.25f);
+        game_destroy(g);
+    }
+
+    /* 3. Tengu Fan: 3-way gale, no duplicate knockback on single enemy, +6 ink cost */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_TENGU_FAN));
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 400.0f, 300.0f);
+        game_velocity_mut(g, e)->vx = 0.0f;
+        game_velocity_mut(g, e)->vy = 0.0f;
+        g->player.ink = 100.0f;
+        g->player.aim_x = 1.0f;
+        g->player.aim_y = 0.0f;
+        g->event_count = 0;
+        const BrushInput gin = {
+            .pmx = 300.0f, .pmy = 300.0f, .mx = 300.0f, .my = 300.0f, .gale = true};
+        player_skills_step(g, &gin);
+        TEST_ASSERT_EQUAL_INT(3, count_ev(g, EV_GALE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 78.0f, g->player.ink);
+        /* Heavy gale_impulse_mul = 1.25 -> 560 * 0.6 * 1.0 * 1.25 = 420 px/s (applied ONCE). */
+        TEST_ASSERT_FLOAT_WITHIN(1.0f, 420.0f, game_velocity(g, e)->vx);
+        game_destroy(g);
+    }
+
+    /* 4. Ink-Dyed Shrine: emits ink around shrine every tick */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_INK_DYED_SHRINE));
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_TRUE(sample_channel(g, 0, g->shrines[0].x, g->shrines[0].y) > 0.01f);
+        game_destroy(g);
+    }
+
+    /* 5. Twin Brush: symmetric ink + opposite velocity + cost x1.3 + symmetric ember */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_TWIN_BRUSH));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_VERMILION_INKSTONE));
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.15f * 1.30f, g->internal.mods.stroke_cost_mul);
+
+        const float sx = g->shrines[0].x;
+        const float sy = g->shrines[0].y;
+        const BrushInput st = {
+            .pmx = 200.0f, .pmy = 200.0f, .mx = 405.0f, .my = 200.0f, .paint = true};
+        player_skills_step(g, &st);
+        const float sym_x = 2.0f * sx - 405.0f;
+        const float sym_y = 2.0f * sy - 200.0f;
+        TEST_ASSERT_TRUE(sample_channel(g, 0, 405.0f, 200.0f) > 0.05f);
+        TEST_ASSERT_TRUE(sample_channel(g, 0, sym_x, sym_y) > 0.05f);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 405.0f, 200.0f) > 0.05f);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, sym_x, sym_y) > 0.05f);
+        /* Distance counter accumulated only once (205 - 200 = 5). */
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 5.0f, g->internal.relic_ember_dist);
+        game_destroy(g);
+    }
+
+    /* 6. Rosary Swirl: normal orb pickup creates swirl around pickup position */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        fluid_reset(&g->fluid);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_ROSARY_SWIRL));
+        g->player.cursor_x = 400.0f;
+        g->player.cursor_y = 300.0f;
+        const EntityId orb = game_debug_spawn_orb(g, 400.0f, 300.0f);
+        game_transform_mut(g, orb)->x = 400.0f;
+        game_transform_mut(g, orb)->y = 300.0f;
+        combat_orbs_step(g);
+        float fu = 0.0f;
+        float fv = 0.0f;
+        float dye[FLUID_MAX_CHANNELS] = {0};
+        fluid_sample(&g->fluid, 424.0f, 300.0f, &fu, &fv, dye);
+        TEST_ASSERT_TRUE(dye[0] > 0.05f);
+        TEST_ASSERT_TRUE(fabsf(fv) > 1.0f);
+        game_destroy(g);
+    }
+
+    /* 7. Pact of Fire: fire dmg x2, shrine max_hp -2, hp clamped to new max_hp */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        TEST_ASSERT_EQUAL_INT32(8, g->shrines[0].max_hp);
+        TEST_ASSERT_EQUAL_INT32(8, g->shrines[0].hp);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_PACT_OF_FIRE));
+        TEST_ASSERT_EQUAL_INT32(6, g->shrines[0].max_hp);
+        TEST_ASSERT_EQUAL_INT32(6, g->shrines[0].hp);
+        const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 400.0f, 300.0f);
+        TEST_ASSERT_EQUAL_INT32(40, combat_apply_damage(g, e, 20, DMG_FIRE, 0, 0));
+        game_destroy(g);
+    }
+
+    /* 9. Wind Return: auto free gale on enemy projectile within 54px, 0 ink, 0 player CD, 12s CD */
+    {
+        GameState *g = game_create(NULL);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_WIND_RETURN));
+        const float sx = g->shrines[0].x;
+        const float sy = g->shrines[0].y;
+        const EntityId p = game_debug_spawn_projectile(g, PROJ_ARROW, sx + 45.0f, sy, -150.0f, 0);
+        g->player.ink = 50.0f;
+        g->player.gale_cd = 0.0f;
+        g->event_count = 0;
+
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_GALE));
+        TEST_ASSERT_TRUE(game_proj(g, p)->deflected);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 50.0f, g->player.ink);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->player.gale_cd);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->internal.wind_return_cd);
+
+        /* During 12s CD, another nearby projectile does not trigger Wind Return. */
+        const EntityId p2 = game_debug_spawn_projectile(g, PROJ_ARROW, sx - 45.0f, sy, 150.0f, 0);
+        g->event_count = 0;
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+        TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_GALE));
+        TEST_ASSERT_FALSE(game_proj(g, p2)->deflected);
+        game_destroy(g);
+    }
+}
+
+static void test_hook_acquisition_order_and_relic_rewards(void)
+{
+    /* 1. Acquisition order determinism: upgrades run before relics, and different acquisition
+     * orders preserve deterministic execution order. */
+    {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(99));
+        GameState *g = game_create(&cfg);
+        game_debug_start_wave(g, 0);
+        clear_test_entities(g);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_CHARGED_SEAL));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_THUNDER_DRUM));
+        g->event_count = 0;
+        const BrushInput cyc = {
+            .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .cyclone = true};
+        player_skills_step(g, &cyc);
+        /* Thunder Drum on_cyclone emits EV_STORM_ZAP before cast_cyclone emits EV_CYCLONE. */
+        int zap_i = -1;
+        int cyc_i = -1;
+        for (int32_t i = 0; i < g->event_count; ++i) {
+            if (g->events[i].type == EV_STORM_ZAP && zap_i < 0) {
+                zap_i = i;
+            }
+            if (g->events[i].type == EV_CYCLONE && cyc_i < 0) {
+                cyc_i = i;
+            }
+        }
+        TEST_ASSERT_TRUE(zap_i >= 0 && cyc_i >= 0 && zap_i < cyc_i);
+        game_destroy(g);
+
+        /* Two states with same acquisition order match hash; swapped acquisition order preserves
+         * distinct owned arrays deterministically. */
+        GameState *a = game_create(&cfg);
+        GameState *b = game_create(&cfg);
+        GameState *c = game_create(&cfg);
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(a, UPG_RICH_INK));
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(a, UPG_INFERNO));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(a, RELIC_INK_DYED_SHRINE));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(a, RELIC_WIND_RETURN));
+
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(b, UPG_RICH_INK));
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(b, UPG_INFERNO));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(b, RELIC_INK_DYED_SHRINE));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(b, RELIC_WIND_RETURN));
+
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(c, UPG_INFERNO));
+        TEST_ASSERT_TRUE(roguelike_grant_upgrade(c, UPG_RICH_INK));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(c, RELIC_WIND_RETURN));
+        TEST_ASSERT_TRUE(roguelike_grant_relic(c, RELIC_INK_DYED_SHRINE));
+
+        TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+        TEST_ASSERT_EQUAL_INT(UPG_INFERNO, c->run.upgrades[0].id);
+        TEST_ASSERT_EQUAL_INT(UPG_RICH_INK, c->run.upgrades[1].id);
+        TEST_ASSERT_EQUAL_INT(RELIC_WIND_RETURN, c->run.relics[0]);
+        TEST_ASSERT_EQUAL_INT(RELIC_INK_DYED_SHRINE, c->run.relics[1]);
+        game_destroy(c);
+        game_destroy(b);
+        game_destroy(a);
+    }
+
+    /* 2. Relic 3-choice offer, reroll, pick -> ACT_TRANSITION, 8-owned -> 1 choice, 9-owned ->
+     * FALLBACK + repair -> ACT_TRANSITION. */
+    {
+        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(777));
+        GameState *g = game_create(&cfg);
+        game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+        g->internal.wave_clear_is_boss = true;
+        g->phase = RUN_PHASE_REWARD;
+        g->phase_t = 0.0f;
+        rewards_generate_relic_offer(g);
+
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, g->run.reward.kind);
+        TEST_ASSERT_EQUAL_INT32(3, g->run.reward.choice_count);
+        TEST_ASSERT_FALSE(g->run.reward.repair_available);
+        TEST_ASSERT_NOT_EQUAL_INT32(g->run.reward.choice_ids[0], g->run.reward.choice_ids[1]);
+        TEST_ASSERT_NOT_EQUAL_INT32(g->run.reward.choice_ids[0], g->run.reward.choice_ids[2]);
+        TEST_ASSERT_NOT_EQUAL_INT32(g->run.reward.choice_ids[1], g->run.reward.choice_ids[2]);
+
+        /* Reroll consumes shared act reroll. */
+        const uint32_t s0 = g->run.reward.serial;
+        const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
+        game_step(g, NULL, &reroll);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.rerolls_left);
+        TEST_ASSERT_EQUAL_UINT32(s0 + 1u, g->run.reward.serial);
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, g->run.reward.kind);
+
+        /* Pick relic -> grants it, emits EV_REWARD_PICK with EVF_REWARD_RELIC, advances act. */
+        const RelicId picked = (RelicId)g->run.reward.choice_ids[0];
+        const GameCommand pick = {.type = CMD_PICK_REWARD, .arg = 0};
+        game_step(g, NULL, &pick);
+        TEST_ASSERT_TRUE(game_has_relic(g, picked));
+        TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, g->phase);
+        TEST_ASSERT_EQUAL_INT32(1, g->run.act_index);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.wave_index);
+        bool saw_relic_ev = false;
+        for (int32_t i = 0; i < g->event_count; ++i) {
+            if (g->events[i].type == EV_REWARD_PICK && g->events[i].value == (int32_t)picked &&
+                (g->events[i].flags & EVF_REWARD_RELIC) != 0) {
+                saw_relic_ev = true;
+            }
+        }
+        TEST_ASSERT_TRUE(saw_relic_ev);
+
+        /* Grant remaining relics up to 8 -> offer shows only the 1 unowned relic. */
+        RelicId last_unowned = RELIC_COUNT;
+        for (int r = 0; r < (int)RELIC_COUNT; ++r) {
+            if (!game_has_relic(g, (RelicId)r)) {
+                if (g->run.relic_count < (int32_t)RELIC_COUNT - 1) {
+                    TEST_ASSERT_TRUE(roguelike_grant_relic(g, (RelicId)r));
+                } else {
+                    last_unowned = (RelicId)r;
+                }
+            }
+        }
+        TEST_ASSERT_EQUAL_INT32((int32_t)RELIC_COUNT - 1, g->run.relic_count);
+        g->internal.wave_clear_is_boss = true;
+        g->phase = RUN_PHASE_REWARD;
+        rewards_generate_relic_offer(g);
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, g->run.reward.kind);
+        TEST_ASSERT_EQUAL_INT32(1, g->run.reward.choice_count);
+        TEST_ASSERT_EQUAL_INT32((int32_t)last_unowned, g->run.reward.choice_ids[0]);
+
+        /* Grant 9th relic -> REWARD_KIND_FALLBACK, repair advances to next act. */
+        TEST_ASSERT_TRUE(roguelike_grant_relic(g, last_unowned));
+        rewards_generate_relic_offer(g);
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_FALLBACK, g->run.reward.kind);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.reward.choice_count);
+        TEST_ASSERT_TRUE(g->run.reward.repair_available);
+
+        const int32_t act_before = g->run.act_index;
+        const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+        game_step(g, NULL, &repair);
+        TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, g->phase);
+        TEST_ASSERT_EQUAL_INT32(act_before + 1, g->run.act_index);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.wave_index);
+        game_destroy(g);
+    }
+}
+
+static void test_first_time_hints_all_8(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+
+    /* 1. HINT_STROKE on first PLAYING tick of Act 1 Wave 1 */
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
+    TEST_ASSERT_EQUAL_INT32((int32_t)HINT_STROKE, g->events[0].value);
+    /* Second call must NOT re-trigger HINT_STROKE. */
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
+
+    /* 2. HINT_CYCLONE_FIREBALL */
+    (void)game_debug_spawn_projectile(g, PROJ_FIREBALL, 300.0f, 300.0f, 100.0f, 0.0f);
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
+    TEST_ASSERT_EQUAL_INT32((int32_t)HINT_CYCLONE_FIREBALL, g->events[0].value);
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
+
+    /* 3. HINT_GALE_UMBRELLA */
+    (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 500.0f, 300.0f);
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
+    TEST_ASSERT_EQUAL_INT32((int32_t)HINT_GALE_UMBRELLA, g->events[0].value);
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
+
+    /* 4. HINT_INK_REGEN */
+    g->player.ink = 15.0f;
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
+    TEST_ASSERT_EQUAL_INT32((int32_t)HINT_INK_REGEN, g->events[0].value);
+    g->event_count = 0;
+    hints_check_tick(g);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
+
+    /* 5-8. Reaction hints: BLAZING, TEMPEST, THUNDERBURST, CATACLYSM */
+    const struct {
+        GameEventType ev_type;
+        HintId hint_id;
+    } react_cases[4] = {
+        {EV_IGNITE, HINT_REACT_BLAZING},
+        {EV_STORM_ZAP, HINT_REACT_TEMPEST},
+        {EV_THUNDERBURST, HINT_REACT_THUNDERBURST},
+        {EV_CATACLYSM, HINT_REACT_CATACLYSM},
+    };
+    for (int i = 0; i < 4; ++i) {
+        g->event_count = 0;
+        (void)game_push_event(
+            g, (GameEvent){.type = react_cases[i].ev_type, .x = 400.0f, .y = 300.0f});
+        hints_check_tick(g);
+        TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
+        TEST_ASSERT_EQUAL_INT32((int32_t)react_cases[i].hint_id, g->events[1].value);
+
+        /* Same event a second time must NOT re-trigger. */
+        g->event_count = 0;
+        (void)game_push_event(
+            g, (GameEvent){.type = react_cases[i].ev_type, .x = 400.0f, .y = 300.0f});
+        hints_check_tick(g);
+        TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
+    }
+
+    TEST_ASSERT_EQUAL_HEX32((UINT32_C(1) << HINT_COUNT) - 1u, g->internal.triggered_hints_mask);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -780,5 +1584,10 @@ int main(void)
     RUN_TEST(test_run_reward_candidate_shortage);
     RUN_TEST(test_run_reward_empty_filter_fallback);
     RUN_TEST(test_run_modifiers_calculation);
+    RUN_TEST(test_brush_styles_and_stacking);
+    RUN_TEST(test_p1_upgrades_all_16);
+    RUN_TEST(test_p1_relics_all_9);
+    RUN_TEST(test_hook_acquisition_order_and_relic_rewards);
+    RUN_TEST(test_first_time_hints_all_8);
     return UNITY_END();
 }

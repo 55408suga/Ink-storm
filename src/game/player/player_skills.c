@@ -5,6 +5,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdint.h>
 
 static void decay_timer(float *t)
 {
@@ -86,8 +87,8 @@ static void cast_cyclone(GameState *g)
 
     const float rad_cells = 15.5f * mods->cyclone_radius_mul;
     const float duration = 0.72f + mods->cyclone_duration_add;
-    float storm_add = 0.0f;
-    float storm_sustain = 0.0f;
+    float storm_add = mods->cyclone_storm_add;
+    float storm_sustain = mods->cyclone_storm_sustain;
     upgrades_fire_on_cyclone(g, g->player.cursor_x, g->player.cursor_y, &storm_add, &storm_sustain);
 
     const float dye[FLUID_MAX_CHANNELS] = {0.92f, 0.0f, storm_add, 0.0f};
@@ -95,7 +96,7 @@ static void cast_cyclone(GameState *g)
     register_active_cyclone(g, g->player.cursor_x, g->player.cursor_y,
                             13.0f * mods->cyclone_radius_mul, duration, storm_sustain);
 
-    /* Pull nearby Ink Orbs into the vortex center. */
+    /* Pull nearby (or all, with Ink Magnet Lv3) Ink Orbs into the vortex center. */
     const uint32_t hw = g->ecs.high_water;
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
@@ -111,7 +112,12 @@ static void cast_cyclone(GameState *g)
         const double dx = (double)g->player.cursor_x - (double)tr->x;
         const double dy = (double)g->player.cursor_y - (double)tr->y;
         const double d = hypot(dx, dy);
-        if (d < 220.0 && d > 1e-6) {
+        if (mods->cyclone_pulls_all_orbs) {
+            if (d > 1e-6) {
+                vel->vx += (float)(dx / d) * 360.0f;
+                vel->vy += (float)(dy / d) * 360.0f;
+            }
+        } else if (d < 220.0 && d > 1e-6) {
             vel->vx += (float)(dx / d) * 320.0f;
             vel->vy += (float)(dy / d) * 320.0f;
         }
@@ -127,10 +133,144 @@ static void cast_cyclone(GameState *g)
                              });
 }
 
+static void execute_gale(GameState *g, float origin_x, float origin_y, float base_gx, float base_gy)
+{
+    const RunModifiers *mods = &g->internal.mods;
+    const int32_t dir_count = mods->tengu_fan ? 3 : 1;
+    const float scale = mods->tengu_fan ? 0.6f : 1.0f;
+    static const float k_angles[3] = {0.0f, -0.4363323f, 0.4363323f};
+
+    uint8_t hit_enemy[ECS_MAX_ENTITIES] = {0};
+    uint8_t hit_proj[ECS_MAX_ENTITIES] = {0};
+
+    for (int32_t dir_i = 0; dir_i < dir_count; ++dir_i) {
+        float gx = base_gx;
+        float gy = base_gy;
+        if (dir_i > 0) {
+            const float ca = cosf(k_angles[dir_i]);
+            const float sa = sinf(k_angles[dir_i]);
+            gx = base_gx * ca - base_gy * sa;
+            gy = base_gx * sa + base_gy * ca;
+        }
+
+        const float gale_dye[FLUID_MAX_CHANNELS] = {
+            0.28f * scale,
+            mods->gale_fire_add * scale,
+            0.0f,
+            0.0f,
+        };
+        const float vel_mag = 52.0f * scale;
+        for (int k = 0; k < 12; ++k) {
+            const float dist = (float)k * 20.0f;
+            fluid_splat(&g->fluid, origin_x + gx * dist, origin_y + gy * dist, 4.6f, gx * vel_mag,
+                        gy * vel_mag, gale_dye);
+        }
+
+        const uint32_t hw = g->ecs.high_water;
+        for (uint32_t i = 0; i < hw; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index == ECS_INVALID_INDEX) {
+                continue;
+            }
+            const TransformComp *tr = game_transform(g, id);
+            VelocityComp *vel = game_velocity_mut(g, id);
+            if (tr == NULL || vel == NULL || tr->dissolving) {
+                continue;
+            }
+
+            const double ex = (double)tr->x - (double)origin_x;
+            const double ey = (double)tr->y - (double)origin_y;
+            const double d = hypot(ex, ey);
+            if (d <= 1e-6 || d >= 245.0) {
+                continue;
+            }
+            const float dot = (float)((ex * (double)gx + ey * (double)gy) / d);
+
+            if (ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
+                if (hit_enemy[id.index] != 0) {
+                    continue;
+                }
+                const EnemyComp *en = game_enemy(g, id);
+                const bool is_stopped_nue =
+                    en != NULL && en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1;
+                const float mass_mul =
+                    is_stopped_nue ? 0.55f : mass_gale_multiplier(vel->mass_tier);
+                const float kb_t = is_stopped_nue ? 0.90f : 1.15f;
+                StatusComp *st = game_status_mut(g, id);
+                if (mass_mul > 0.0f && st != NULL && dot > 0.35f) {
+                    const float imp = 560.0f * scale * mass_mul * mods->gale_impulse_mul;
+                    vel->vx += gx * imp;
+                    vel->vy += gy * imp;
+                    if (st->knockback_t < kb_t) {
+                        st->knockback_t = kb_t;
+                    }
+                    hit_enemy[id.index] = 1u;
+                }
+            } else if (ecs_has_mask(&g->ecs, id, COMP_PROJ) && d < 230.0 && dot > 0.25f) {
+                if (hit_proj[id.index] != 0) {
+                    continue;
+                }
+                ProjComp *proj = game_proj_mut(g, id);
+                if (proj != NULL) {
+                    const bool was_deflected = proj->deflected;
+                    proj->deflected = true;
+                    if (proj->kind == PROJ_STORM_ORB || proj->kind == PROJ_BOUNCE_ORB ||
+                        mods->deflect_auto_electrify) {
+                        proj->electrified = true;
+                    }
+                    vel->vx = gx * 480.0f;
+                    vel->vy = gy * 480.0f;
+                    hit_proj[id.index] = 1u;
+                    if (!was_deflected) {
+                        (void)game_push_event(g, (GameEvent){
+                                                     .type = EV_DEFLECT,
+                                                     .x = tr->x,
+                                                     .y = tr->y,
+                                                     .x2 = gx,
+                                                     .y2 = gy,
+                                                     .value = (int32_t)proj->kind,
+                                                     .flags = 0,
+                                                 });
+                    }
+                }
+            }
+        }
+
+        upgrades_fire_on_gale(g, origin_x, origin_y, gx, gy);
+
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_GALE,
+                                     .x = origin_x,
+                                     .y = origin_y,
+                                     .x2 = gx,
+                                     .y2 = gy,
+                                     .value = 0,
+                                     .flags = 0,
+                                 });
+    }
+}
+
+void player_skills_cast_free_gale(GameState *g, float origin_x, float origin_y, float dir_x,
+                                  float dir_y)
+{
+    if (g == NULL) {
+        return;
+    }
+    float gx = 1.0f;
+    float gy = 0.0f;
+    const float len = hypotf(dir_x, dir_y);
+    if (len > 1e-6f) {
+        gx = dir_x / len;
+        gy = dir_y / len;
+    }
+    execute_gale(g, origin_x, origin_y, gx, gy);
+}
+
 static void cast_gale(GameState *g)
 {
     const RunModifiers *mods = &g->internal.mods;
-    const float cost = g->player.surge_t > 0.0f ? 16.0f * 0.5f : 16.0f;
+    const float base_cost = 16.0f + mods->gale_cost_add;
+    const float cost = g->player.surge_t > 0.0f ? base_cost * 0.5f : base_cost;
     if (g->player.gale_cd > 0.0f || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
@@ -167,80 +307,7 @@ static void cast_gale(GameState *g)
         }
     }
 
-    static const float k_gale_dye[FLUID_MAX_CHANNELS] = {0.28f, 0.0f, 0.0f, 0.0f};
-    for (int k = 0; k < 12; ++k) {
-        const float dist = (float)k * 20.0f;
-        fluid_splat(&g->fluid, g->player.cursor_x + gx * dist, g->player.cursor_y + gy * dist, 4.6f,
-                    gx * 52.0f, gy * 52.0f, k_gale_dye);
-    }
-
-    const uint32_t hw = g->ecs.high_water;
-    for (uint32_t i = 0; i < hw; ++i) {
-        const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index == ECS_INVALID_INDEX) {
-            continue;
-        }
-        const TransformComp *tr = game_transform(g, id);
-        VelocityComp *vel = game_velocity_mut(g, id);
-        if (tr == NULL || vel == NULL || tr->dissolving) {
-            continue;
-        }
-
-        const double ex = (double)tr->x - (double)g->player.cursor_x;
-        const double ey = (double)tr->y - (double)g->player.cursor_y;
-        const double d = hypot(ex, ey);
-        if (d <= 1e-6 || d >= 245.0) {
-            continue;
-        }
-        const float dot = (float)((ex * (double)gx + ey * (double)gy) / d);
-
-        if (ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
-            const float mass_mul = mass_gale_multiplier(vel->mass_tier);
-            StatusComp *st = game_status_mut(g, id);
-            if (mass_mul > 0.0f && st != NULL && dot > 0.35f) {
-                const float imp = 560.0f * mass_mul * mods->gale_impulse_mul;
-                vel->vx += gx * imp;
-                vel->vy += gy * imp;
-                if (st->knockback_t < 1.15f) {
-                    st->knockback_t = 1.15f;
-                }
-            }
-        } else if (ecs_has_mask(&g->ecs, id, COMP_PROJ) && d < 230.0 && dot > 0.25f) {
-            ProjComp *proj = game_proj_mut(g, id);
-            if (proj != NULL) {
-                const bool was_deflected = proj->deflected;
-                proj->deflected = true;
-                if (proj->kind == PROJ_STORM_ORB) {
-                    proj->electrified = true;
-                }
-                vel->vx = gx * 480.0f;
-                vel->vy = gy * 480.0f;
-                if (!was_deflected) {
-                    (void)game_push_event(g, (GameEvent){
-                                                 .type = EV_DEFLECT,
-                                                 .x = tr->x,
-                                                 .y = tr->y,
-                                                 .x2 = gx,
-                                                 .y2 = gy,
-                                                 .value = (int32_t)proj->kind,
-                                                 .flags = 0,
-                                             });
-                }
-            }
-        }
-    }
-
-    upgrades_fire_on_gale(g, g->player.cursor_x, g->player.cursor_y, gx, gy);
-
-    (void)game_push_event(g, (GameEvent){
-                                 .type = EV_GALE,
-                                 .x = g->player.cursor_x,
-                                 .y = g->player.cursor_y,
-                                 .x2 = gx,
-                                 .y2 = gy,
-                                 .value = 0,
-                                 .flags = 0,
-                             });
+    execute_gale(g, g->player.cursor_x, g->player.cursor_y, gx, gy);
 }
 
 void player_skills_step(GameState *g, const BrushInput *valid_in)
@@ -304,16 +371,22 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
             const float surge_cost_mul = g->player.surge_t > 0.0f ? 0.5f : 1.0f;
             const float raw_cost =
                 (0.16f + mdist * 0.028f) * surge_cost_mul * mods->stroke_cost_mul;
-            if (g->player.ink > 0.5f) {
-                const float spent = fminf(g->player.ink, raw_cost);
-                g->player.ink -= spent;
-                if (g->player.ink < 0.0f) {
-                    g->player.ink = 0.0f;
+            const bool free_dry = mods->dry_zero_cost && g->player.ink < 20.0f;
+            if (g->player.ink > 0.5f || free_dry) {
+                if (!free_dry) {
+                    const float spent = fminf(g->player.ink, raw_cost);
+                    g->player.ink -= spent;
+                    if (g->player.ink < 0.0f) {
+                        g->player.ink = 0.0f;
+                    }
                 }
                 const bool dry = g->player.ink < 20.0f;
                 g->player.dry = dry;
 
-                const float state_force = dry ? 0.46f : (g->player.surge_t > 0.0f ? 1.18f : 1.0f);
+                const float dry_force =
+                    mods->dry_force_override > 0.0f ? mods->dry_force_override : 0.46f;
+                const float state_force =
+                    dry ? dry_force : (g->player.surge_t > 0.0f ? 1.18f : 1.0f);
                 const float force_scale = state_force * mods->brush_force_mul;
                 const float ink_scale = dry ? 0.34f : 1.0f;
                 const float base_rad = dry ? 2.8f : (g->player.surge_t > 0.0f ? 4.2f : 3.7f);
@@ -327,6 +400,8 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                 const float ink_amt = ink_clampf(0.26f + mdist * 0.011f, 0.26f, 0.65f) /
                                       (float)steps * 2.35f * ink_scale;
                 const float dye[FLUID_MAX_CHANNELS] = {ink_amt, 0.0f, 0.0f, 0.0f};
+                const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+                const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
 
                 for (int k = 1; k <= steps; ++k) {
                     if (dry && (((int)(g->ticks & 1u) + k) % 2 == 0)) {
@@ -336,8 +411,32 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                     const float px = (float)((double)valid_in->pmx + mdx * t);
                     const float py = (float)((double)valid_in->pmy + mdy * t);
                     fluid_splat(&g->fluid, px, py, rad, fx, fy, dye);
+                    if (mods->twin_brush) {
+                        fluid_splat(&g->fluid, 2.0f * sx - px, 2.0f * sy - py, rad, -fx, -fy, dye);
+                    }
                 }
                 g->player.painting = true;
+
+                if (!dry && mods->stroke_ember_interval > 0.0f) {
+                    const float interval = mods->stroke_ember_interval;
+                    const float fire_amt = 0.5f * mods->stroke_ember_mul;
+                    const float edye[FLUID_MAX_CHANNELS] = {0.0f, fire_amt, 0.0f, 0.0f};
+                    g->internal.ember_tip_dist += mdist;
+                    int32_t bursts = 0;
+                    while (g->internal.ember_tip_dist >= interval && bursts < 8) {
+                        g->internal.ember_tip_dist -= interval;
+                        fluid_splat(&g->fluid, valid_in->mx, valid_in->my, 2.5f, 0.0f, 0.0f, edye);
+                        if (mods->twin_brush) {
+                            fluid_splat(&g->fluid, 2.0f * sx - valid_in->mx,
+                                        2.0f * sy - valid_in->my, 2.5f, 0.0f, 0.0f, edye);
+                        }
+                        ++bursts;
+                    }
+                    if (g->internal.ember_tip_dist >= interval) {
+                        g->internal.ember_tip_dist = fmodf(g->internal.ember_tip_dist, interval);
+                    }
+                }
+
                 upgrades_fire_on_stroke(g, valid_in->mx, valid_in->my, fx, fy, mdist);
             } else {
                 g->player.dry = true;
