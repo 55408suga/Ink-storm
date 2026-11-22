@@ -30,11 +30,13 @@ typedef enum { SEAL_HAKUBUN = 0, SEAL_SHUBUN } SealStyle;
 void render_set_blend(RenderState *r, int mode);
 void render_reset_blend(RenderState *r);
 
-/* Paper & background cache (paper.c) */
+/* Paper, background cache & terrain (paper.c) */
 void render_paper_init(RenderState *r);
 void render_paper_close(RenderState *r);
 void render_paper_draw_base(RenderState *r, int act_index);
 void render_paper_draw_bg(RenderState *r, int act_index);
+void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index);
+void render_paper_draw_weather(RenderState *r, const GameState *g, int act_index);
 
 /* Fluid visualization (fluid_view.c) */
 void render_fluid_init(RenderState *r);
@@ -67,11 +69,18 @@ void render_vfx_draw_world(RenderState *r, const GameState *g);
 void render_vfx_draw_ui(RenderState *r, const GameState *g);
 Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
 
-/* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, xray.c) */
+/* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, ui_lobby.c, ui_shop.c, ui_pause.c,
+ * ui_settings.c, xray.c) */
 void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_bokuan_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_xray(const RenderState *r, const GameState *g);
 

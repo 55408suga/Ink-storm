@@ -15,6 +15,16 @@ static bool is_paused_phase(RunPhase phase)
     return phase == RUN_PHASE_REWARD || phase == RUN_PHASE_VICTORY || phase == RUN_PHASE_GAME_OVER;
 }
 
+static void log_optional_asset(const char *label, const char *rel_path, const char *fallback)
+{
+    char resolved[PATH_MAX];
+    if (app_resolve_asset_path(rel_path, resolved, sizeof resolved)) {
+        printf("%s: assets/%s found\n", label, rel_path);
+    } else {
+        printf("%s: unavailable (%s)\n", label, fallback);
+    }
+}
+
 int app_run_headless_smoke(GameState *game, AudioState *audio)
 {
     if (game == NULL || audio == NULL) {
@@ -57,12 +67,12 @@ int app_run_headless_smoke(GameState *game, AudioState *audio)
         return EXIT_FAILURE;
     }
 
-    char font_path[PATH_MAX];
-    if (app_resolve_asset_path("fonts/ui_mincho.ttf", font_path, sizeof font_path)) {
-        puts("Font: assets/fonts/ui_mincho.ttf found");
-    } else {
-        puts("Font: unavailable (ASCII fallback)");
-    }
+    log_optional_asset("Font", "fonts/ui_mincho.ttf", "ASCII fallback");
+    log_optional_asset("TitleFont", "fonts/title_brush.ttf", "UI Mincho fallback");
+    log_optional_asset("BGM(lobby)", "audio/bgm_lobby.ogg", "procedural fallback");
+    log_optional_asset("BGM(battle)", "audio/bgm_battle.ogg", "procedural fallback");
+    log_optional_asset("BGM(boss)", "audio/bgm_boss.ogg", "procedural fallback");
+    log_optional_asset("BGM(victory)", "audio/bgm_victory.ogg", "procedural fallback");
 
     printf("Headless smoke passed. ticks=%" PRIu64 " hash=0x%016" PRIx64 "\n", game->ticks,
            game_hash(game));

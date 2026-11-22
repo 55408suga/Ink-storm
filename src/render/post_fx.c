@@ -48,6 +48,7 @@ void render_post_init(RenderState *r, const RenderOptions *opt)
     r->post_shader = (Shader){0};
     r->post_res_loc = -1;
     r->scene = (RenderTexture2D){0};
+    r->post_enabled = false;
 
     const bool use_post = opt == NULL || opt->use_post;
     if (!use_post) {
@@ -78,12 +79,21 @@ void render_post_init(RenderState *r, const RenderOptions *opt)
 
     r->post_shader = shader;
     r->scene = scene;
+    r->post_enabled = true;
     r->post_res_loc = GetShaderLocation(shader, "resolution");
     if (r->post_res_loc >= 0) {
         const Vector2 res = {(float)INK_SCREEN_W, (float)INK_SCREEN_H};
         SetShaderValue(shader, r->post_res_loc, &res, SHADER_UNIFORM_VEC2);
     }
     TraceLog(LOG_INFO, "INKSTORM: post shader enabled");
+}
+
+void render_set_post_enabled(RenderState *r, bool enabled)
+{
+    if (r == NULL) {
+        return;
+    }
+    r->post_enabled = enabled && r->post_shader.id != 0 && r->scene.id != 0;
 }
 
 void render_post_close(RenderState *r)
@@ -100,4 +110,5 @@ void render_post_close(RenderState *r)
         r->post_shader = (Shader){0};
     }
     r->post_res_loc = -1;
+    r->post_enabled = false;
 }

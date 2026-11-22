@@ -31,6 +31,56 @@ static void draw_eye_brush(RenderState *r, Vector2 at, float size, PaletteId pal
     ink_fill_poly(r, pts, 4, pal_color_alpha(pal, alpha));
 }
 
+static void draw_elite_rim(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                           uint32_t seed)
+{
+    if (en == NULL || !en->is_elite) {
+        return;
+    }
+    const uint32_t mask = en->elite_flags & ELITE_ALL_MASK;
+    if (mask == 0u) {
+        return;
+    }
+    PaletteId pals[4];
+    int count = 0;
+    if ((mask & ELITE_RIGID) != 0u) {
+        pals[count++] = PAL_KIN;
+    }
+    if ((mask & ELITE_INK_REPEL) != 0u) {
+        pals[count++] = PAL_GOFUN;
+    }
+    if ((mask & ELITE_FIREPROOF) != 0u) {
+        pals[count++] = PAL_SHU;
+    }
+    if ((mask & ELITE_STORMPROOF) != 0u) {
+        pals[count++] = PAL_AO;
+    }
+    if (count == 0) {
+        return;
+    }
+
+    const Vector2 c = {tr->x, tr->y};
+    const float rad = (tr->radius > 6.0f ? tr->radius : 16.0f) + 6.5f;
+    const BrushProfile prof = {.w_max = 2.4f,
+                               .w_min_ratio = 0.40f,
+                               .entry = 0.04f,
+                               .exit = 0.04f,
+                               .dry = 0.0f,
+                               .seed = seed + 99u};
+    if (count == 1) {
+        /* Continuous solid ring (never dashed, distinct from crimson telegraph warnings) */
+        ink_arc_stroke(r, c, rad, 0.0f, k_ent_two_pi + 0.08f, prof,
+                       (InkTone){.color = pals[0], .alpha = 0.94f});
+    } else {
+        const float step = k_ent_two_pi / (float)count;
+        for (int i = 0; i < count; ++i) {
+            const float a0 = (float)i * step;
+            const float a1 = a0 + step + 0.08f;
+            ink_arc_stroke(r, c, rad, a0, a1, prof, (InkTone){.color = pals[i], .alpha = 0.94f});
+        }
+    }
+}
+
 static void draw_shrine(RenderState *r, const ShrineState *s, uint64_t ticks, int act_index)
 {
     const uint64_t boil = ticks / 6u;
@@ -49,11 +99,9 @@ static void draw_shrine(RenderState *r, const ShrineState *s, uint64_t ticks, in
     };
     ink_knockout(r, ko_poly, 8, 4.0f, act_index);
 
-    /* Base stone shadow wash */
     ink_wash(r, (Vector2){cx, cy + 22.0f}, 34.0f, 13.0f, 0.04f,
              (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.55f}, 2, seed + 1u);
 
-    /* Gofun sanctuary walls (asymmetric hand-brushed trapezoid) */
     const Vector2 wall[4] = {
         {cx - 21.0f, cy - 8.0f},
         {cx + 23.0f, cy - 9.0f},
@@ -65,45 +113,44 @@ static void draw_shrine(RenderState *r, const ShrineState *s, uint64_t ticks, in
              (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.22f}, 2, seed + 2u);
     ink_outline(r, wall, 4, true, 3.5f, k_shade_dir, seed + 3u);
 
-    /* Curved sweeping roof stroke */
     const Vector2 roof[5] = {
         {cx - 42.0f, cy - 8.0f},  {cx - 20.0f, cy - 22.0f}, {cx + 1.0f, cy - 31.0f},
         {cx + 22.0f, cy - 21.0f}, {cx + 44.0f, cy - 6.0f},
     };
-    const BrushProfile roof_prof = {.w_max = 8.5f,
-                                    .w_min_ratio = 0.25f,
-                                    .entry = 0.14f,
-                                    .exit = 0.18f,
-                                    .dry = 0.25f,
-                                    .seed = seed + 4u};
-    ink_stroke(r, roof, 5, roof_prof, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f}, 1.0f);
+    ink_stroke(r, roof, 5,
+               (BrushProfile){.w_max = 8.5f,
+                              .w_min_ratio = 0.25f,
+                              .entry = 0.14f,
+                              .exit = 0.18f,
+                              .dry = 0.25f,
+                              .seed = seed + 4u},
+               (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f}, 1.0f);
 
-    /* Secondary eaves ridge */
     const Vector2 eave[3] = {{cx - 32.0f, cy - 7.0f}, {cx, cy - 11.0f}, {cx + 33.0f, cy - 6.0f}};
-    const BrushProfile eave_prof = {.w_max = 3.6f,
-                                    .w_min_ratio = 0.32f,
-                                    .entry = 0.15f,
-                                    .exit = 0.20f,
-                                    .dry = 0.15f,
-                                    .seed = seed + 5u};
-    ink_stroke(r, eave, 3, eave_prof, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.90f}, 1.0f);
+    ink_stroke(r, eave, 3,
+               (BrushProfile){.w_max = 3.6f,
+                              .w_min_ratio = 0.32f,
+                              .entry = 0.15f,
+                              .exit = 0.20f,
+                              .dry = 0.15f,
+                              .seed = seed + 5u},
+               (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.90f}, 1.0f);
 
-    /* Shimenawa rope line under the eaves */
     const Vector2 rope[4] = {
         {cx - 19.0f, cy - 4.0f},
         {cx - 6.0f, cy + 1.0f},
         {cx + 7.0f, cy + 1.5f},
         {cx + 20.0f, cy - 4.5f},
     };
-    const BrushProfile rope_prof = {.w_max = 2.6f,
-                                    .w_min_ratio = 0.35f,
-                                    .entry = 0.15f,
-                                    .exit = 0.20f,
-                                    .dry = 0.10f,
-                                    .seed = seed + 6u};
-    ink_stroke(r, rope, 4, rope_prof, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.85f}, 1.0f);
+    ink_stroke(r, rope, 4,
+               (BrushProfile){.w_max = 2.6f,
+                              .w_min_ratio = 0.35f,
+                              .entry = 0.15f,
+                              .exit = 0.20f,
+                              .dry = 0.10f,
+                              .seed = seed + 6u},
+               (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.85f}, 1.0f);
 
-    /* Sacred vermilion flame under the roof (distinct from round lantern yokai) */
     if (s->hp > 0) {
         const float flicker =
             sinf((float)ticks * 0.22f) * (r->shrine_flicker_t > 0.0f ? 4.5f : 1.2f);
@@ -116,7 +163,6 @@ static void draw_shrine(RenderState *r, const ShrineState *s, uint64_t ticks, in
                      flame_h * 0.58f, flame_w * 0.54f, pal_color_alpha(PAL_SHU_HOT, 0.94f));
     }
 
-    /* Invulnerability / hit flicker flash */
     if (s->invuln_t > 0.0f && ((ticks / 3u) & 1u) == 0u) {
         ink_outline_tone(r, ko_poly, 8, true, 3.0f, k_shade_dir,
                          (InkTone){.color = PAL_GOFUN, .alpha = 0.85f}, seed + 9u);
@@ -157,33 +203,36 @@ static void draw_status_overlays(RenderState *r, const TransformComp *tr, const 
                 {c.x + rad * 0.3f, c.y - rad * 0.3f},
                 {c.x + rad * 0.9f, c.y - rad * 0.75f},
             };
-            const BrushProfile zp = {.w_max = 2.8f,
-                                     .w_min_ratio = 0.35f,
-                                     .entry = 0.15f,
-                                     .exit = 0.25f,
-                                     .dry = 0.0f,
-                                     .seed = seed + 41u};
-            ink_stroke(r, bolt, 4, zp, (InkTone){.color = PAL_AO, .alpha = 0.90f}, 1.0f);
-            const BrushProfile zc = {.w_max = 1.4f,
-                                     .w_min_ratio = 0.40f,
-                                     .entry = 0.1f,
-                                     .exit = 0.1f,
-                                     .dry = 0.0f,
-                                     .seed = seed + 42u};
-            ink_stroke(r, bolt, 4, zc, (InkTone){.color = PAL_AO_HOT, .alpha = 0.95f}, 1.0f);
+            ink_stroke(r, bolt, 4,
+                       (BrushProfile){.w_max = 2.8f,
+                                      .w_min_ratio = 0.35f,
+                                      .entry = 0.15f,
+                                      .exit = 0.25f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 41u},
+                       (InkTone){.color = PAL_AO, .alpha = 0.90f}, 1.0f);
+            ink_stroke(r, bolt, 4,
+                       (BrushProfile){.w_max = 1.4f,
+                                      .w_min_ratio = 0.40f,
+                                      .entry = 0.1f,
+                                      .exit = 0.1f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 42u},
+                       (InkTone){.color = PAL_AO_HOT, .alpha = 0.95f}, 1.0f);
         }
     }
 
     if (hp != NULL && hp->flash_t > 0.0f) {
         const Vector2 slash[2] = {{c.x - rad * 0.85f, c.y - rad * 0.55f},
                                   {c.x + rad * 0.85f, c.y + rad * 0.55f}};
-        const BrushProfile fp = {.w_max = 4.5f,
-                                 .w_min_ratio = 0.25f,
-                                 .entry = 0.15f,
-                                 .exit = 0.35f,
-                                 .dry = 0.2f,
-                                 .seed = seed + 45u};
-        ink_stroke(r, slash, 2, fp, (InkTone){.color = PAL_GOFUN, .alpha = 0.92f}, 1.0f);
+        ink_stroke(r, slash, 2,
+                   (BrushProfile){.w_max = 4.5f,
+                                  .w_min_ratio = 0.25f,
+                                  .entry = 0.15f,
+                                  .exit = 0.35f,
+                                  .dry = 0.2f,
+                                  .seed = seed + 45u},
+                   (InkTone){.color = PAL_GOFUN, .alpha = 0.92f}, 1.0f);
         ink_stroke(r, slash, 2,
                    (BrushProfile){.w_max = 2.0f,
                                   .w_min_ratio = 0.3f,
@@ -205,7 +254,6 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
     const float ca = cosf(ang);
     const float sa = sinf(ang);
 
-    /* Slender asymmetric hooded archer silhouette */
     const Vector2 body[7] = {
         {cx - rad * 0.55f, cy - rad * 0.95f}, {cx + rad * 0.32f, cy - rad * 1.05f},
         {cx + rad * 0.72f, cy - rad * 0.25f}, {cx + rad * 0.55f, cy + rad * 0.92f},
@@ -213,6 +261,7 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
         {cx - rad * 0.80f, cy - rad * 0.18f},
     };
     ink_knockout(r, body, 7, 3.0f, act_index);
+    draw_elite_rim(r, tr, en, seed);
     ink_wash(r, (Vector2){cx, cy - rad * 0.15f}, rad * 0.72f, rad * 0.92f, 0.12f,
              (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.52f * alpha}, 2, seed + 1u);
     ink_wash(r, (Vector2){cx - rad * 0.1f, cy - rad * 0.52f}, rad * 0.52f, rad * 0.42f, -0.15f,
@@ -220,7 +269,6 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
     ink_outline_tone(r, body, 7, true, 3.0f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, seed + 3u);
 
-    /* Slender bow bent more during windup */
     const float pull = en != NULL ? ink_clampf(en->windup, 0.0f, 1.0f) : 0.0f;
     const float bow_r = rad * 1.15f;
     const Vector2 bow[4] = {
@@ -231,16 +279,16 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
          cy + sa * (bow_r * (1.05f - 0.15f * pull)) - ca * (bow_r * 0.35f)},
         {cx + ca * (bow_r * 0.45f) + sa * bow_r, cy + sa * (bow_r * 0.45f) - ca * bow_r},
     };
-    const BrushProfile bp = {.w_max = 3.2f,
-                             .w_min_ratio = 0.25f,
-                             .entry = 0.15f,
-                             .exit = 0.30f,
-                             .dry = 0.2f,
-                             .seed = seed + 4u};
-    ink_stroke(r, bow, 4, bp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.95f * alpha}, 1.0f);
+    ink_stroke(r, bow, 4,
+               (BrushProfile){.w_max = 3.2f,
+                              .w_min_ratio = 0.25f,
+                              .entry = 0.15f,
+                              .exit = 0.30f,
+                              .dry = 0.2f,
+                              .seed = seed + 4u},
+               (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.95f * alpha}, 1.0f);
 
     if (pull > 0.05f) {
-        /* Drawn arrow telegraph */
         const Vector2 arr[2] = {
             {cx - ca * (rad * 0.3f * pull), cy - sa * (rad * 0.3f * pull)},
             {cx + ca * (rad * 1.35f), cy + sa * (rad * 1.35f)},
@@ -260,7 +308,8 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
 }
 
 static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const EnemyComp *en,
-                               uint32_t seed, uint64_t ticks, int act_index, float alpha)
+                               uint32_t seed, uint64_t ticks, int act_index, bool is_storm,
+                               float alpha)
 {
     const float cx = tr->x;
     const float cy = tr->y;
@@ -269,7 +318,6 @@ static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const En
     const float pulse =
         0.85f + 0.15f * sinf((float)ticks * 0.14f + (float)(seed & 15u)) + 0.28f * pull;
 
-    /* Asymmetric torn chochin paper lantern silhouette */
     const Vector2 body[8] = {
         {cx - rad * 0.42f, cy - rad * 1.08f}, {cx + rad * 0.48f, cy - rad * 1.02f},
         {cx + rad * 0.96f, cy - rad * 0.32f}, {cx + rad * 0.88f, cy + rad * 0.56f},
@@ -277,15 +325,17 @@ static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const En
         {cx - rad * 0.92f, cy + rad * 0.40f}, {cx - rad * 0.84f, cy - rad * 0.42f},
     };
     ink_knockout(r, body, 8, 3.0f, act_index);
+    draw_elite_rim(r, tr, en, seed);
     ink_fill_poly(r, body, 8, pal_color_alpha(PAL_GOFUN, 0.88f * alpha));
 
-    /* Inner vermilion flame glow (two-layer fire tone) */
-    ink_wash(r, (Vector2){cx, cy + 1.0f}, rad * 0.56f * pulse, rad * 0.62f * pulse, 0.08f,
-             (InkTone){.color = PAL_SHU, .alpha = 0.68f * alpha}, 2, seed + 1u);
-    ink_wash(r, (Vector2){cx, cy + 1.0f}, rad * 0.30f * pulse, rad * 0.34f * pulse, -0.1f,
-             (InkTone){.color = PAL_SHU_HOT, .alpha = 0.88f * alpha}, 1, seed + 2u);
+    const PaletteId glow_outer = is_storm ? PAL_AO : PAL_SHU;
+    const PaletteId glow_hot = is_storm ? PAL_AO_HOT : PAL_SHU_HOT;
 
-    /* Curved lantern ribs */
+    ink_wash(r, (Vector2){cx, cy + 1.0f}, rad * 0.56f * pulse, rad * 0.62f * pulse, 0.08f,
+             (InkTone){.color = glow_outer, .alpha = 0.68f * alpha}, 2, seed + 1u);
+    ink_wash(r, (Vector2){cx, cy + 1.0f}, rad * 0.30f * pulse, rad * 0.34f * pulse, -0.1f,
+             (InkTone){.color = glow_hot, .alpha = 0.88f * alpha}, 1, seed + 2u);
+
     for (int rib = -1; rib <= 1; ++rib) {
         const float ry = cy + (float)rib * rad * 0.46f;
         const Vector2 pts[3] = {
@@ -303,20 +353,38 @@ static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const En
                    (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.72f * alpha}, 1.0f);
     }
 
-    /* Torn mouth and tongue flick */
-    const Vector2 tongue[3] = {
-        {cx - 2.0f, cy + rad * 0.35f},
-        {cx + 6.0f, cy + rad * 0.78f},
-        {cx + 12.0f + pull * 5.0f, cy + rad * 1.18f},
-    };
-    ink_stroke(r, tongue, 3,
-               (BrushProfile){.w_max = 3.8f,
-                              .w_min_ratio = 0.22f,
-                              .entry = 0.1f,
-                              .exit = 0.45f,
-                              .dry = 0.1f,
-                              .seed = seed + 15u},
-               (InkTone){.color = PAL_SHU, .alpha = 0.92f * alpha}, 1.0f);
+    if (is_storm) {
+        /* Flickering short azure lightning spark */
+        const float jitter = ((ticks / 4u + seed) & 1u) ? 4.0f : -4.0f;
+        const Vector2 spark[4] = {
+            {cx - rad * 0.5f, cy + rad * 0.35f},
+            {cx - 2.0f, cy + rad * 0.65f + jitter * 0.4f},
+            {cx + 5.0f, cy + rad * 0.55f},
+            {cx + rad * 0.65f, cy + rad * 1.05f + pull * 4.0f},
+        };
+        ink_stroke(r, spark, 4,
+                   (BrushProfile){.w_max = 2.6f,
+                                  .w_min_ratio = 0.30f,
+                                  .entry = 0.1f,
+                                  .exit = 0.35f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 16u},
+                   (InkTone){.color = PAL_AO_HOT, .alpha = 0.94f * alpha}, 1.0f);
+    } else {
+        const Vector2 tongue[3] = {
+            {cx - 2.0f, cy + rad * 0.35f},
+            {cx + 6.0f, cy + rad * 0.78f},
+            {cx + 12.0f + pull * 5.0f, cy + rad * 1.18f},
+        };
+        ink_stroke(r, tongue, 3,
+                   (BrushProfile){.w_max = 3.8f,
+                                  .w_min_ratio = 0.22f,
+                                  .entry = 0.1f,
+                                  .exit = 0.45f,
+                                  .dry = 0.1f,
+                                  .seed = seed + 15u},
+                   (InkTone){.color = PAL_SHU, .alpha = 0.92f * alpha}, 1.0f);
+    }
 
     ink_outline_tone(r, body, 8, true, 3.0f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, seed + 3u);
@@ -333,7 +401,6 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
     const float pull = en != NULL ? ink_clampf(en->windup, 0.0f, 1.0f) : 0.0f;
     const float squash = 1.0f - 0.16f * pull;
 
-    /* Karakasa umbrella canopy + single geta leg */
     const Vector2 canopy[7] = {
         {cx - rad * 1.12f, cy + rad * 0.10f * squash},
         {cx - rad * 0.65f, cy - rad * 0.72f * squash},
@@ -344,10 +411,10 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
         {cx - rad * 0.36f, cy + rad * 0.36f * squash},
     };
     ink_knockout(r, canopy, 7, 3.2f, act_index);
+    draw_elite_rim(r, tr, en, seed);
     ink_wash(r, (Vector2){cx, cy - rad * 0.22f}, rad * 0.98f, rad * 0.62f * squash, -0.08f,
              (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.58f * alpha}, 2, seed + 1u);
 
-    /* Radial ribs */
     const Vector2 apex = {cx + rad * 0.04f, cy - rad * 1.04f * squash};
     for (int i = -2; i <= 2; ++i) {
         const Vector2 rib[2] = {apex, {cx + (float)i * rad * 0.44f, cy + rad * 0.22f * squash}};
@@ -363,7 +430,6 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
     ink_outline_tone(r, canopy, 7, true, 3.5f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, seed + 3u);
 
-    /* Single hopping leg */
     const Vector2 leg[3] = {
         {cx - 1.0f, cy + rad * 0.24f},
         {cx - 4.0f, cy + rad * 0.78f},
@@ -378,9 +444,172 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
                               .seed = seed + 28u},
                (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.94f * alpha}, 1.0f);
 
-    /* One bold calligraphic eye */
     draw_eye_brush(r, (Vector2){cx + rad * 0.08f, cy - rad * 0.24f}, 7.0f, PAL_GOFUN, alpha);
     draw_eye_brush(r, (Vector2){cx + rad * 0.10f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
+}
+
+static void draw_enemy_kamaitachi(RenderState *r, const TransformComp *tr, const VelocityComp *vel,
+                                  const EnemyComp *en, uint32_t seed, int act_index, float alpha)
+{
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float rad = tr->radius > 6.0f ? tr->radius : 16.0f;
+    const float vx = vel != NULL ? vel->vx : cosf(tr->facing) * 120.0f;
+    const float vy = vel != NULL ? vel->vy : sinf(tr->facing) * 120.0f;
+    const float sp = sqrtf(vx * vx + vy * vy);
+    const Vector2 dir = sp > 1.0f ? (Vector2){vx / sp, vy / sp} : (Vector2){1.0f, 0.0f};
+    const Vector2 side = {-dir.y, dir.x};
+
+    /* 0.3s pale-ink trailing afterimage behind motion */
+    const Vector2 tail[4] = {
+        {cx - dir.x * rad * 0.4f, cy - dir.y * rad * 0.4f},
+        {cx - dir.x * rad * 1.4f + side.x * 7.0f, cy - dir.y * rad * 1.4f + side.y * 7.0f},
+        {cx - dir.x * rad * 2.4f - side.x * 5.0f, cy - dir.y * rad * 2.4f - side.y * 5.0f},
+        {cx - dir.x * rad * 3.1f, cy - dir.y * rad * 3.1f},
+    };
+    ink_stroke(r, tail, 4,
+               (BrushProfile){.w_max = 5.0f,
+                              .w_min_ratio = 0.18f,
+                              .entry = 0.08f,
+                              .exit = 0.65f,
+                              .dry = 0.55f,
+                              .seed = seed + 1u},
+               (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.58f * alpha}, 1.0f);
+
+    /* Knockout polygon around sleek crescent body */
+    const Vector2 ko[6] = {
+        {cx + dir.x * rad * 1.15f, cy + dir.y * rad * 1.15f},
+        {cx + side.x * rad * 0.95f, cy + side.y * rad * 0.95f},
+        {cx - dir.x * rad * 0.95f + side.x * rad * 0.4f,
+         cy - dir.y * rad * 0.95f + side.y * rad * 0.4f},
+        {cx - dir.x * rad * 1.05f, cy - dir.y * rad * 1.05f},
+        {cx - dir.x * rad * 0.7f - side.x * rad * 0.6f,
+         cy - dir.y * rad * 0.7f - side.y * rad * 0.6f},
+        {cx - side.x * rad * 0.85f, cy - side.y * rad * 0.85f},
+    };
+    ink_knockout(r, ko, 6, 3.0f, act_index);
+    draw_elite_rim(r, tr, en, seed);
+
+    ink_wash(r, (Vector2){cx, cy}, rad * 0.80f, rad * 0.52f, atan2f(dir.y, dir.x),
+             (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.48f * alpha}, 2, seed + 2u);
+
+    /* 3 sharp sickle flick strokes (w_max = 3.0px) */
+    for (int k = -1; k <= 1; ++k) {
+        const float off = (float)k * rad * 0.42f;
+        const Vector2 sickle[3] = {
+            {cx - dir.x * rad * 0.85f + side.x * (off - 3.0f),
+             cy - dir.y * rad * 0.85f + side.y * (off - 3.0f)},
+            {cx + dir.x * rad * 0.15f + side.x * (off + (float)k * 6.0f),
+             cy + dir.y * rad * 0.15f + side.y * (off + (float)k * 6.0f)},
+            {cx + dir.x * rad * 1.15f + side.x * (off * 0.3f),
+             cy + dir.y * rad * 1.15f + side.y * (off * 0.3f)},
+        };
+        ink_stroke(r, sickle, 3,
+                   (BrushProfile){.w_max = 3.0f,
+                                  .w_min_ratio = 0.20f,
+                                  .entry = 0.15f,
+                                  .exit = 0.55f,
+                                  .dry = 0.25f,
+                                  .seed = seed + 10u + (uint32_t)(k + 1)},
+                   (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, 1.0f);
+    }
+
+    draw_eye_brush(r, (Vector2){cx + dir.x * rad * 0.35f, cy + dir.y * rad * 0.35f}, 3.2f,
+                   PAL_GOFUN, alpha);
+}
+
+static void draw_enemy_stone_oni(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                                 uint32_t seed, int act_index, float alpha)
+{
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float rad = tr->radius > 8.0f ? tr->radius : 24.0f;
+
+    /* Stocky angular rock-oni silhouette (thickest regular enemy: w_max = 6.0px) */
+    const Vector2 body[8] = {
+        {cx - rad * 0.88f, cy - rad * 0.42f}, {cx - rad * 0.48f, cy - rad * 0.98f},
+        {cx + rad * 0.42f, cy - rad * 0.94f}, {cx + rad * 0.96f, cy - rad * 0.35f},
+        {cx + rad * 0.86f, cy + rad * 0.68f}, {cx + rad * 0.30f, cy + rad * 0.98f},
+        {cx - rad * 0.45f, cy + rad * 0.94f}, {cx - rad * 0.94f, cy + rad * 0.55f},
+    };
+    ink_knockout(r, body, 8, 4.0f, act_index);
+    draw_elite_rim(r, tr, en, seed);
+
+    ink_wash(r, (Vector2){cx, cy + 2.0f}, rad * 0.92f, rad * 0.88f, 0.06f,
+             (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.72f * alpha}, 2, seed + 1u);
+    ink_wash(r, (Vector2){cx - 3.0f, cy - 3.0f}, rad * 0.65f, rad * 0.62f, -0.14f,
+             (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.48f * alpha}, 2, seed + 2u);
+
+    /* Angular Sesshu-style shunpo rock facets & cracks */
+    const Vector2 cr1[3] = {{cx - rad * 0.55f, cy - rad * 0.15f},
+                            {cx - rad * 0.08f, cy + rad * 0.08f},
+                            {cx + rad * 0.50f, cy - rad * 0.22f}};
+    const Vector2 cr2[2] = {{cx - rad * 0.22f, cy + rad * 0.24f},
+                            {cx + rad * 0.32f, cy + rad * 0.60f}};
+    ink_stroke(r, cr1, 3,
+               (BrushProfile){.w_max = 3.2f,
+                              .w_min_ratio = 0.28f,
+                              .entry = 0.12f,
+                              .exit = 0.35f,
+                              .dry = 0.30f,
+                              .seed = seed + 6u},
+               (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.85f * alpha}, 1.0f);
+    ink_stroke(r, cr2, 2,
+               (BrushProfile){.w_max = 2.8f,
+                              .w_min_ratio = 0.30f,
+                              .entry = 0.12f,
+                              .exit = 0.35f,
+                              .dry = 0.30f,
+                              .seed = seed + 7u},
+               (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.80f * alpha}, 1.0f);
+
+    /* Horns */
+    const Vector2 lh[2] = {{cx - rad * 0.45f, cy - rad * 0.82f},
+                           {cx - rad * 0.68f, cy - rad * 1.24f}};
+    const Vector2 rh[2] = {{cx + rad * 0.42f, cy - rad * 0.78f},
+                           {cx + rad * 0.66f, cy - rad * 1.20f}};
+    const BrushProfile hp = {.w_max = 4.6f,
+                             .w_min_ratio = 0.22f,
+                             .entry = 0.10f,
+                             .exit = 0.60f,
+                             .dry = 0.15f,
+                             .seed = seed + 8u};
+    ink_stroke(r, lh, 2, hp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, 1.0f);
+    ink_stroke(r, rh, 2, hp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, 1.0f);
+
+    ink_outline_tone(r, body, 8, true, 6.0f, k_shade_dir,
+                     (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.98f * alpha}, seed + 3u);
+
+    draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
+    draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
+}
+
+static void draw_enemy_ink_leech(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                                 uint32_t seed, int act_index, float alpha)
+{
+    /* Sole exception with NO ink_outline: knockout + 3-layer ink_wash + 2 gofun eyes */
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float absorbed = en != NULL ? ink_clampf(en->absorbed_ink, 0.0f, 3.0f) : 0.0f;
+    const float base_rad = tr->radius > 6.0f ? tr->radius : 18.0f;
+    const float rad = base_rad * (1.0f + absorbed * 0.18f);
+
+    Vector2 ko[8];
+    for (int i = 0; i < 8; ++i) {
+        const float a = k_ent_two_pi * (float)i / 8.0f;
+        const float j = 0.88f + 0.24f * ((float)((seed + (uint32_t)i * 13u) & 7u) / 7.0f);
+        ko[i] = (Vector2){cx + cosf(a) * rad * j, cy + sinf(a) * rad * j};
+    }
+    ink_knockout(r, ko, 8, 3.5f, act_index);
+    draw_elite_rim(r, tr, en, seed);
+
+    ink_wash(r, (Vector2){cx, cy}, rad * 1.05f, rad * 0.94f, 0.25f,
+             (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.80f * alpha}, 3, seed + 1u);
+    ink_wash(r, (Vector2){cx + 2.0f, cy - 1.5f}, rad * 0.68f, rad * 0.62f, -0.4f,
+             (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.72f * alpha}, 2, seed + 2u);
+
+    draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.14f}, 4.2f, PAL_GOFUN, alpha);
+    draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.10f}, 3.6f, PAL_GOFUN, alpha);
 }
 
 static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossComp *boss,
@@ -390,7 +619,6 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
     const float cy = tr->y;
     const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
 
-    /* Telegraph crimson dashed warning lines before boss attack */
     if (boss != NULL && boss->telegraph > 0.01f) {
         const float tx = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f ? boss->gale_dx : 0.0f;
         const float ty = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f ? boss->gale_dy : 1.0f;
@@ -415,7 +643,6 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
         }
     }
 
-    /* Sweeping knockout covering mask & wing roots */
     const Vector2 ko[8] = {
         {cx - rad * 1.65f, cy - rad * 0.35f}, {cx - rad * 0.80f, cy - rad * 1.10f},
         {cx + rad * 0.08f, cy - rad * 1.05f}, {cx + rad * 0.90f, cy - rad * 1.08f},
@@ -424,7 +651,6 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
     };
     ink_knockout(r, ko, 8, 5.0f, act_index);
 
-    /* Layered dry-brush wings (6 sweeping flicks on each side) */
     for (int side = -1; side <= 1; side += 2) {
         for (int f = 0; f < 6; ++f) {
             const float u = (float)f / 5.0f;
@@ -435,22 +661,19 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
                 {cx + (float)side * span * 0.62f, cy + lift * 0.45f - rad * 0.25f},
                 {cx + (float)side * span, cy + lift},
             };
-            const BrushProfile wp = {
-                .w_max = 10.5f - (float)f * 0.9f,
-                .w_min_ratio = 0.20f,
-                .entry = 0.12f,
-                .exit = 0.48f,
-                .dry = 0.55f,
-                .seed = seed + 30u + (uint32_t)(side > 0 ? 10 + f : f),
-            };
-            ink_stroke(r, wpts, 3, wp,
+            ink_stroke(r, wpts, 3,
+                       (BrushProfile){.w_max = 10.5f - (float)f * 0.9f,
+                                      .w_min_ratio = 0.20f,
+                                      .entry = 0.12f,
+                                      .exit = 0.48f,
+                                      .dry = 0.55f,
+                                      .seed = seed + 30u + (uint32_t)(side > 0 ? 10 + f : f)},
                        (InkTone){.color = (f % 2 == 0) ? PAL_SUMI_DARK : PAL_SUMI_HEAVY,
                                  .alpha = 0.90f * alpha},
                        1.0f);
         }
     }
 
-    /* Bengara (muted iron-oxide crimson, distinct from fire PAL_SHU) tengu mask */
     const Vector2 mask[7] = {
         {cx - rad * 0.56f, cy - rad * 0.68f}, {cx + rad * 0.04f, cy - rad * 0.82f},
         {cx + rad * 0.60f, cy - rad * 0.62f}, {cx + rad * 0.66f, cy + rad * 0.18f},
@@ -462,7 +685,6 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
     ink_outline_tone(r, mask, 7, true, 6.5f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.98f * alpha}, seed + 3u);
 
-    /* Prominent tengu nose ridge stroke */
     const Vector2 nose[3] = {
         {cx, cy - rad * 0.10f}, {cx + 2.0f, cy + rad * 0.24f}, {cx - 1.0f, cy + rad * 0.52f}};
     ink_stroke(r, nose, 3,
@@ -474,13 +696,11 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
                               .seed = seed + 4u},
                (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.94f * alpha}, 1.0f);
 
-    /* Fierce slanted eyes */
     draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
     draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
     draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
     draw_eye_brush(r, (Vector2){cx + rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
 
-    /* Feather fan (hauchiwa) held at lower right */
     const Vector2 fan_base = {cx + rad * 0.55f, cy + rad * 0.52f};
     for (int k = -2; k <= 2; ++k) {
         const float fa = 0.35f + (float)k * 0.22f;
@@ -497,6 +717,334 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
     }
 }
 
+static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                          const BossComp *boss, uint32_t seed, int act_index, float alpha)
+{
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float rad = tr->radius > 10.0f ? tr->radius : 40.0f;
+    const bool paused = en != NULL && en->ai_state == 1;
+    const float crouch_y = paused ? 6.0f : 0.0f;
+    const float outline_w = paused ? (5.8f * 1.3f) : 5.8f;
+
+    /* Azure lightning dash telegraph */
+    if (boss != NULL && boss->telegraph > 0.01f) {
+        const float dx = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dx : 1.0f;
+        const float dy = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dy : 0.0f;
+        const float len = 240.0f;
+        const Vector2 dst = {cx + dx * len, cy + dy * len};
+        const InkTone warn = {.color = PAL_AO, .alpha = 0.65f + 0.30f * boss->telegraph};
+        ink_dashed_stroke(r, (Vector2){cx, cy}, dst, 20.0f, 10.0f, 4.2f, warn, seed + 88u);
+        const Vector2 core[3] = {
+            {cx, cy},
+            {cx + dx * len * 0.5f - dy * 10.0f, cy + dy * len * 0.5f + dx * 10.0f},
+            dst,
+        };
+        ink_stroke(r, core, 3,
+                   (BrushProfile){.w_max = 2.0f,
+                                  .w_min_ratio = 0.4f,
+                                  .entry = 0.1f,
+                                  .exit = 0.2f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 89u},
+                   (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, 1.0f);
+    }
+
+    const Vector2 ko[8] = {
+        {cx - rad * 1.35f, cy - rad * 0.45f + crouch_y},
+        {cx - rad * 0.55f, cy - rad * 1.05f + crouch_y},
+        {cx + rad * 0.55f, cy - rad * 1.00f + crouch_y},
+        {cx + rad * 1.40f, cy - rad * 0.35f + crouch_y},
+        {cx + rad * 1.25f, cy + rad * 0.85f},
+        {cx + rad * 0.20f, cy + rad * 1.08f},
+        {cx - rad * 0.80f, cy + rad * 0.98f},
+        {cx - rad * 1.35f, cy + rad * 0.42f},
+    };
+    ink_knockout(r, ko, 8, 5.0f, act_index);
+
+    /* Black thundercloud aura */
+    ink_wash(r, (Vector2){cx, cy + 4.0f}, rad * 1.32f, rad * 0.92f, -0.06f,
+             (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.45f * alpha}, 2, seed + 1u);
+
+    /* Tanuki torso (mokkotsu wash + crouch when paused) */
+    const Vector2 torso[7] = {
+        {cx - rad * 0.82f, cy - rad * 0.25f + crouch_y},
+        {cx - rad * 0.25f, cy - rad * 0.72f + crouch_y},
+        {cx + rad * 0.65f, cy - rad * 0.52f + crouch_y},
+        {cx + rad * 0.94f, cy + rad * 0.24f},
+        {cx + rad * 0.55f, cy + rad * 0.76f},
+        {cx - rad * 0.45f, cy + rad * 0.78f},
+        {cx - rad * 0.92f, cy + rad * 0.32f},
+    };
+    ink_wash(r, (Vector2){cx + 4.0f, cy + crouch_y * 0.5f}, rad * 0.88f, rad * 0.66f, 0.05f,
+             (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.66f * alpha}, 2, seed + 2u);
+    ink_outline_tone(r, torso, 7, true, outline_w, k_shade_dir,
+                     (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.98f * alpha}, seed + 3u);
+
+    /* Tiger-striped legs (bold dark sumi strokes) */
+    for (int leg = 0; leg < 2; ++leg) {
+        const float lx = cx + (leg == 0 ? -rad * 0.52f : rad * 0.46f);
+        const Vector2 lpts[3] = {{lx, cy + rad * 0.42f},
+                                 {lx + (leg == 0 ? -8.0f : 8.0f), cy + rad * 0.86f},
+                                 {lx + (leg == 0 ? -14.0f : 12.0f), cy + rad * 1.12f}};
+        ink_stroke(r, lpts, 3,
+                   (BrushProfile){.w_max = paused ? 8.2f : 6.4f,
+                                  .w_min_ratio = 0.28f,
+                                  .entry = 0.12f,
+                                  .exit = 0.30f,
+                                  .dry = 0.15f,
+                                  .seed = seed + 12u + (uint32_t)leg},
+                   (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.95f * alpha}, 1.0f);
+    }
+
+    /* Snake tail sweeping behind */
+    const Vector2 stail[4] = {
+        {cx + rad * 0.78f, cy + rad * 0.25f},
+        {cx + rad * 1.25f, cy + rad * 0.05f},
+        {cx + rad * 1.48f, cy - rad * 0.42f},
+        {cx + rad * 1.22f, cy - rad * 0.82f},
+    };
+    ink_stroke(r, stail, 4,
+               (BrushProfile){.w_max = 4.6f,
+                              .w_min_ratio = 0.22f,
+                              .entry = 0.10f,
+                              .exit = 0.55f,
+                              .dry = 0.25f,
+                              .seed = seed + 20u},
+               (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.94f * alpha}, 1.0f);
+
+    /* Gofun monkey face mask */
+    const Vector2 face[6] = {
+        {cx - rad * 0.66f, cy - rad * 0.52f + crouch_y},
+        {cx - rad * 0.22f, cy - rad * 0.86f + crouch_y},
+        {cx + rad * 0.20f, cy - rad * 0.62f + crouch_y},
+        {cx + rad * 0.16f, cy - rad * 0.08f + crouch_y},
+        {cx - rad * 0.28f, cy + rad * 0.06f + crouch_y},
+        {cx - rad * 0.72f, cy - rad * 0.12f + crouch_y},
+    };
+    ink_fill_poly(r, face, 6, pal_color_alpha(PAL_GOFUN, 0.94f * alpha));
+    ink_outline_tone(r, face, 6, true, outline_w * 0.72f, k_shade_dir,
+                     (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, seed + 24u);
+    draw_eye_brush(r, (Vector2){cx - rad * 0.42f, cy - rad * 0.36f + crouch_y}, 4.8f, PAL_AO_HOT,
+                   alpha);
+    draw_eye_brush(r, (Vector2){cx - rad * 0.08f, cy - rad * 0.36f + crouch_y}, 4.8f, PAL_AO_HOT,
+                   alpha);
+
+    /* Crackling azure lightning arcs clinging to cloud */
+    const Vector2 z1[4] = {
+        {cx - rad * 1.10f, cy - rad * 0.20f},
+        {cx - rad * 0.75f, cy - rad * 0.78f},
+        {cx - rad * 0.30f, cy - rad * 0.58f},
+        {cx + rad * 0.15f, cy - rad * 0.96f},
+    };
+    ink_stroke(r, z1, 4,
+               (BrushProfile){.w_max = 3.2f,
+                              .w_min_ratio = 0.32f,
+                              .entry = 0.15f,
+                              .exit = 0.30f,
+                              .dry = 0.0f,
+                              .seed = seed + 30u},
+               (InkTone){.color = PAL_AO, .alpha = 0.90f * alpha}, 1.0f);
+    ink_stroke(r, z1, 4,
+               (BrushProfile){.w_max = 1.5f,
+                              .w_min_ratio = 0.40f,
+                              .entry = 0.10f,
+                              .exit = 0.15f,
+                              .dry = 0.0f,
+                              .seed = seed + 31u},
+               (InkTone){.color = PAL_AO_HOT, .alpha = 0.95f * alpha}, 1.0f);
+}
+
+static void draw_boss_ryu(RenderState *r, EntityId id, const TransformComp *tr,
+                          const BossComp *boss, const ShrineState *shrine, uint32_t seed,
+                          int act_index, float alpha)
+{
+    const float hx = tr->x;
+    const float hy = tr->y;
+    const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
+    const bool awakened = boss != NULL && boss->phase_idx >= 1;
+    const int32_t orb_kind = boss != NULL ? boss->part_id : 0;
+
+    /* Dragon coil telegraph: crimson dashed circle radius 240px around shrine */
+    if (boss != NULL && boss->telegraph > 0.01f && boss->telegraph_pattern == 3 && shrine != NULL) {
+        const InkTone warn = {.color = PAL_SHU, .alpha = 0.62f + 0.30f * boss->telegraph};
+        const float vr = 240.0f;
+        const int segs = 16;
+        for (int k = 0; k < segs; ++k) {
+            const float a0 = k_ent_two_pi * (float)k / (float)segs;
+            const float a1 = k_ent_two_pi * ((float)k + 0.58f) / (float)segs;
+            const Vector2 p0 = {shrine->x + cosf(a0) * vr, shrine->y + sinf(a0) * vr};
+            const Vector2 p1 = {shrine->x + cosf(a1) * vr, shrine->y + sinf(a1) * vr};
+            ink_dashed_stroke(r, p0, p1, 18.0f, 8.0f, 3.8f, warn, seed + 120u + (uint32_t)k);
+        }
+    }
+
+    /* Build body polyline from head trail ring buffer (24 points) or synthetic S-curve */
+    Vector2 spine[RENDER_RYU_TRAIL_LEN];
+    int spine_n = 0;
+    if (r->ryu_trail_id.index == id.index && r->ryu_trail_id.gen == id.gen && r->ryu_trail_n >= 4) {
+        spine_n = r->ryu_trail_n < RENDER_RYU_TRAIL_LEN ? r->ryu_trail_n : RENDER_RYU_TRAIL_LEN;
+        for (int i = 0; i < spine_n; ++i) {
+            spine[i] = r->ryu_trail[i];
+        }
+        spine[0] = (Vector2){hx, hy};
+    } else {
+        spine_n = 18;
+        for (int i = 0; i < spine_n; ++i) {
+            const float u = (float)i / (float)(spine_n - 1);
+            spine[i] = (Vector2){hx + u * 260.0f, hy + sinf(u * 5.2f) * 42.0f + u * 18.0f};
+        }
+    }
+
+    /* Paper knockout behind spine & head so dragon never sinks into dark ink */
+    for (int i = 0; i < spine_n; i += 2) {
+        const float u = (float)i / (float)(spine_n > 1 ? spine_n - 1 : 1);
+        const float r_seg = (1.0f - u * 0.65f) * 20.0f + 6.0f;
+        const Vector2 p = spine[i];
+        const Vector2 seg_ko[6] = {
+            {p.x - r_seg, p.y - r_seg * 0.6f},
+            {p.x, p.y - r_seg},
+            {p.x + r_seg, p.y - r_seg * 0.6f},
+            {p.x + r_seg, p.y + r_seg * 0.6f},
+            {p.x, p.y + r_seg},
+            {p.x - r_seg, p.y + r_seg * 0.6f},
+        };
+        ink_knockout(r, seg_ko, 6, 4.0f, act_index);
+    }
+
+    /* Continuous single-brush dragon body: w_max = 26px, dry = 0.6 on tail 30% */
+    const PaletteId body_pal = awakened ? PAL_SUMI_SCORCH : PAL_SUMI_DARK;
+    ink_stroke(r, spine, spine_n,
+               (BrushProfile){.w_max = 26.0f,
+                              .w_min_ratio = 0.14f,
+                              .entry = 0.06f,
+                              .exit = 0.35f,
+                              .dry = 0.60f,
+                              .seed = seed + 1u},
+               (InkTone){.color = body_pal, .alpha = 0.96f * alpha}, 1.0f);
+
+    /* 44 short shunpo scale ticks along the dragon body */
+    const int scale_count = 44;
+    for (int s = 0; s < scale_count; ++s) {
+        const float pos_f = ((float)s + 0.5f) / (float)scale_count * (float)(spine_n - 1);
+        int idx = (int)pos_f;
+        if (idx >= spine_n - 1) {
+            idx = spine_n - 2;
+        }
+        const float frac = pos_f - (float)idx;
+        const Vector2 p0 = spine[idx];
+        const Vector2 p1 = spine[idx + 1];
+        const Vector2 p = {p0.x + (p1.x - p0.x) * frac, p0.y + (p1.y - p0.y) * frac};
+        const float dx = p1.x - p0.x;
+        const float dy = p1.y - p0.y;
+        const float dl = sqrtf(dx * dx + dy * dy);
+        const Vector2 nrm = dl > 1e-3f ? (Vector2){-dy / dl, dx / dl} : (Vector2){0.0f, 1.0f};
+        const float side = (s & 1) ? 1.0f : -1.0f;
+        const float taper = 1.0f - ((float)s / (float)scale_count) * 0.65f;
+        const Vector2 tick[2] = {
+            {p.x + nrm.x * side * 3.0f * taper, p.y + nrm.y * side * 3.0f * taper},
+            {p.x + nrm.x * side * 12.0f * taper + (dl > 1e-3f ? (dx / dl) * 4.0f : 0.0f),
+             p.y + nrm.y * side * 12.0f * taper + (dl > 1e-3f ? (dy / dl) * 4.0f : 0.0f)},
+        };
+        ink_stroke(r, tick, 2,
+                   (BrushProfile){.w_max = 2.6f,
+                                  .w_min_ratio = 0.25f,
+                                  .entry = 0.15f,
+                                  .exit = 0.45f,
+                                  .dry = 0.35f,
+                                  .seed = seed + 200u + (uint32_t)s},
+                   (InkTone){.color = (s % 2 == 0) ? PAL_SUMI_LIGHT : PAL_SUMI_HEAVY,
+                             .alpha = 0.72f * alpha},
+                   1.0f);
+    }
+
+    /* Dragon head silhouette */
+    const Vector2 head_poly[7] = {
+        {hx - rad * 0.85f, hy - rad * 0.25f}, {hx - rad * 0.35f, hy - rad * 0.72f},
+        {hx + rad * 0.52f, hy - rad * 0.68f}, {hx + rad * 0.86f, hy - rad * 0.05f},
+        {hx + rad * 0.45f, hy + rad * 0.62f}, {hx - rad * 0.38f, hy + rad * 0.56f},
+        {hx - rad * 0.88f, hy + rad * 0.22f},
+    };
+    ink_knockout(r, head_poly, 7, 5.0f, act_index);
+    ink_wash(r, (Vector2){hx, hy}, rad * 0.76f, rad * 0.58f, -0.05f,
+             (InkTone){.color = body_pal, .alpha = 0.88f * alpha}, 2, seed + 5u);
+    ink_outline_tone(r, head_poly, 7, true, awakened ? 7.2f : 5.6f, k_shade_dir,
+                     (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.98f * alpha}, seed + 6u);
+
+    /* 2 horns + 2 whiskers */
+    const Vector2 horn1[3] = {{hx + rad * 0.18f, hy - rad * 0.55f},
+                              {hx + rad * 0.62f, hy - rad * 1.15f},
+                              {hx + rad * 1.05f, hy - rad * 1.32f}};
+    const Vector2 horn2[3] = {{hx + rad * 0.36f, hy - rad * 0.42f},
+                              {hx + rad * 0.82f, hy - rad * 0.88f},
+                              {hx + rad * 1.20f, hy - rad * 0.94f}};
+    const Vector2 whisk1[3] = {{hx - rad * 0.65f, hy + rad * 0.10f},
+                               {hx - rad * 1.18f, hy + rad * 0.32f},
+                               {hx - rad * 1.55f, hy + rad * 0.12f}};
+    const Vector2 whisk2[3] = {{hx - rad * 0.58f, hy + rad * 0.28f},
+                               {hx - rad * 1.08f, hy + rad * 0.66f},
+                               {hx - rad * 1.44f, hy + rad * 0.54f}};
+    const BrushProfile fine_p = {.w_max = 3.8f,
+                                 .w_min_ratio = 0.20f,
+                                 .entry = 0.12f,
+                                 .exit = 0.55f,
+                                 .dry = 0.30f,
+                                 .seed = seed + 18u};
+    ink_stroke(r, horn1, 3, fine_p, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.95f * alpha},
+               1.0f);
+    ink_stroke(r, horn2, 3, fine_p, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.92f * alpha},
+               1.0f);
+    ink_stroke(r, whisk1, 3, fine_p, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.88f * alpha},
+               1.0f);
+    ink_stroke(r, whisk2, 3, fine_p, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.84f * alpha},
+               1.0f);
+
+    /* Eye: blank gofun outline before awakening; vermilion dot painted in during/after awakening */
+    const Vector2 eye_pos = {hx - rad * 0.18f, hy - rad * 0.16f};
+    draw_eye_brush(r, eye_pos, 8.2f, PAL_GOFUN, alpha);
+    ink_arc_stroke(r, eye_pos, 6.2f, 0.0f, k_ent_two_pi + 0.1f,
+                   (BrushProfile){.w_max = 2.4f,
+                                  .w_min_ratio = 0.35f,
+                                  .entry = 0.1f,
+                                  .exit = 0.1f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 25u},
+                   (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.95f * alpha});
+    if (awakened || r->ryu_awaken_t > 0.0f) {
+        const float dot_scale =
+            r->ryu_awaken_t > 0.0f ? (1.6f - 0.6f * (1.0f - r->ryu_awaken_t / 1.5f)) : 1.0f;
+        draw_eye_brush(r, eye_pos, 4.6f * dot_scale, PAL_SHU, alpha);
+        draw_eye_brush(r, eye_pos, 2.2f * dot_scale, PAL_SHU_HOT, alpha);
+    }
+
+    /* Dragon Orb (hovering before snout): Fire / Storm / Wind */
+    const Vector2 orb_pos = {hx - rad * 0.92f, hy - rad * 0.42f};
+    const bool tele = boss != NULL && boss->telegraph > 0.01f;
+    const float orb_r = tele ? 16.5f : 13.0f;
+    if (orb_kind == 0) {
+        ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * 1.45f, orb_r * 1.2f,
+                     pal_color_alpha(PAL_SHU, 0.94f * alpha));
+        ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * (tele ? 0.95f : 0.72f),
+                     orb_r * 0.72f, pal_color_alpha(PAL_SHU_HOT, 0.98f * alpha));
+    } else if (orb_kind == 1) {
+        ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * 1.45f, orb_r * 1.2f,
+                     pal_color_alpha(PAL_AO, 0.94f * alpha));
+        ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * (tele ? 0.95f : 0.72f),
+                     orb_r * 0.72f, pal_color_alpha(PAL_AO_HOT, 0.98f * alpha));
+    } else {
+        ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * 1.45f, orb_r * 1.2f,
+                     pal_color_alpha(PAL_GOFUN, 0.96f * alpha));
+        ink_arc_stroke(r, orb_pos, orb_r * 0.58f, 0.2f, 5.2f,
+                       (BrushProfile){.w_max = 2.6f,
+                                      .w_min_ratio = 0.35f,
+                                      .entry = 0.1f,
+                                      .exit = 0.3f,
+                                      .dry = 0.15f,
+                                      .seed = seed + 33u},
+                       (InkTone){.color = tele ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, .alpha = 0.90f});
+    }
+}
+
 static void draw_projectile(RenderState *r, const TransformComp *tr, const VelocityComp *vel,
                             const ProjComp *pr, uint32_t seed, int act_index)
 {
@@ -506,7 +1054,6 @@ static void draw_projectile(RenderState *r, const TransformComp *tr, const Veloc
     const Vector2 dir = speed > 1e-3f ? (Vector2){vx / speed, vy / speed} : (Vector2){1.0f, 0.0f};
     const Vector2 pos = {tr->x, tr->y};
 
-    /* Deflected / burning / electrified dragon-vein trail */
     if (pr->trail_n >= 2) {
         Vector2 tpts[PROJ_TRAIL_LEN];
         const int tn = pr->trail_n < PROJ_TRAIL_LEN ? pr->trail_n : PROJ_TRAIL_LEN;
@@ -535,7 +1082,6 @@ static void draw_projectile(RenderState *r, const TransformComp *tr, const Veloc
                    (InkTone){.color = trail_pal, .alpha = 0.80f}, 1.0f);
     }
 
-    /* Paper knockout around projectile */
     const float rad = tr->radius > 3.0f ? tr->radius : 7.0f;
     Vector2 ko[6];
     for (int i = 0; i < 6; ++i) {
@@ -563,7 +1109,6 @@ static void draw_projectile(RenderState *r, const TransformComp *tr, const Veloc
                                   .dry = 0.0f,
                                   .seed = seed + 3u},
                    (InkTone){.color = col, .alpha = 0.96f}, 1.0f);
-        /* 3 fletching ticks */
         const Vector2 side = {-dir.y, dir.x};
         for (int f = -1; f <= 1; ++f) {
             const Vector2 base = {pos.x - dir.x * (12.0f + (float)f * 2.5f),
@@ -587,8 +1132,35 @@ static void draw_projectile(RenderState *r, const TransformComp *tr, const Veloc
             ink_outline_tone(r, ko, 6, true, 2.4f, k_shade_dir,
                              (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, seed + 8u);
         }
+    } else if (pr->kind == PROJ_WIND_SICKLE) {
+        /* Crescent flick (pale sumi blade + gofun bright rim) */
+        const Vector2 side = {-dir.y, dir.x};
+        const Vector2 arc[3] = {
+            {pos.x - dir.x * 6.0f - side.x * (rad * 1.55f),
+             pos.y - dir.y * 6.0f - side.y * (rad * 1.55f)},
+            {pos.x + dir.x * (rad * 1.15f), pos.y + dir.y * (rad * 1.15f)},
+            {pos.x - dir.x * 6.0f + side.x * (rad * 1.55f),
+             pos.y - dir.y * 6.0f + side.y * (rad * 1.55f)},
+        };
+        ink_stroke(r, arc, 3,
+                   (BrushProfile){.w_max = 5.4f,
+                                  .w_min_ratio = 0.18f,
+                                  .entry = 0.25f,
+                                  .exit = 0.25f,
+                                  .dry = 0.20f,
+                                  .seed = seed + 14u},
+                   (InkTone){.color = pr->burning ? PAL_SHU : PAL_SUMI_HEAVY, .alpha = 0.94f},
+                   1.0f);
+        ink_stroke(r, arc, 3,
+                   (BrushProfile){.w_max = 2.0f,
+                                  .w_min_ratio = 0.30f,
+                                  .entry = 0.20f,
+                                  .exit = 0.20f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 15u},
+                   (InkTone){.color = PAL_GOFUN, .alpha = 0.92f}, 1.0f);
     } else {
-        /* PROJ_STORM_ORB: pointed azure jewel + two short lightning arcs */
+        /* PROJ_STORM_ORB and PROJ_BOUNCE_ORB */
         ink_teardrop(r, pos, (Vector2){0.0f, -1.0f}, rad * 1.45f, rad * 1.35f,
                      pal_color_alpha(PAL_AO, 0.94f));
         ink_teardrop(r, pos, (Vector2){0.0f, -1.0f}, rad * 0.80f, rad * 0.75f,
@@ -604,13 +1176,25 @@ static void draw_projectile(RenderState *r, const TransformComp *tr, const Veloc
                                   .dry = 0.0f,
                                   .seed = seed + 12u},
                    (InkTone){.color = PAL_AO_HOT, .alpha = 0.92f}, 1.0f);
+        if (pr->kind == PROJ_BOUNCE_ORB) {
+            const Vector2 z2[3] = {{pos.x + rad * 1.25f, pos.y + 3.0f},
+                                   {pos.x + rad * 0.65f, pos.y + rad * 1.15f},
+                                   {pos.x - 2.0f, pos.y + rad * 0.85f}};
+            ink_stroke(r, z2, 3,
+                       (BrushProfile){.w_max = 2.2f,
+                                      .w_min_ratio = 0.35f,
+                                      .entry = 0.15f,
+                                      .exit = 0.35f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 13u},
+                       (InkTone){.color = PAL_AO, .alpha = 0.92f}, 1.0f);
+        }
     }
 }
 
 static void draw_ink_orb(RenderState *r, const TransformComp *tr, const InkOrbComp *orb,
                          uint32_t seed, int act_index)
 {
-    /* Blink during final 2 seconds of 11.5s lifetime */
     if (orb != NULL && orb->age > 9.5f && ((int)(orb->age * 10.0f) & 1) == 0) {
         return;
     }
@@ -626,9 +1210,58 @@ static void draw_ink_orb(RenderState *r, const TransformComp *tr, const InkOrbCo
     }
     ink_knockout(r, body, 7, 3.0f, act_index);
     ink_fill_poly(r, body, 7, pal_color_alpha(PAL_SUMI_SCORCH, 0.96f));
-    /* Single gold highlight fleck */
     ink_teardrop(r, (Vector2){cx - rad * 0.28f, cy - rad * 0.28f}, (Vector2){0.7f, -0.7f}, 3.6f,
                  2.6f, pal_color_alpha(PAL_KIN_HOT, 0.96f));
+}
+
+static void draw_gimmick_effects(RenderState *r, const GameState *g, uint64_t boil)
+{
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        if (!g->ecs.alive[i]) {
+            continue;
+        }
+        const EntityId id = {.index = i, .gen = g->ecs.gen[i]};
+        const GimmickComp *gim = game_gimmick(g, id);
+        const TransformComp *tr = game_transform(g, id);
+        if (gim == NULL || tr == NULL) {
+            continue;
+        }
+        const uint32_t seed = entity_seed(id, 4u, boil);
+        if (gim->kind == GIMMICK_LIGHTNING_STRIKE) {
+            /* Crimson dashed warning circle (r=32px) + short center strike tick */
+            const float rad = tr->radius > 8.0f ? tr->radius : 32.0f;
+            const InkTone warn = {.color = PAL_SHU, .alpha = 0.88f};
+            const int segs = 10;
+            for (int k = 0; k < segs; ++k) {
+                const float a0 = k_ent_two_pi * (float)k / (float)segs;
+                const float a1 = k_ent_two_pi * ((float)k + 0.55f) / (float)segs;
+                const Vector2 p0 = {tr->x + cosf(a0) * rad, tr->y + sinf(a0) * rad};
+                const Vector2 p1 = {tr->x + cosf(a1) * rad, tr->y + sinf(a1) * rad};
+                ink_dashed_stroke(r, p0, p1, 10.0f, 5.0f, 2.8f, warn, seed + (uint32_t)k);
+            }
+            const Vector2 tick[2] = {{tr->x - 5.0f, tr->y - 9.0f}, {tr->x + 5.0f, tr->y + 9.0f}};
+            ink_stroke(r, tick, 2,
+                       (BrushProfile){.w_max = 3.2f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.15f,
+                                      .exit = 0.35f,
+                                      .dry = 0.1f,
+                                      .seed = seed + 30u},
+                       (InkTone){.color = PAL_SHU, .alpha = 0.94f}, 1.0f);
+        } else if (gim->kind == GIMMICK_KAMAITACHI_VORTEX) {
+            const float rad = tr->radius > 10.0f ? tr->radius : 72.0f;
+            const float spin = r->vfx_time * -6.0f;
+            ink_arc_stroke(r, (Vector2){tr->x, tr->y}, rad * 0.72f, spin, spin + 4.2f,
+                           (BrushProfile){.w_max = 4.2f,
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.15f,
+                                          .exit = 0.45f,
+                                          .dry = 0.45f,
+                                          .seed = seed + 40u},
+                           (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.65f});
+        }
+    }
 }
 
 void render_draw_entities(RenderState *r, const GameState *g, int act_index)
@@ -640,6 +1273,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
     const uint32_t hw = g->ecs.high_water;
 
     render_set_blend(r, BLEND_ALPHA);
+    draw_gimmick_effects(r, g, boil);
 
     /* Layer 5: Ink orbs & projectiles */
     for (uint32_t i = 0; i < hw; ++i) {
@@ -677,7 +1311,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         }
     }
 
-    /* Layer 6: Shrines, enemies, boss */
+    /* Layer 6: Shrines, enemies, bosses */
     for (int32_t s = 0; s < g->shrine_count && s < GAME_MAX_SHRINES; ++s) {
         draw_shrine(r, &g->shrines[s], g->ticks, act_index);
     }
@@ -708,13 +1342,31 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
             draw_enemy_archer(r, tr, en, seed, act_index, 1.0f);
             break;
         case ENEMY_LANTERN_FIRE:
-            draw_enemy_lantern(r, tr, en, seed, g->ticks, act_index, 1.0f);
+            draw_enemy_lantern(r, tr, en, seed, g->ticks, act_index, false, 1.0f);
+            break;
+        case ENEMY_LANTERN_STORM:
+            draw_enemy_lantern(r, tr, en, seed, g->ticks, act_index, true, 1.0f);
             break;
         case ENEMY_UMBRELLA:
             draw_enemy_umbrella(r, tr, en, seed, act_index, 1.0f);
             break;
+        case ENEMY_KAMAITACHI:
+            draw_enemy_kamaitachi(r, tr, game_velocity(g, id), en, seed, act_index, 1.0f);
+            break;
+        case ENEMY_STONE_ONI:
+            draw_enemy_stone_oni(r, tr, en, seed, act_index, 1.0f);
+            break;
+        case ENEMY_INK_LEECH:
+            draw_enemy_ink_leech(r, tr, en, seed, act_index, 1.0f);
+            break;
         case ENEMY_BOSS_TENGU:
             draw_boss_tengu(r, tr, game_boss(g, id), primary_shrine, seed, act_index, 1.0f);
+            break;
+        case ENEMY_BOSS_NUE:
+            draw_boss_nue(r, tr, en, game_boss(g, id), seed, act_index, 1.0f);
+            break;
+        case ENEMY_BOSS_RYU:
+            draw_boss_ryu(r, id, tr, game_boss(g, id), primary_shrine, seed, act_index, 1.0f);
             break;
         default:
             break;

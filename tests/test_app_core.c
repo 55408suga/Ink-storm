@@ -297,6 +297,46 @@ static void test_latch_confirm_once(void)
     TEST_ASSERT_FALSE(input_latch_take_confirm(&l));
 }
 
+static void test_latch_ui_transition_suppresses_paint_until_release(void)
+{
+    InputLatch l;
+    /* Simulate clicking a Brush Select card or Pause Resume button while left button is still held
+     */
+    input_latch_reset_for_ui_transition(&l, 320.0f, 240.0f, true);
+    TEST_ASSERT_TRUE(l.paint_suppressed);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    /* Dragging while button stays held must not paint */
+    RawInput drag = make_raw(420.0f, 280.0f);
+    drag.left_down = true;
+    input_latch_feed(&l, &drag);
+    const BrushInput held_tick = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(held_tick.paint);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 320.0f, held_tick.pmx);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 420.0f, held_tick.mx);
+
+    /* Releasing button clears suppression */
+    RawInput up = make_raw(420.0f, 280.0f);
+    up.left_down = false;
+    input_latch_feed(&l, &up);
+    TEST_ASSERT_FALSE(l.paint_suppressed);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    /* Next press paints normally */
+    RawInput down = make_raw(440.0f, 290.0f);
+    down.left_down = true;
+    input_latch_feed(&l, &down);
+    TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
+
+    /* Keyboard transition (left_down == false) does not leave paint_suppressed stuck */
+    input_latch_reset_for_ui_transition(&l, 100.0f, 100.0f, false);
+    TEST_ASSERT_FALSE(l.paint_suppressed);
+    RawInput press = make_raw(110.0f, 100.0f);
+    press.left_down = true;
+    input_latch_feed(&l, &press);
+    TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -310,5 +350,6 @@ int main(void)
     RUN_TEST(test_latch_reward_commands_and_priority);
     RUN_TEST(test_latch_paint_suppression_after_ui_click);
     RUN_TEST(test_latch_confirm_once);
+    RUN_TEST(test_latch_ui_transition_suppresses_paint_until_release);
     return UNITY_END();
 }

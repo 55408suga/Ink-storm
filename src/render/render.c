@@ -42,6 +42,8 @@ void render_init(RenderState *r, const RenderOptions *opt)
     memset(r, 0, sizeof *r);
     r->cur_blend = BLEND_ALPHA;
     r->bg_cached_act = -1;
+    r->ryu_trail_id = (EntityId){ECS_INVALID_INDEX, 0};
+    r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
 
     render_paper_init(r);
     render_fluid_init(r);
@@ -50,10 +52,32 @@ void render_init(RenderState *r, const RenderOptions *opt)
     render_reset_vfx(r, UINT64_C(1));
 }
 
+static bool scene_draws_combat_world(const UiView *ui)
+{
+    if (ui == NULL) {
+        return true;
+    }
+    switch (ui->scene) {
+    case UI_SCENE_RUN:
+        return true;
+    case UI_SCENE_SETTINGS:
+        return ui->settings_return_scene == UI_SCENE_RUN;
+    case UI_SCENE_SHOWCASE:
+        return ui->showcase_page <= 3 || (ui->showcase_page == 5 && ui->showcase_subpage == 1) ||
+               ui->showcase_page == 6;
+    case UI_SCENE_TITLE_LOBBY:
+    case UI_SCENE_BRUSH_SELECT:
+    case UI_SCENE_BOKUAN:
+    default:
+        return false;
+    }
+}
+
 static void draw_world_layers(RenderState *r, const GameState *g, const UiView *ui)
 {
-    const int act = g->run.act_index;
-    const Vector2 shake = render_vfx_shake_offset(r, ui);
+    const bool combat = scene_draws_combat_world(ui);
+    const int act = combat ? g->run.act_index : 0;
+    const Vector2 shake = combat ? render_vfx_shake_offset(r, ui) : (Vector2){0.0f, 0.0f};
 
     Camera2D cam = {0};
     cam.offset = shake;
@@ -62,15 +86,21 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
     BeginMode2D(cam);
     /* 1. Washi paper base (always drawn, with or without post shader) */
     render_paper_draw_base(r, act);
-    /* 2. Cached edge background (Act 1 susuki + mist) */
+    /* 2. Cached edge background (Act 1/2/3 edges) */
     render_paper_draw_bg(r, act);
-    /* 3. Terrain (none in Act 1 P0) */
+    if (combat) {
+        /* 3. Terrain (Act 2 torii & rocks, Act 3 rocks & spirit pillars) */
+        render_paper_draw_terrain(r, g, act);
+    }
     /* 4. Fluid (multiply ink + alpha fire/storm) */
     render_fluid_update_and_draw(r, g);
-    /* 5 & 6. Ink orbs, projectiles, shrines, enemies, boss */
-    render_draw_entities(r, g, act);
-    /* 7. World VFX (sparks, spirals, gale strokes, lightning bolts) */
-    render_vfx_draw_world(r, g);
+    if (combat) {
+        /* 5 & 6. Ink orbs, projectiles, shrines, enemies, boss */
+        render_draw_entities(r, g, act);
+        /* 7. World VFX & Act 3 rain / wind telegraph */
+        render_vfx_draw_world(r, g);
+        render_paper_draw_weather(r, g, act);
+    }
     render_reset_blend(r);
     EndMode2D();
 }
@@ -78,12 +108,58 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
 static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
 {
     /* 9. HUD & UI always drawn directly AFTER post shader so text stays sharp */
-    render_vfx_draw_ui(r, g);
-    render_draw_hud(r, g, ui);
-    render_draw_banners(r, g, ui);
-    render_draw_reward_ui(r, g, ui);
-    render_draw_result_ui(r, g, ui);
-    render_draw_showcase_overlay(r, g, ui);
+    const UiScene scene = ui != NULL ? ui->scene : UI_SCENE_RUN;
+    switch (scene) {
+    case UI_SCENE_TITLE_LOBBY:
+        render_draw_lobby_ui(r, g, ui);
+        break;
+    case UI_SCENE_BRUSH_SELECT:
+        render_draw_brush_select_ui(r, g, ui);
+        break;
+    case UI_SCENE_BOKUAN:
+        render_draw_bokuan_ui(r, g, ui);
+        break;
+    case UI_SCENE_SETTINGS:
+        render_draw_settings_ui(r, g, ui);
+        break;
+    case UI_SCENE_SHOWCASE:
+        if (ui->showcase_page <= 2) {
+            render_vfx_draw_ui(r, g);
+            render_draw_hud(r, g, ui);
+            render_draw_banners(r, g, ui);
+        } else if (ui->showcase_page == 3) {
+            render_draw_reward_ui(r, g, ui);
+        } else if (ui->showcase_page == 4) {
+            if (ui->showcase_subpage == 0) {
+                render_draw_lobby_ui(r, g, ui);
+            } else {
+                render_draw_brush_select_ui(r, g, ui);
+            }
+        } else if (ui->showcase_page == 5) {
+            if (ui->showcase_subpage == 0) {
+                render_draw_bokuan_ui(r, g, ui);
+            } else {
+                render_draw_pause_ui(r, g, ui);
+            }
+        } else {
+            render_draw_result_ui(r, g, ui);
+        }
+        render_draw_showcase_overlay(r, g, ui);
+        break;
+    case UI_SCENE_RUN:
+    default:
+        render_vfx_draw_ui(r, g);
+        render_draw_hud(r, g, ui);
+        render_draw_banners(r, g, ui);
+        render_draw_hint_strip(r, g, ui);
+        render_draw_reward_ui(r, g, ui);
+        render_draw_result_ui(r, g, ui);
+        if (ui != NULL && ui->paused) {
+            render_draw_pause_ui(r, g, ui);
+        }
+        break;
+    }
+
     if (ui != NULL && ui->xray) {
         render_draw_xray(r, g);
     }
@@ -100,7 +176,7 @@ void render_draw(RenderState *r, const GameState *g, const UiView *ui)
     r->cur_blend = BLEND_ALPHA;
     ++r->frames_drawn;
 
-    if (r->post_shader.id != 0 && r->scene.id != 0) {
+    if (r->post_enabled && r->post_shader.id != 0 && r->scene.id != 0) {
         BeginTextureMode(r->scene);
         draw_world_layers(r, g, ui);
         EndTextureMode();

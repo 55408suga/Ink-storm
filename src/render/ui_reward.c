@@ -3,6 +3,7 @@
 
 #include "core.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,12 +29,12 @@ void render_reward_layout(const GameState *g, RewardLayout *out)
         count = 0;
     }
 
-    const float card_w = 264.0f;
+    const float card_w = 276.0f;
     const float card_h = 356.0f;
-    const float gap = 36.0f;
+    const float gap = 32.0f;
     const float total_w = count > 0 ? ((float)count * card_w + (float)(count - 1) * gap) : 0.0f;
     const float start_x = ((float)INK_SCREEN_W - total_w) * 0.5f;
-    const float card_y = 148.0f;
+    const float card_y = 152.0f;
 
     out->card_count = count;
     for (int32_t i = 0; i < count; ++i) {
@@ -45,11 +46,16 @@ void render_reward_layout(const GameState *g, RewardLayout *out)
         out->repair_rect =
             (Rectangle){((float)INK_SCREEN_W - 280.0f) * 0.5f, 270.0f, 280.0f, 112.0f};
         out->has_reroll = false;
+    } else if (rw->kind == REWARD_KIND_RELIC) {
+        out->has_repair = false;
+        out->has_reroll = true;
+        out->reroll_rect =
+            (Rectangle){((float)INK_SCREEN_W - 236.0f) * 0.5f, 548.0f, 236.0f, 68.0f};
     } else {
         out->has_repair = true;
         out->has_reroll = true;
-        out->reroll_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f - 260.0f, 544.0f, 236.0f, 68.0f};
-        out->repair_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f + 24.0f, 544.0f, 236.0f, 68.0f};
+        out->reroll_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f - 260.0f, 548.0f, 236.0f, 68.0f};
+        out->repair_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f + 24.0f, 548.0f, 236.0f, 68.0f};
     }
 }
 
@@ -69,6 +75,66 @@ static void draw_axis_emblem(RenderState *r, Vector2 center, UpgradeAxis axis)
                        (InkTone){.color = pal, .alpha = 0.90f});
     } else {
         ink_teardrop(r, center, (Vector2){0.0f, -1.0f}, 14.0f, 11.0f, pal_color_alpha(pal, 0.92f));
+    }
+}
+
+static void draw_relic_emblem(RenderState *r, Vector2 c, RelicId rid)
+{
+    ink_wash(r, c, 34.0f, 28.0f, 0.12f, (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.42f}, 2,
+             420u + (uint32_t)rid);
+    switch (rid) {
+    case RELIC_VERMILION_INKSTONE: {
+        const Vector2 stone[4] = {{c.x - 18.0f, c.y - 12.0f},
+                                  {c.x + 18.0f, c.y - 10.0f},
+                                  {c.x + 15.0f, c.y + 14.0f},
+                                  {c.x - 16.0f, c.y + 12.0f}};
+        ink_outline(r, stone, 4, true, 3.2f, (Vector2){0.7f, 0.7f}, 430u);
+        ink_wash(r, c, 10.0f, 7.0f, 0.0f, (InkTone){.color = PAL_SHU, .alpha = 0.85f}, 1, 431u);
+        break;
+    }
+    case RELIC_THUNDER_DRUM:
+        ink_arc_stroke(r, c, 16.0f, 0.0f, 6.2f,
+                       (BrushProfile){.w_max = 3.6f,
+                                      .w_min_ratio = 0.3f,
+                                      .entry = 0.1f,
+                                      .exit = 0.2f,
+                                      .dry = 0.1f,
+                                      .seed = 432u},
+                       (InkTone){.color = PAL_AO, .alpha = 0.92f});
+        ink_teardrop(r, c, (Vector2){0.0f, -1.0f}, 9.0f, 7.0f, pal_color_alpha(PAL_AO_HOT, 0.92f));
+        break;
+    case RELIC_TENGU_FAN:
+        for (int k = -1; k <= 1; ++k) {
+            const float a = -1.57f + (float)k * 0.48f;
+            const Vector2 f[2] = {{c.x, c.y + 14.0f},
+                                  {c.x + cosf(a) * 24.0f, c.y + 14.0f + sinf(a) * 24.0f}};
+            ink_stroke(r, f, 2,
+                       (BrushProfile){.w_max = 4.5f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.1f,
+                                      .exit = 0.45f,
+                                      .dry = 0.2f,
+                                      .seed = 433u + (uint32_t)(k + 1)},
+                       (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.90f}, 1.0f);
+        }
+        break;
+    case RELIC_PACT_OF_FIRE:
+        ink_teardrop(r, c, (Vector2){0.0f, -1.0f}, 18.0f, 13.0f, pal_color_alpha(PAL_SHU, 0.92f));
+        ink_teardrop(r, (Vector2){c.x, c.y + 2.0f}, (Vector2){0.0f, -1.0f}, 10.0f, 7.0f,
+                     pal_color_alpha(PAL_SHU_HOT, 0.95f));
+        break;
+    default:
+        ink_arc_stroke(r, c, 15.0f, 0.3f, 5.5f,
+                       (BrushProfile){.w_max = 3.8f,
+                                      .w_min_ratio = 0.28f,
+                                      .entry = 0.15f,
+                                      .exit = 0.35f,
+                                      .dry = 0.25f,
+                                      .seed = 435u + (uint32_t)rid},
+                       (InkTone){.color = PAL_KIN, .alpha = 0.92f});
+        ink_wash(r, c, 9.0f, 9.0f, 0.0f, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.65f}, 1,
+                 436u + (uint32_t)rid);
+        break;
     }
 }
 
@@ -99,20 +165,35 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     RewardLayout layout;
     render_reward_layout(g, &layout);
 
-    /* Thin washi veil over paused combat scene */
     const Vector2 full[4] = {{0.0f, 0.0f},
                              {(float)INK_SCREEN_W, 0.0f},
                              {(float)INK_SCREEN_W, (float)INK_SCREEN_H},
                              {0.0f, (float)INK_SCREEN_H}};
     ink_fill_poly(r, full, 4, pal_color_alpha(pal_paper_for_act(g->run.act_index), 0.72f));
 
-    const TextId heading =
-        rw->kind == REWARD_KIND_FALLBACK ? TEXT_REWARD_FALLBACK_TITLE : TEXT_REWARD_TITLE;
+    /* Scroll backdrop for Relic reward */
+    if (rw->kind == REWARD_KIND_RELIC) {
+        const Rectangle scroll = {138.0f, 130.0f, (float)INK_SCREEN_W - 276.0f, 404.0f};
+        ink_fill_panel(r, scroll, PAL_PAPER_ACT1, 0.90f, PAL_KIN, 0.85f, 445u);
+        const Rectangle lrod = {scroll.x - 14.0f, scroll.y - 8.0f, 16.0f, scroll.height + 16.0f};
+        const Rectangle rrod = {scroll.x + scroll.width - 2.0f, scroll.y - 8.0f, 16.0f,
+                                scroll.height + 16.0f};
+        ink_fill_panel(r, lrod, PAL_SUMI_HEAVY, 0.95f, PAL_SUMI_SCORCH, 0.90f, 446u);
+        ink_fill_panel(r, rrod, PAL_SUMI_HEAVY, 0.95f, PAL_SUMI_SCORCH, 0.90f, 447u);
+    }
+
+    TextId heading = TEXT_REWARD_TITLE;
+    if (rw->kind == REWARD_KIND_FALLBACK) {
+        heading = TEXT_REWARD_FALLBACK_TITLE;
+    } else if (rw->kind == REWARD_KIND_RELIC) {
+        heading = TEXT_REWARD_RELIC_TITLE;
+    }
+    /* Title brush font strictly >= 40px (42px) */
     render_draw_text_centered(r, text_get(heading, r->use_ja),
-                              (Vector2){(float)INK_SCREEN_W * 0.5f, 82.0f}, 36.0f, PAL_SUMI_SCORCH,
+                              (Vector2){(float)INK_SCREEN_W * 0.5f, 76.0f}, 42.0f, PAL_SUMI_SCORCH,
                               0.96f, true);
     render_draw_text_centered(r, text_get(TEXT_REWARD_HINT, r->use_ja),
-                              (Vector2){(float)INK_SCREEN_W * 0.5f, 118.0f}, 18.0f, PAL_SUMI_HEAVY,
+                              (Vector2){(float)INK_SCREEN_W * 0.5f, 116.0f}, 18.0f, PAL_SUMI_HEAVY,
                               0.88f, false);
 
     const float anim = r->reward_reroll_t > 0.0f ? (1.0f - r->reward_reroll_t / 0.40f)
@@ -128,55 +209,92 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         }
         const float h_vis = card.height * ink_clampf(anim, 0.25f, 1.0f);
         const Rectangle vis = {card.x, card.y, card.width, h_vis};
-
-        const UpgradeId uid = (UpgradeId)rw->choice_ids[i];
-        const UpgradeAxis axis = game_upgrade_axis(uid);
-        const PaletteId border = is_hover ? pal_axis_color(axis) : PAL_SUMI_DARK;
-        ink_fill_panel(r, vis, PAL_GOFUN, 0.95f, border, 0.94f, 450u + (uint32_t)i);
-
-        if (text_a <= 0.01f) {
-            continue;
-        }
-
         const float cx = vis.x + vis.width * 0.5f;
-        draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f}, axis);
 
-        /* Key number & axis name */
-        char hdr[64];
-        snprintf(hdr, sizeof hdr, "[%d] %s", i + 1, text_get(text_axis_name(axis), r->use_ja));
-        render_draw_text_centered(r, hdr, (Vector2){cx, vis.y + 82.0f}, 18.0f, pal_axis_color(axis),
-                                  0.94f * text_a, false);
+        if (rw->kind == REWARD_KIND_RELIC) {
+            const RelicId rid = (RelicId)rw->choice_ids[i];
+            const PaletteId border = is_hover ? PAL_SHU : PAL_KIN;
+            ink_fill_panel(r, vis, PAL_GOFUN, 0.96f, border, 0.94f, 450u + (uint32_t)i);
+            if (text_a <= 0.01f) {
+                continue;
+            }
+            draw_relic_emblem(r, (Vector2){cx, vis.y + 62.0f}, rid);
 
-        /* Upgrade name */
-        const char *name = text_get(text_upgrade_name(uid), r->use_ja);
-        render_draw_text_centered(r, name, (Vector2){cx, vis.y + 124.0f}, 26.0f, PAL_SUMI_SCORCH,
-                                  0.98f * text_a, false);
+            char hdr[32];
+            snprintf(hdr, sizeof hdr, "[%d]", i + 1);
+            render_draw_text_centered(r, hdr, (Vector2){cx, vis.y + 108.0f}, 18.0f, PAL_KIN,
+                                      0.94f * text_a, false);
+            render_draw_text_centered(r, text_get(text_relic_name(rid), r->use_ja),
+                                      (Vector2){cx, vis.y + 146.0f}, 26.0f, PAL_SUMI_SCORCH,
+                                      0.98f * text_a, false);
 
-        /* Current Lv -> Next Lv */
-        const uint8_t cur_lv = game_upgrade_level(g, uid);
-        const uint8_t next_lv = rw->choice_next_level[i] > 0 ? rw->choice_next_level[i] : 1;
-        char lv_buf[48];
-        snprintf(lv_buf, sizeof lv_buf, "%s %u -> %u", text_get(TEXT_REWARD_LV, r->use_ja),
-                 (unsigned)cur_lv, (unsigned)next_lv);
-        render_draw_text_centered(r, lv_buf, (Vector2){cx, vis.y + 168.0f}, 20.0f, PAL_SUMI_HEAVY,
-                                  0.92f * text_a, false);
+            const Vector2 div_pts[2] = {{vis.x + 28.0f, vis.y + 180.0f},
+                                        {vis.x + vis.width - 28.0f, vis.y + 180.0f}};
+            ink_stroke(r, div_pts, 2,
+                       (BrushProfile){.w_max = 2.4f,
+                                      .w_min_ratio = 0.35f,
+                                      .entry = 0.15f,
+                                      .exit = 0.25f,
+                                      .dry = 0.3f,
+                                      .seed = 460u + (uint32_t)i},
+                       (InkTone){.color = PAL_KIN, .alpha = 0.72f * text_a}, 1.0f);
 
-        /* Divider brush line */
-        const Vector2 div_pts[2] = {{vis.x + 28.0f, vis.y + 196.0f},
-                                    {vis.x + vis.width - 28.0f, vis.y + 196.0f}};
-        ink_stroke(r, div_pts, 2,
-                   (BrushProfile){.w_max = 2.4f,
-                                  .w_min_ratio = 0.35f,
-                                  .entry = 0.15f,
-                                  .exit = 0.25f,
-                                  .dry = 0.3f,
-                                  .seed = 460u + (uint32_t)i},
-                   (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f * text_a}, 1.0f);
+            render_draw_text_centered(r, text_get(text_relic_effect(rid), r->use_ja),
+                                      (Vector2){cx, vis.y + 226.0f}, 18.0f, PAL_SUMI_DARK,
+                                      0.94f * text_a, false);
 
-        /* Effect description */
-        const char *eff = text_get(text_upgrade_effect(uid, (int)next_lv), r->use_ja);
-        render_draw_text_centered(r, eff, (Vector2){cx, vis.y + 248.0f}, 18.0f, PAL_SUMI_DARK,
-                                  0.94f * text_a, false);
+            const TextId tr_id = text_relic_tradeoff(rid);
+            if (tr_id != TEXT_NONE) {
+                char tr_buf[96];
+                snprintf(tr_buf, sizeof tr_buf, "%s%s", text_get(TEXT_REWARD_TRADEOFF, r->use_ja),
+                         text_get(tr_id, r->use_ja));
+                render_draw_text_centered(r, tr_buf, (Vector2){cx, vis.y + 276.0f}, 18.0f, PAL_SHU,
+                                          0.96f * text_a, false);
+            }
+        } else {
+            const UpgradeId uid = (UpgradeId)rw->choice_ids[i];
+            const UpgradeAxis axis = game_upgrade_axis(uid);
+            const PaletteId border = is_hover ? pal_axis_color(axis) : PAL_SUMI_DARK;
+            ink_fill_panel(r, vis, PAL_GOFUN, 0.95f, border, 0.94f, 450u + (uint32_t)i);
+
+            if (text_a <= 0.01f) {
+                continue;
+            }
+
+            draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f}, axis);
+
+            char hdr[64];
+            snprintf(hdr, sizeof hdr, "[%d] %s", i + 1, text_get(text_axis_name(axis), r->use_ja));
+            render_draw_text_centered(r, hdr, (Vector2){cx, vis.y + 82.0f}, 18.0f,
+                                      pal_axis_color(axis), 0.94f * text_a, false);
+
+            const char *name = text_get(text_upgrade_name(uid), r->use_ja);
+            render_draw_text_centered(r, name, (Vector2){cx, vis.y + 124.0f}, 26.0f,
+                                      PAL_SUMI_SCORCH, 0.98f * text_a, false);
+
+            const uint8_t cur_lv = game_upgrade_level(g, uid);
+            const uint8_t next_lv = rw->choice_next_level[i] > 0 ? rw->choice_next_level[i] : 1;
+            char lv_buf[48];
+            snprintf(lv_buf, sizeof lv_buf, "%s %u -> %u", text_get(TEXT_REWARD_LV, r->use_ja),
+                     (unsigned)cur_lv, (unsigned)next_lv);
+            render_draw_text_centered(r, lv_buf, (Vector2){cx, vis.y + 168.0f}, 20.0f,
+                                      PAL_SUMI_HEAVY, 0.92f * text_a, false);
+
+            const Vector2 div_pts[2] = {{vis.x + 28.0f, vis.y + 196.0f},
+                                        {vis.x + vis.width - 28.0f, vis.y + 196.0f}};
+            ink_stroke(r, div_pts, 2,
+                       (BrushProfile){.w_max = 2.4f,
+                                      .w_min_ratio = 0.35f,
+                                      .entry = 0.15f,
+                                      .exit = 0.25f,
+                                      .dry = 0.3f,
+                                      .seed = 460u + (uint32_t)i},
+                       (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f * text_a}, 1.0f);
+
+            const char *eff = text_get(text_upgrade_effect(uid, (int)next_lv), r->use_ja);
+            render_draw_text_centered(r, eff, (Vector2){cx, vis.y + 248.0f}, 18.0f, PAL_SUMI_DARK,
+                                      0.94f * text_a, false);
+        }
 
         if (is_hover) {
             seal_stamp(r, TEXT_SEAL_DONE,
@@ -186,7 +304,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     }
 
     if (layout.has_reroll) {
-        const bool can_reroll = rw->kind == REWARD_KIND_UPGRADE && g->run.rerolls_left > 0;
+        const bool can_reroll =
+            (rw->kind == REWARD_KIND_UPGRADE || rw->kind == REWARD_KIND_RELIC) &&
+            g->run.rerolls_left > 0;
         const bool hov = hover == UI_HOVER_REROLL && can_reroll;
         ink_fill_panel(r, layout.reroll_rect, can_reroll ? PAL_GOFUN : PAL_SUMI_CLEAR,
                        can_reroll ? 0.94f : 0.45f,

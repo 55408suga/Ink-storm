@@ -56,6 +56,48 @@ void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t s
     audio->se_vol = clamp_vol(se);
 }
 
+void audio_set_lobby_mode(AudioState *audio, bool lobby)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio->lobby_mode = lobby;
+    if (lobby) {
+        audio->bgm = BGM_LOBBY;
+        audio->has_consumed = true;
+        audio->brush_target = 0.0f;
+        audio->wind_target = 0.14f;
+        audio_bgm_apply_track(audio, BGM_LOBBY);
+    }
+}
+
+void audio_set_external_bgm(AudioState *audio, bool external_active)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio->external_bgm = external_active;
+}
+
+void audio_set_paused(AudioState *audio, bool paused)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio->paused = paused;
+    if (paused) {
+        audio->brush_target = 0.0f;
+    }
+}
+
+void audio_trigger_ui_stamp(AudioState *audio)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio_voice_spawn(audio, AUDIO_VOICE_REWARD_PICK, audio->samples_rendered, 110.0f, 0.0f);
+}
+
 static void enqueue_tick_state(AudioState *audio, AudioTickState st)
 {
     if (audio->state_q_count >= AUDIO_STATE_QUEUE_CAP) {
@@ -101,11 +143,13 @@ void audio_consume_events(AudioState *audio, const struct GameState *game)
         audio->consumed_ticks = (limit / (uint64_t)AUDIO_SAMPLES_PER_TICK) + 1u;
     }
 
+    audio->lobby_mode = false;
     const BgmTrack next_bgm = desired_bgm_for_game(game);
     audio->bgm = next_bgm;
 
-    const float brush_target =
-        game->player.painting ? ink_clampf(game->player.stroke_speed / 900.0f, 0.08f, 1.0f) : 0.0f;
+    const float brush_target = (!audio->paused && game->player.painting)
+                                   ? ink_clampf(game->player.stroke_speed / 900.0f, 0.08f, 1.0f)
+                                   : 0.0f;
     float wind_target = 0.0f;
     if (game->phase == RUN_PHASE_GAME_OVER || game->phase == RUN_PHASE_SHRINE_BREAK) {
         wind_target = 0.35f;
@@ -154,6 +198,15 @@ void audio_consume_events(AudioState *audio, const struct GameState *game)
             break;
         case EV_STORM_ZAP:
             audio_voice_spawn(audio, AUDIO_VOICE_STORM_ZAP, at_sample, 1320.0f, 0.0f);
+            break;
+        case EV_THUNDERBURST:
+            audio_voice_spawn(audio, AUDIO_VOICE_THUNDERBURST, at_sample, 62.0f, 0.0f);
+            break;
+        case EV_CATACLYSM:
+            audio_voice_spawn(audio, AUDIO_VOICE_CATACLYSM, at_sample, 54.0f, 0.0f);
+            break;
+        case EV_WIND_TELEGRAPH:
+            audio_voice_spawn(audio, AUDIO_VOICE_WIND_HOWL, at_sample, 196.0f, 0.0f);
             break;
         case EV_CYCLONE:
             audio_voice_spawn(audio, AUDIO_VOICE_CYCLONE_SWIRL, at_sample, 145.0f, 0.0f);
@@ -210,9 +263,11 @@ static void drain_state_queue(AudioState *audio, uint64_t sample_idx)
         audio->state_q_count--;
 
         audio->has_consumed = true;
-        audio->brush_target = st.brush_target;
+        audio->brush_target = audio->paused ? 0.0f : st.brush_target;
         audio->wind_target = st.wind_target;
-        audio_bgm_apply_track(audio, st.bgm);
+        if (!audio->lobby_mode) {
+            audio_bgm_apply_track(audio, st.bgm);
+        }
     }
 }
 
