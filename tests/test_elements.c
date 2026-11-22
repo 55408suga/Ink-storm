@@ -496,8 +496,9 @@ static void test_thunderburst_trigger_impulse_decay_cd_and_cap(void)
     TEST_ASSERT_FLOAT_WITHIN(1.0f, 286.0f, game_velocity(g, oni)->vx);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f - INK_FIXED_DT, game_status(g, oni)->knockback_t);
 
-    /* Stopped Nue took boss-halved storm dmg (15) and outward knockback (286 px/s). */
-    TEST_ASSERT_EQUAL_INT32(685, game_health(g, nue)->hp);
+    /* Stopped Nue took dual-element (FIRE | STORM) lower-resistance dmg (30) and outward knockback
+     * (286 px/s); per game-design §6.4 bosses apply fmaxf(m_fire=1.0, m_storm=0.5) = 1.0. */
+    TEST_ASSERT_EQUAL_INT32(670, game_health(g, nue)->hp);
     TEST_ASSERT_FLOAT_WITHIN(1.0f, 286.0f, game_velocity(g, nue)->vy);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f - INK_FIXED_DT, game_status(g, nue)->knockback_t);
 

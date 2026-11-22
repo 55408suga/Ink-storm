@@ -670,5 +670,5 @@
 ## 13. 後続フェーズで詳細化する保留項目
 
 - 本書の数値を実プレイで調整する（ウェーブの所要時間、墨晶の値付け、ボスの HP）
-- Phase 4（P4-C）で追加する題字用の毛筆体フォント（OFL 等）と外部 BGM 音源の具体的な選定、ライセンスの確認（本文用の明朝体 1 書体は Phase 3 で OFL 1.1・未改変のまま `assets/fonts/` に同梱し、`assets/LICENSES.txt` へ記録する）
+- **[Phase 4 確定]** 題字用の毛筆体フォントは Yuji Syuku Regular（SIL OFL 1.1・未改変、`assets/fonts/title_brush.ttf`）、外部 BGM 音源は CC0 の決定論的和風 OGG 4 曲（`assets/audio/bgm_{lobby,battle,boss,victory}.ogg`）を採用し、本文用の明朝体（`assets/fonts/ui_mincho.ttf`）とあわせて `assets/LICENSES.txt` へ記録済み。
 - 一筆龍（第 3 幕最終ボス）の多部位版における頭の軌跡の履歴の持ち方と、描画・演出の詳細（見た目の規約は [art-direction.md](art-direction.md) §10.5。ECS 上の `BossComp.part_id` / `parent_id` 表現、設定値・ヒントフラグの `MetaState` 統合、`CMD_REPAIR_SHRINE` コマンド、`fluid_add_radial_impulse` API は [architecture.md](architecture.md) で確定済み）

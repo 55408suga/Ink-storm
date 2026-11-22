@@ -516,7 +516,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                     render_update_vfx(render, game, INK_FIXED_DT);
                     app_after_tick(&ctx, game);
                     step_hint_queue(&ctx, INK_FIXED_DT);
-                    if (prev_phase == RUN_PHASE_REWARD && game->phase == RUN_PHASE_PLAYING) {
+                    if (prev_phase == RUN_PHASE_REWARD && game->phase != RUN_PHASE_REWARD) {
                         frame_clock_reset(&clock);
                         break;
                     }
