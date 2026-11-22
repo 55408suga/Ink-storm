@@ -13,3 +13,28 @@ Source URL: https://raw.githubusercontent.com/google/fonts/main/ofl/shipporiminc
             (upstream: https://github.com/fontdasu/ShipporiMincho)
 Status:     Unmodified original distribution (renamed to ui_mincho.ttf only;
             no subsetting or glyph/table modification).
+
+2. Title Brush Font
+-------------------
+File:       assets/fonts/title_brush.ttf
+Font Name:  Yuji Syuku Regular (佑字 粛 Regular)
+Version:    Version 3.002
+Copyright:  Copyright 2021 The Yuji Project Authors
+            (https://github.com/Kinutafontfactory/Yuji)
+License:    SIL Open Font License, Version 1.1 (see assets/fonts/OFL.txt)
+Source URL: https://raw.githubusercontent.com/google/fonts/main/ofl/yujisyuku/YujiSyuku-Regular.ttf
+            (upstream: https://github.com/Kinutafontfactory/Yuji)
+Status:     Unmodified original distribution (renamed to title_brush.ttf only;
+            no subsetting or glyph/table modification).
+
+3. External BGM Audio Tracks (OGG Vorbis)
+-----------------------------------------
+Files:      assets/audio/bgm_lobby.ogg   (Lobby & Bokuan ambient loop)
+            assets/audio/bgm_battle.ogg  (Standard wave battle loop)
+            assets/audio/bgm_boss.ogg    (Act boss battle loop)
+            assets/audio/bgm_victory.ogg (Victory fanfare jingle, non-looping)
+Author:     INKSTORM Project (deterministic Japanese pentatonic synthesis)
+License:    CC0 1.0 Universal (Public Domain Dedication)
+            https://creativecommons.org/publicdomain/zero/1.0/
+Status:     Original project-generated OGG Vorbis assets, free for
+            redistribution and modification without restriction.

@@ -16,11 +16,13 @@
 #define RENDER_MAX_STROKES 32
 #define RENDER_MAX_CRACKS 8
 #define RENDER_MAX_INTRO_QUEUE 8
+#define RENDER_RYU_TRAIL_LEN 24
 
 typedef struct {
     bool use_post;
     uint32_t fault_mask;
     const char *font_path;
+    const char *title_font_path;
 } RenderOptions;
 
 typedef struct {
@@ -31,6 +33,39 @@ typedef struct {
     Rectangle reroll_rect;
     bool has_reroll;
 } RewardLayout;
+
+typedef struct {
+    Rectangle items[4]; /* 0: Sortie, 1: Bokuan, 2: Settings, 3: Quit */
+} LobbyLayout;
+
+typedef struct {
+    Rectangle cards[BRUSH_STYLE_COUNT];
+    Rectangle back_rect;
+} BrushSelectLayout;
+
+typedef struct {
+    Rectangle upgrades[META_UPG_COUNT];
+    Rectangle relics[META_RELIC_UNLOCK_COUNT];
+    Rectangle back_rect;
+} BokuanLayout;
+
+typedef struct {
+    Rectangle items[4]; /* 0: Resume, 1: Restart, 2: Settings, 3: Lobby */
+    Rectangle confirm_yes;
+    Rectangle confirm_no;
+} PauseLayout;
+
+typedef struct {
+    Rectangle rows[6];
+    Rectangle minus_rects[6];
+    Rectangle plus_rects[6];
+    Rectangle back_rect;
+} SettingsLayout;
+
+typedef struct {
+    Rectangle lobby_rect;
+    Rectangle retry_rect;
+} ResultLayout;
 
 typedef struct {
     bool active;
@@ -71,7 +106,9 @@ typedef struct {
 
 typedef struct {
     bool active;
-    int32_t kind; /* 0 = cyclone, 1 = gale, 2 = act wipe, 3 = orb trail, 4 = boss burst */
+    int32_t kind; /* 0=cyclone, 1=gale, 2=act wipe, 3=orb trail, 4=boss burst,
+                     5=thunderburst enso, 6=cataclysm gold enso, 7=bounce enso,
+                     8=nue dash trail */
     float x, y, dx, dy;
     float radius;
     float age, life;
@@ -94,6 +131,7 @@ typedef struct {
 typedef struct {
     Shader post_shader;
     int post_res_loc;
+    bool post_enabled;
     RenderTexture2D scene;
     RenderTexture2D bg_cache;
     int32_t bg_cached_act;
@@ -106,6 +144,9 @@ typedef struct {
     Font font_body;
     Font font_title;
     bool custom_fonts;
+    bool owns_body_font;
+    bool owns_title_font;
+    bool title_is_brush;
     bool use_ja;
     Vector2 text_size_cache[TEXT_COUNT][2];
     bool text_size_valid[TEXT_COUNT][2];
@@ -135,6 +176,20 @@ typedef struct {
     float shrine_flicker_t;
     int32_t major_fx_active;
 
+    /* Act 3 wind telegraph & boss visual history */
+    float wind_telegraph_t;
+    int32_t wind_telegraph_dir;
+    Vector2 ryu_trail[RENDER_RYU_TRAIL_LEN];
+    int32_t ryu_trail_n;
+    EntityId ryu_trail_id;
+    float ryu_awaken_t;
+
+    /* Bounce orb & Nue dash tracking */
+    int32_t prev_proj_bounces[ECS_MAX_ENTITIES];
+    uint32_t prev_proj_gen[ECS_MAX_ENTITIES];
+    Vector2 prev_nue_pos;
+    EntityId prev_nue_id;
+
     EnemyDefId intro_queue[RENDER_MAX_INTRO_QUEUE];
     int32_t intro_head;
     int32_t intro_count;
@@ -160,11 +215,18 @@ typedef struct {
 
 void render_init(RenderState *r, const RenderOptions *opt);
 void render_reset_vfx(RenderState *r, uint64_t seed);
+void render_set_post_enabled(RenderState *r, bool enabled);
 void render_consume_events(RenderState *r, const GameState *g);
 void render_update_vfx(RenderState *r, const GameState *g, float dt);
 void render_draw(RenderState *r, const GameState *g, const UiView *ui);
 void render_close(RenderState *r);
 
 void render_reward_layout(const GameState *g, RewardLayout *out);
+void render_lobby_layout(LobbyLayout *out);
+void render_brush_select_layout(BrushSelectLayout *out);
+void render_bokuan_layout(BokuanLayout *out);
+void render_pause_layout(PauseLayout *out);
+void render_settings_layout(SettingsLayout *out);
+void render_result_layout(ResultLayout *out);
 
 #endif

@@ -32,6 +32,7 @@ typedef struct {
 } InputLatch;
 
 void input_latch_init(InputLatch *l, float x, float y);
+void input_latch_reset_for_ui_transition(InputLatch *l, float x, float y, bool left_down);
 void input_latch_feed(InputLatch *l, const RawInput *raw);
 BrushInput input_latch_take_tick(InputLatch *l);
 GameCommand input_latch_take_command(InputLatch *l, RunPhase phase);

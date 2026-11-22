@@ -20,6 +20,9 @@ typedef enum {
     AUDIO_VOICE_SLAM_TAIKO,
     AUDIO_VOICE_IGNITE_FLAME,
     AUDIO_VOICE_STORM_ZAP,
+    AUDIO_VOICE_THUNDERBURST,
+    AUDIO_VOICE_CATACLYSM,
+    AUDIO_VOICE_WIND_HOWL,
     AUDIO_VOICE_CYCLONE_SWIRL,
     AUDIO_VOICE_GALE_SLASH,
     AUDIO_VOICE_ORB_DROP,
@@ -69,6 +72,9 @@ typedef struct {
     BgmTrack prev_bgm;
     float xfade_t;
     bool has_consumed;
+    bool lobby_mode;
+    bool external_bgm;
+    bool paused;
 
     /* Continuous brush scrape & ambient wind */
     float brush_target;
@@ -101,6 +107,10 @@ struct GameState;
 
 void audio_init(AudioState *audio, uint64_t seed);
 void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t se);
+void audio_set_lobby_mode(AudioState *audio, bool lobby);
+void audio_set_external_bgm(AudioState *audio, bool external_active);
+void audio_set_paused(AudioState *audio, bool paused);
+void audio_trigger_ui_stamp(AudioState *audio);
 void audio_consume_events(AudioState *audio, const struct GameState *game);
 void audio_render(AudioState *audio, int16_t *samples, size_t sample_count);
 BgmTrack audio_bgm_track(const AudioState *audio);

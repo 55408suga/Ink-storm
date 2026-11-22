@@ -12,10 +12,13 @@ void render_draw_xray(const RenderState *r, const GameState *g)
     const Color fg = pal_color(PAL_GOFUN);
     const Color acc = pal_color(PAL_KIN_HOT);
 
-    DrawRectangle(12, 66, 336, 152, bg);
-    DrawRectangleLines(12, 66, 336, 152, acc);
+    DrawRectangle(12, 66, 360, 152, bg);
+    DrawRectangleLines(12, 66, 360, 152, acc);
 
-    DrawText("F1 X-RAY METRICS (P0)", 22, 74, 16, acc);
+    const bool post_on = r->post_enabled && r->post_shader.id != 0;
+    const char *font_lbl = !r->use_ja ? "ASCII" : (r->title_is_brush ? "JA-BRUSH" : "JA-MINCHO");
+
+    DrawText("F1 X-RAY METRICS (P1)", 22, 74, 16, acc);
     DrawText(TextFormat("render_draw : %.2f ms  (budget < 4.0)", r->last_metrics.draw_ms), 22, 96,
              16, fg);
     DrawText(TextFormat("prim_verts  : %" PRIu32 "  (budget <= 60000)", r->last_metrics.prim_verts),
@@ -27,7 +30,6 @@ void render_draw_xray(const RenderState *r, const GameState *g)
     DrawText(TextFormat("entities    : %" PRIu32 "   dropped_ev: %" PRIu32,
                         ecs_alive_count(&g->ecs), g->dropped_events),
              22, 176, 16, fg);
-    DrawText(TextFormat("post_shader : %s   font: %s", r->post_shader.id != 0 ? "ON" : "DIRECT",
-                        r->use_ja ? "JA-MINCHO" : "ASCII"),
-             22, 196, 16, fg);
+    DrawText(TextFormat("post_shader : %s   font: %s", post_on ? "ON" : "DIRECT", font_lbl), 22,
+             196, 16, fg);
 }

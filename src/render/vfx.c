@@ -188,6 +188,14 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->skill_deny_t[1] = 0.0f;
     r->shrine_flicker_t = 0.0f;
     r->major_fx_active = 0;
+    r->wind_telegraph_t = 0.0f;
+    r->wind_telegraph_dir = 0;
+    r->ryu_trail_n = 0;
+    r->ryu_trail_id = (EntityId){ECS_INVALID_INDEX, 0};
+    r->ryu_awaken_t = 0.0f;
+    r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
+    memset(r->prev_proj_bounces, 0, sizeof r->prev_proj_bounces);
+    memset(r->prev_proj_gen, 0, sizeof r->prev_proj_gen);
     r->intro_head = 0;
     r->intro_count = 0;
     r->intro_t = 0.0f;
@@ -243,6 +251,34 @@ void render_consume_events(RenderState *r, const GameState *g)
         case EV_STORM_ZAP:
             push_bolt(r, ev->x, ev->y, ev->x2, ev->y2, 0.22f);
             break;
+        case EV_THUNDERBURST:
+            if (r->major_fx_active < 2) {
+                push_stroke(r, 5, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 72.0f, 0.40f);
+                r->major_fx_active++;
+            }
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 250.0f, 10.0f, 0.42f, PAL_SHU, true);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 260.0f, 9.0f, 0.40f, PAL_AO_HOT, false);
+            push_callout(r, TEXT_CALLOUT_THUNDERBURST, 0, ev->x, ev->y - 26.0f, PAL_SHU, true,
+                         1.15f);
+            add_shake(r, 5.5f, 0.22f);
+            break;
+        case EV_CATACLYSM:
+            if (r->major_fx_active < 2) {
+                push_stroke(r, 6, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 96.0f, 0.60f);
+                r->major_fx_active++;
+            }
+            push_seal(r, TEXT_SEAL_SANGEN, ev->x, ev->y, 70.0f, SEAL_HAKUBUN, 0.65f);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 14, 290.0f, 10.0f, 0.60f, PAL_KIN_HOT, true);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 220.0f, 8.0f, 0.50f, PAL_SHU, false);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 240.0f, 8.0f, 0.50f, PAL_AO_HOT, false);
+            push_callout(r, TEXT_CALLOUT_CATACLYSM, 0, ev->x, ev->y - 38.0f, PAL_KIN, true, 1.35f);
+            add_shake(r, 9.0f, 0.34f);
+            trigger_flash(r, 0.05f);
+            break;
+        case EV_WIND_TELEGRAPH:
+            r->wind_telegraph_t = 1.5f;
+            r->wind_telegraph_dir = ev->value;
+            break;
         case EV_CYCLONE:
             push_stroke(r, 0, ev->x, ev->y, 0.0f, 0.0f, ev->value > 0 ? (float)ev->value : 110.0f,
                         0.72f);
@@ -283,7 +319,11 @@ void render_consume_events(RenderState *r, const GameState *g)
             }
             add_shake(r, 5.0f, 0.24f);
             break;
-        case EV_BOSS_PHASE:
+        case EV_BOSS_PHASE: {
+            const EnemyComp *ben = game_enemy(g, g->run.boss_id);
+            if (ben != NULL && ben->def_id == ENEMY_BOSS_RYU) {
+                r->ryu_awaken_t = 1.5f;
+            }
             if (r->major_fx_active < 2) {
                 push_stroke(r, 4, ev->x, ev->y, 0.0f, 0.0f, 130.0f, 1.50f);
                 spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 18, 260.0f, 12.0f, 0.85f, PAL_SUMI_DARK,
@@ -292,6 +332,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             }
             add_shake(r, 7.0f, 0.30f);
             break;
+        }
         case EV_WAVE_CLEAR:
             push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f, 128.0f, 54.0f, SEAL_HAKUBUN,
                       1.10f);
@@ -333,6 +374,85 @@ void render_consume_events(RenderState *r, const GameState *g)
     }
 }
 
+static void track_ryu_and_bounces(RenderState *r, const GameState *g)
+{
+    /* Track Ippitsu-Ryu head trail ring buffer (24 points) & Nue dash trail */
+    const EnemyComp *ben = game_enemy(g, g->run.boss_id);
+    const TransformComp *btr = game_transform(g, g->run.boss_id);
+    if (ben != NULL && btr != NULL && ben->def_id == ENEMY_BOSS_RYU) {
+        if (r->ryu_trail_id.index != g->run.boss_id.index ||
+            r->ryu_trail_id.gen != g->run.boss_id.gen) {
+            r->ryu_trail_id = g->run.boss_id;
+            r->ryu_trail_n = 1;
+            r->ryu_trail[0] = (Vector2){btr->x, btr->y};
+        } else {
+            const float dx = btr->x - r->ryu_trail[0].x;
+            const float dy = btr->y - r->ryu_trail[0].y;
+            if (dx * dx + dy * dy >= 16.0f || r->ryu_trail_n < 4) {
+                const int n = r->ryu_trail_n < RENDER_RYU_TRAIL_LEN ? r->ryu_trail_n + 1
+                                                                    : RENDER_RYU_TRAIL_LEN;
+                for (int i = n - 1; i > 0; --i) {
+                    r->ryu_trail[i] = r->ryu_trail[i - 1];
+                }
+                r->ryu_trail[0] = (Vector2){btr->x, btr->y};
+                r->ryu_trail_n = n;
+            }
+        }
+    } else {
+        r->ryu_trail_n = 0;
+        r->ryu_trail_id = (EntityId){ECS_INVALID_INDEX, 0};
+    }
+
+    if (ben != NULL && btr != NULL && ben->def_id == ENEMY_BOSS_NUE) {
+        if (r->prev_nue_id.index == g->run.boss_id.index &&
+            r->prev_nue_id.gen == g->run.boss_id.gen) {
+            const float dx = btr->x - r->prev_nue_pos.x;
+            const float dy = btr->y - r->prev_nue_pos.y;
+            if (dx * dx + dy * dy > 400.0f) {
+                push_stroke(r, 8, r->prev_nue_pos.x, r->prev_nue_pos.y, btr->x, btr->y, 12.0f,
+                            0.50f);
+            }
+        }
+        r->prev_nue_id = g->run.boss_id;
+        r->prev_nue_pos = (Vector2){btr->x, btr->y};
+    } else {
+        r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
+    }
+
+    /* Detect bounce-orb ricochet and emit mini broken enso */
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        if (!g->ecs.alive[i]) {
+            r->prev_proj_gen[i] = 0;
+            continue;
+        }
+        const EntityId id = {.index = i, .gen = g->ecs.gen[i]};
+        const ProjComp *pr = game_proj(g, id);
+        const TransformComp *tr = game_transform(g, id);
+        if (pr == NULL || tr == NULL || pr->kind != PROJ_BOUNCE_ORB) {
+            r->prev_proj_gen[i] = 0;
+            continue;
+        }
+        if (r->prev_proj_gen[i] == id.gen && pr->bounces_left < r->prev_proj_bounces[i]) {
+            push_stroke(r, 7, tr->x, tr->y, 0.0f, 0.0f, 22.0f, 0.30f);
+        }
+        r->prev_proj_gen[i] = id.gen;
+        r->prev_proj_bounces[i] = pr->bounces_left;
+    }
+
+    /* Brush-style stroke flavor particles */
+    if (g->player.painting && !g->player.dry && g->player.stroke_speed > 80.0f &&
+        (g->ticks % 4u) == 0u) {
+        if (g->config.brush_style == BRUSH_STYLE_EMBER) {
+            spawn_burst(r, g->player.cursor_x, g->player.cursor_y, 0.0f, -1.0f, 1, 55.0f, 4.5f,
+                        0.28f, PAL_SHU_HOT, false);
+        } else if (g->config.brush_style == BRUSH_STYLE_QUILL) {
+            spawn_burst(r, g->player.cursor_x, g->player.cursor_y, 0.0f, 0.0f, 1, 65.0f, 4.0f,
+                        0.22f, PAL_AO_HOT, false);
+        }
+    }
+}
+
 void render_update_vfx(RenderState *r, const GameState *g, float dt)
 {
     if (r == NULL || g == NULL || dt <= 0.0f) {
@@ -351,6 +471,12 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
     }
     if (r->shrine_flicker_t > 0.0f) {
         r->shrine_flicker_t = fmaxf(0.0f, r->shrine_flicker_t - dt);
+    }
+    if (r->wind_telegraph_t > 0.0f) {
+        r->wind_telegraph_t = fmaxf(0.0f, r->wind_telegraph_t - dt);
+    }
+    if (r->ryu_awaken_t > 0.0f) {
+        r->ryu_awaken_t = fmaxf(0.0f, r->ryu_awaken_t - dt);
     }
     for (int s = 0; s < SKILL_COUNT; ++s) {
         if (r->skill_deny_t[s] > 0.0f) {
@@ -391,6 +517,8 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
             r->intro_t = 0.0f;
         }
     }
+
+    track_ryu_and_bounces(r, g);
 
     for (int i = 0; i < RENDER_MAX_SPARKS; ++i) {
         VfxSpark *p = &r->sparks[i];
@@ -439,7 +567,8 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
             r->strokes[i].age += dt;
             if (r->strokes[i].age >= r->strokes[i].life) {
                 r->strokes[i].active = false;
-            } else if (r->strokes[i].kind == 2 || r->strokes[i].kind == 4) {
+            } else if (r->strokes[i].kind == 2 || r->strokes[i].kind == 4 ||
+                       r->strokes[i].kind == 5 || r->strokes[i].kind == 6) {
                 major++;
             }
         }
@@ -478,7 +607,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
     }
     render_set_blend(r, BLEND_ALPHA);
 
-    /* Teardrop sparks & ink splatter washes */
     for (int i = 0; i < RENDER_MAX_SPARKS; ++i) {
         const VfxSpark *p = &r->sparks[i];
         if (!p->active || p->life <= 0.0f) {
@@ -499,7 +627,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
         }
     }
 
-    /* Cyclone spirals, gale dragon-vein strokes, orb pickup flicks, act wipes */
     for (int i = 0; i < RENDER_MAX_STROKES; ++i) {
         const VfxStroke *s = &r->strokes[i];
         if (!s->active || s->life <= 0.0f) {
@@ -509,7 +636,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
         const float a = (1.0f - u * u) * 0.88f;
 
         if (s->kind == 0) {
-            /* Two rotating spiral ink_strokes */
             for (int arm = 0; arm < 2; ++arm) {
                 Vector2 pts[14];
                 const float base_a = (float)arm * 3.14159f + u * 5.2f;
@@ -530,7 +656,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                            ink_clampf(u * 3.5f, 0.15f, 1.0f));
             }
         } else if (s->kind == 1) {
-            /* Dragon-vein gale burst stroke */
             const Vector2 pts[3] = {
                 {s->x, s->y},
                 {s->x + s->dx * s->radius * 0.5f - s->dy * 12.0f,
@@ -547,7 +672,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                        (InkTone){.color = PAL_SUMI_DARK, .alpha = a},
                        ink_clampf(u * 4.0f, 0.2f, 1.0f));
         } else if (s->kind == 2) {
-            /* Act clear sweeping wipe */
             const float wx = u * (float)INK_SCREEN_W;
             const Vector2 pts[3] = {{wx - 180.0f, 60.0f}, {wx, 360.0f}, {wx - 120.0f, 660.0f}};
             ink_stroke(r, pts, 3,
@@ -559,7 +683,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                                       .seed = s->seed},
                        (InkTone){.color = PAL_GOFUN, .alpha = a * 0.72f}, 1.0f);
         } else if (s->kind == 3) {
-            /* Orb pickup short flick toward cursor */
             const Vector2 pts[2] = {{s->x, s->y}, {s->dx, s->dy}};
             ink_stroke(r, pts, 2,
                        (BrushProfile){.w_max = 3.2f,
@@ -570,13 +693,119 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                                       .seed = s->seed},
                        (InkTone){.color = PAL_KIN, .alpha = a}, 1.0f);
         } else if (s->kind == 4) {
-            /* Boss phase burst wash */
             ink_wash(r, (Vector2){s->x, s->y}, s->radius * (0.4f + u), s->radius * (0.35f + u),
                      u * 1.4f, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = a * 0.45f}, 2, s->seed);
+        } else if (s->kind == 5) {
+            /* Thunderburst: Zen enso with 1 gap + 8 outward thick radial flicks */
+            const float rad = s->radius * (0.45f + 0.65f * u);
+            const float gap_a = (float)(s->seed % 360u) * 0.01745f;
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.45f,
+                           (BrushProfile){.w_max = 11.5f,
+                                          .w_min_ratio = 0.20f,
+                                          .entry = 0.14f,
+                                          .exit = 0.32f,
+                                          .dry = 0.45f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_SUMI_SCORCH, .alpha = a});
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad * 0.88f, gap_a + 0.15f, gap_a + 5.20f,
+                           (BrushProfile){.w_max = 4.5f,
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.15f,
+                                          .exit = 0.35f,
+                                          .dry = 0.25f,
+                                          .seed = s->seed + 3u},
+                           (InkTone){.color = PAL_AO_HOT, .alpha = a * 0.85f});
+            for (int k = 0; k < 8; ++k) {
+                const float fa = gap_a + (float)k * 0.78f + ((k & 1) ? 0.12f : -0.08f);
+                const float r0 = rad * 0.55f;
+                const float r1 = rad * (1.18f + 0.25f * (float)(k % 3));
+                const Vector2 ray[2] = {
+                    {s->x + cosf(fa) * r0, s->y + sinf(fa) * r0},
+                    {s->x + cosf(fa) * r1, s->y + sinf(fa) * r1},
+                };
+                ink_stroke(r, ray, 2,
+                           (BrushProfile){.w_max = 6.2f,
+                                          .w_min_ratio = 0.18f,
+                                          .entry = 0.08f,
+                                          .exit = 0.60f,
+                                          .dry = 0.35f,
+                                          .seed = s->seed + 20u + (uint32_t)k},
+                           (InkTone){.color = (k & 1) ? PAL_SHU : PAL_AO, .alpha = a}, 1.0f);
+            }
+        } else if (s->kind == 6) {
+            /* Cataclysm: gold-rimmed grand enso + inward-then-outward flicks + gold sunago */
+            const float rad = s->radius * (u < 0.25f ? (1.15f - u * 1.4f) : (0.55f + u * 0.75f));
+            const float gap_a = (float)(s->seed % 360u) * 0.01745f;
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.60f,
+                           (BrushProfile){.w_max = 16.0f,
+                                          .w_min_ratio = 0.20f,
+                                          .entry = 0.14f,
+                                          .exit = 0.30f,
+                                          .dry = 0.35f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_SUMI_SCORCH, .alpha = a});
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad + 6.0f, gap_a + 0.08f, gap_a + 5.52f,
+                           (BrushProfile){.w_max = 6.2f,
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.12f,
+                                          .exit = 0.30f,
+                                          .dry = 0.20f,
+                                          .seed = s->seed + 5u},
+                           (InkTone){.color = PAL_KIN, .alpha = a * 0.96f});
+            for (int k = 0; k < 10; ++k) {
+                const float fa = gap_a + (float)k * 0.628f;
+                const float r0 = rad * 0.65f;
+                const float r1 = rad * (1.25f + 0.22f * (float)(k % 3));
+                const Vector2 ray[2] = {
+                    {s->x + cosf(fa) * r0, s->y + sinf(fa) * r0},
+                    {s->x + cosf(fa) * r1, s->y + sinf(fa) * r1},
+                };
+                ink_stroke(r, ray, 2,
+                           (BrushProfile){.w_max = 5.4f,
+                                          .w_min_ratio = 0.20f,
+                                          .entry = 0.10f,
+                                          .exit = 0.55f,
+                                          .dry = 0.30f,
+                                          .seed = s->seed + 40u + (uint32_t)k},
+                           (InkTone){.color = (k % 3 == 0) ? PAL_KIN_HOT
+                                                           : ((k % 3 == 1) ? PAL_SHU : PAL_AO),
+                                     .alpha = a},
+                           1.0f);
+            }
+        } else if (s->kind == 7) {
+            /* Mini broken enso for bounce-orb ricochet */
+            const float rad = s->radius * (0.65f + 0.55f * u);
+            const float gap_a = (float)(s->seed % 360u) * 0.01745f;
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.1f,
+                           (BrushProfile){.w_max = 3.6f,
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.15f,
+                                          .exit = 0.35f,
+                                          .dry = 0.30f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_AO_HOT, .alpha = a});
+        } else if (s->kind == 8) {
+            /* Nue dash dragon-vein + azure lightning trail */
+            const Vector2 pts[2] = {{s->x, s->y}, {s->dx, s->dy}};
+            ink_stroke(r, pts, 2,
+                       (BrushProfile){.w_max = 10.0f,
+                                      .w_min_ratio = 0.20f,
+                                      .entry = 0.12f,
+                                      .exit = 0.45f,
+                                      .dry = 0.55f,
+                                      .seed = s->seed},
+                       (InkTone){.color = PAL_SUMI_CLEAR, .alpha = a * 0.72f}, 1.0f);
+            ink_stroke(r, pts, 2,
+                       (BrushProfile){.w_max = 3.2f,
+                                      .w_min_ratio = 0.30f,
+                                      .entry = 0.10f,
+                                      .exit = 0.40f,
+                                      .dry = 0.20f,
+                                      .seed = s->seed + 2u},
+                       (InkTone){.color = PAL_AO, .alpha = a * 0.85f}, 1.0f);
         }
     }
 
-    /* Shrine hit paper cracks */
     for (int i = 0; i < RENDER_MAX_CRACKS; ++i) {
         const VfxCrack *c = &r->cracks[i];
         if (!c->active || c->life <= 0.0f) {
@@ -600,7 +829,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                    (InkTone){.color = PAL_SUMI_HEAVY, .alpha = a}, 1.0f);
     }
 
-    /* Lightning bolts: 8-node zigzag, outer azure + 1px additive white-hot core */
     bool any_bolt = false;
     for (int i = 0; i < RENDER_MAX_BOLTS; ++i) {
         const VfxBolt *b = &r->bolts[i];
@@ -665,7 +893,6 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
         render_set_blend(r, BLEND_ALPHA);
     }
 
-    /* Rate-limited subtle paper brighten flash */
     if (r->flash_t > 0.0f) {
         const Vector2 screen[4] = {{0.0f, 0.0f},
                                    {(float)INK_SCREEN_W, 0.0f},
@@ -681,7 +908,6 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
         return;
     }
 
-    /* Up to 2 seals drawn simultaneously (art-direction §12.3) */
     int seals_drawn = 0;
     for (int i = 0; i < RENDER_MAX_SEALS && seals_drawn < 2; ++i) {
         const VfxSeal *s = &r->seals[i];
@@ -693,7 +919,7 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
         seals_drawn++;
     }
 
-    /* Callouts (drawn after post-shader so text stays crisp) */
+    /* Callouts: brush title font strictly >= 40px (art-direction §9.6) */
     for (int i = 0; i < RENDER_MAX_CALLOUTS; ++i) {
         const VfxCallout *c = &r->callouts[i];
         if (!c->active || c->life <= 0.0f) {
@@ -701,7 +927,8 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
         }
         const float u = ink_clampf(c->age / c->life, 0.0f, 1.0f);
         const float a = ink_clampf((1.0f - u) * 1.4f, 0.0f, 1.0f);
-        const float fsize = c->large ? 36.0f : 28.0f;
+        const float fsize =
+            c->large ? (c->text_id == TEXT_CALLOUT_CATACLYSM ? 46.0f : 40.0f) : 28.0f;
         char buf[96];
         if (c->count_arg > 0) {
             snprintf(buf, sizeof buf, "%s%d", text_get(c->text_id, r->use_ja), c->count_arg);

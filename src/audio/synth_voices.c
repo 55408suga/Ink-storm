@@ -108,6 +108,51 @@ static float step_single_voice(AudioVoice *v, float nz)
         v->env *= 0.99892f;
         break;
     }
+    case AUDIO_VOICE_THUNDERBURST: {
+        /* Deep taiko thump + sharp electric discharge burst */
+        const float f_drum = 62.0f + 210.0f * v->env * v->env * v->env;
+        v->phase += f_drum / sr;
+        v->phase2 += (1480.0f + 920.0f * v->env) / sr;
+        v->lp += 0.20f * (nz - v->lp);
+        const float sub = sinf(v->phase * k_two_pi) * 0.74f + sinf(v->phase * 9.8f) * 0.20f;
+        const float crack =
+            ((nz - v->lp) * 0.65f + sinf(v->phase2 * k_two_pi) * 0.35f) * v->env * v->env;
+        out = (sub + crack) * v->env * 0.74f;
+        v->env *= 0.99958f;
+        break;
+    }
+    case AUDIO_VOICE_CATACLYSM: {
+        /* Grand taiko + gong resonance + ascending koto triad */
+        const int step = (int)(v->age / 3200u);
+        const int idx = step < 6 ? step : 5;
+        const float f_drum = 54.0f * (1.0f + 0.65f * v->env * v->env);
+        v->phase += f_drum / sr;
+        v->phase2 += k_yo_scale[idx + 2] / sr;
+        v->lp += 0.12f * (nz - v->lp);
+        const float gong = sinf(v->phase * k_two_pi) * 0.58f +
+                           sinf(v->phase * k_two_pi * 2.756f) * 0.28f * v->env +
+                           sinf(v->phase * k_two_pi * 4.07f) * 0.14f * v->env;
+        const float koto =
+            (sinf(v->phase2 * k_two_pi) * 0.70f + sinf(v->phase2 * k_two_pi * 2.0f) * 0.30f) *
+            0.42f;
+        out = (gong + koto + v->lp * 0.22f * v->env) * v->env * 0.72f;
+        v->env *= 0.99982f;
+        break;
+    }
+    case AUDIO_VOICE_WIND_HOWL: {
+        /* Low shakuhachi whistle + mountain gale howl */
+        const float swell = v->age < 11000u ? ((float)v->age / 11000.0f) : 1.0f;
+        const float f = 196.0f + 52.0f * sinf((float)v->age * 0.00025f);
+        v->phase += f / sr;
+        v->lp += 0.06f * (nz - v->lp);
+        v->bp += 0.022f * (v->lp - v->bp);
+        const float whistle =
+            sinf(v->phase * k_two_pi) * 0.42f + sinf(v->phase * k_two_pi * 2.0f) * 0.14f;
+        const float gale = (v->lp - v->bp) * 1.35f;
+        out = (whistle + gale) * swell * v->env * 0.56f;
+        v->env *= 0.99985f;
+        break;
+    }
     case AUDIO_VOICE_CYCLONE_SWIRL: {
         v->lp += 0.10f * (nz - v->lp);
         v->bp += 0.045f * (v->lp - v->bp);
@@ -229,8 +274,9 @@ float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
         mix += step_single_voice(v, nz);
     }
 
-    /* Continuous brush-on-paper scrape */
-    audio->brush_env += (audio->brush_target - audio->brush_env) * 0.0045f;
+    /* Continuous brush-on-paper scrape (silenced while paused) */
+    const float target = audio->paused ? 0.0f : audio->brush_target;
+    audio->brush_env += (target - audio->brush_env) * 0.0045f;
     if (audio->brush_env > 0.001f) {
         audio->brush_lp += 0.22f * (nz - audio->brush_lp);
         audio->brush_bp += 0.07f * (audio->brush_lp - audio->brush_bp);

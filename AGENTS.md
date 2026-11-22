@@ -42,7 +42,7 @@ nix develop -c ./build/release/inkstorm --smoke-frames 5
 nix develop -c ./build/release/inkstorm --no-post --smoke-frames 5
 ```
 
-通常のウィンドウ確認は `nix develop -c ./build/release/inkstorm` で起動し、ESC または閉じるボタンで終了する。
+通常のウィンドウ確認は `nix develop -c ./build/release/inkstorm` で起動する（タイトル/ロビー画面では ESC・「終了」または閉じるボタンで終了、ラン中は ESC でポーズメニューを開き「ロビーへ戻る」または閉じるボタンで終了する）。
 `format-check` は `src/` と `tests/` を対象とする。`lint` は clang-tidy、cppcheck、GLSL 検証、ShellCheck を実行する。
 `build/<preset>/compile_commands.json` はそのプリセットのコンパイル条件を静的解析やエディタに渡す。
 ビルドは `build/`、配布アーカイブは `dist/` に出力する。

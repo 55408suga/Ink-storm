@@ -7,6 +7,7 @@
 static const float k_bgm_two_pi = 6.28318530718f;
 static const float k_xfade_step = 1.0f / (0.5f * (float)AUDIO_SAMPLE_RATE);
 
+static const int k_lobby_melody[8] = {0, 3, 2, 1, 0, 2, 4, 3};
 static const int k_battle_melody[8] = {0, 2, 3, 2, 4, 3, 2, 0};
 static const int k_boss_melody[8] = {0, 4, 3, 5, 2, 4, 5, 7};
 static const int k_victory_notes[5] = {0, 2, 4, 5, 7};
@@ -29,10 +30,38 @@ static float sample_track(AudioState *audio, BgmTrack track, float wind_sig)
 {
     const float sr = (float)AUDIO_SAMPLE_RATE;
 
+    if (audio->external_bgm) {
+        /* External OGG music plays via AudioOut; keep only subtle ambient wind here. */
+        return wind_sig * 0.35f;
+    }
+
     switch (track) {
     case BGM_NONE:
         return wind_sig * 0.85f;
-    case BGM_LOBBY:
+    case BGM_LOBBY: {
+        const uint64_t step_samples = (uint64_t)AUDIO_SAMPLE_RATE; /* calm 60 BPM pulse */
+        const uint64_t pos_in_step = audio->bgm_sample % step_samples;
+        const uint64_t step_idx = audio->bgm_sample / step_samples;
+        if (pos_in_step == 0 && (step_idx % 2u) == 0u) {
+            const int note = k_lobby_melody[(step_idx / 2u) % 8u];
+            audio->bgm_koto_freq = k_yo_scale[note] * 0.5f;
+            audio->bgm_koto_env = 0.26f;
+            audio->bgm_koto_ph = 0.0f;
+        }
+        audio->bgm_drone_ph += 146.83f / sr;
+        if (audio->bgm_drone_ph > 1000.0f) {
+            audio->bgm_drone_ph -= 1000.0f;
+        }
+        float s = wind_sig * 0.55f + sinf(audio->bgm_drone_ph * k_bgm_two_pi) * 0.05f;
+        if (audio->bgm_koto_env > 0.001f) {
+            audio->bgm_koto_ph += audio->bgm_koto_freq / sr;
+            s += (sinf(audio->bgm_koto_ph * k_bgm_two_pi) * 0.80f +
+                  sinf(audio->bgm_koto_ph * k_bgm_two_pi * 2.0f) * 0.20f * audio->bgm_koto_env) *
+                 audio->bgm_koto_env * 0.22f;
+            audio->bgm_koto_env *= 0.99990f;
+        }
+        return s;
+    }
     case BGM_BATTLE: {
         const uint64_t step_samples = (uint64_t)(AUDIO_SAMPLE_RATE / 2); /* 120 BPM 8th-ish */
         const uint64_t pos_in_step = audio->bgm_sample % step_samples;

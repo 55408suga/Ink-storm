@@ -45,10 +45,10 @@ static void test_audio_initial_state(void)
 static void test_audio_se_events_audible(void)
 {
     static const GameEventType se_events[] = {
-        EV_KILL,       EV_DEFLECT,     EV_SLAM,        EV_IGNITE,
-        EV_STORM_ZAP,  EV_CYCLONE,     EV_GALE,        EV_ORB_PICKUP,
-        EV_SHRINE_HIT, EV_SURGE_START, EV_BOSS_ENTER,  EV_BOSS_PHASE,
-        EV_WAVE_CLEAR, EV_ACT_CLEAR,   EV_REWARD_PICK, EV_REWARD_REROLL,
+        EV_KILL,         EV_DEFLECT,    EV_SLAM,           EV_IGNITE,        EV_STORM_ZAP,
+        EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,       EV_GALE,
+        EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,    EV_BOSS_PHASE,
+        EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL,
     };
 
     GameState *g = game_create(NULL);
@@ -78,6 +78,58 @@ static void test_audio_se_events_audible(void)
     free(buf);
     free(a);
     game_destroy(g);
+}
+
+static void test_audio_lobby_external_pause_and_stamp(void)
+{
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *b = calloc(1, sizeof *b);
+    int16_t *buf_a = calloc(AUDIO_SAMPLE_RATE, sizeof *buf_a);
+    int16_t *buf_b = calloc(AUDIO_SAMPLE_RATE, sizeof *buf_b);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(buf_a);
+    TEST_ASSERT_NOT_NULL(buf_b);
+
+    /* 1. Lobby mode switches to BGM_LOBBY and renders deterministic finite audio */
+    audio_init(a, UINT64_C(77));
+    audio_init(b, UINT64_C(77));
+    audio_set_lobby_mode(a, true);
+    audio_set_lobby_mode(b, true);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, audio_bgm_track(a));
+    audio_render(a, buf_a, AUDIO_SAMPLE_RATE);
+    audio_render(b, buf_b, AUDIO_SAMPLE_RATE);
+    TEST_ASSERT_TRUE(peak_abs(buf_a, AUDIO_SAMPLE_RATE) >= 200);
+    TEST_ASSERT_EQUAL_MEMORY(buf_a, buf_b, AUDIO_SAMPLE_RATE * sizeof buf_a[0]);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    /* 2. External BGM suppresses procedural BGM instruments while SE still plays */
+    audio_init(a, UINT64_C(88));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    a->wind_target = 0.0f;
+    audio_set_external_bgm(a, true);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, audio_bgm_track(a));
+    audio_render(a, buf_a, AUDIO_SAMPLE_RATE / 2);
+    TEST_ASSERT_EQUAL_INT32(0, peak_abs(buf_a, AUDIO_SAMPLE_RATE / 2));
+
+    audio_set_volumes(a, 100, 100, 85);
+    audio_trigger_ui_stamp(a);
+    audio_render(a, buf_a, AUDIO_SAMPLE_RATE / 2);
+    TEST_ASSERT_TRUE(peak_abs(buf_a, AUDIO_SAMPLE_RATE / 2) >= 1000);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    /* 3. Pause zeroes brush_target */
+    audio_init(a, UINT64_C(99));
+    a->brush_target = 0.85f;
+    audio_set_paused(a, true);
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, a->brush_target);
+    TEST_ASSERT_TRUE(a->paused);
+
+    free(buf_b);
+    free(buf_a);
+    free(b);
+    free(a);
 }
 
 static void test_audio_heavy_load(void)
@@ -258,6 +310,7 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_audio_initial_state);
     RUN_TEST(test_audio_se_events_audible);
+    RUN_TEST(test_audio_lobby_external_pause_and_stamp);
     RUN_TEST(test_audio_heavy_load);
     RUN_TEST(test_audio_bgm_tracks);
     RUN_TEST(test_audio_volumes);

@@ -16,6 +16,16 @@ void input_latch_init(InputLatch *l, float x, float y)
     l->pick_pending = -1;
 }
 
+void input_latch_reset_for_ui_transition(InputLatch *l, float x, float y, bool left_down)
+{
+    if (l == NULL) {
+        return;
+    }
+    input_latch_init(l, x, y);
+    l->left_down = left_down;
+    l->paint_suppressed = left_down;
+}
+
 void input_latch_feed(InputLatch *l, const RawInput *raw)
 {
     if (l == NULL || raw == NULL) {

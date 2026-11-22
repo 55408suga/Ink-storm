@@ -35,23 +35,23 @@ static void draw_shrine_flames_and_ink(RenderState *r, const GameState *g)
     render_draw_text_id(r, TEXT_HUD_SHRINE, (Vector2){20.0f, 14.0f}, 20.0f, PAL_SUMI_DARK, 0.95f,
                         false);
 
-    const float start_x = r->use_ja ? 58.0f : 96.0f;
-    const int32_t shown = max_hp > 12 ? 12 : max_hp;
+    const float start_x = r->use_ja ? 54.0f : 92.0f;
+    const int32_t shown = max_hp > 16 ? 16 : max_hp;
+    const float step_x = shown > 12 ? 13.5f : 18.0f;
     for (int32_t i = 0; i < shown; ++i) {
-        const Vector2 p = {start_x + (float)i * 18.0f, 26.0f};
+        const Vector2 p = {start_x + (float)i * step_x, 26.0f};
         if (i < hp) {
-            ink_teardrop(r, p, (Vector2){0.0f, -1.0f}, 11.0f, 7.0f,
+            ink_teardrop(r, p, (Vector2){0.0f, -1.0f}, 11.0f, shown > 12 ? 5.6f : 7.0f,
                          pal_color_alpha(PAL_SHU, 0.92f));
-            ink_teardrop(r, (Vector2){p.x, p.y + 1.0f}, (Vector2){0.0f, -1.0f}, 6.0f, 3.8f,
-                         pal_color_alpha(PAL_SHU_HOT, 0.96f));
+            ink_teardrop(r, (Vector2){p.x, p.y + 1.0f}, (Vector2){0.0f, -1.0f}, 6.0f,
+                         shown > 12 ? 3.0f : 3.8f, pal_color_alpha(PAL_SHU_HOT, 0.96f));
         } else {
-            ink_teardrop(r, p, (Vector2){0.0f, -1.0f}, 9.0f, 5.5f,
+            ink_teardrop(r, p, (Vector2){0.0f, -1.0f}, 9.0f, shown > 12 ? 4.4f : 5.5f,
                          pal_color_alpha(PAL_SUMI_CLEAR, 0.55f));
         }
     }
 
-    /* Ink numeric readout (fixed digit width) */
-    const float ink_x = start_x + (float)shown * 18.0f + 18.0f;
+    const float ink_x = start_x + (float)shown * step_x + 16.0f;
     render_draw_text_id(r, TEXT_HUD_INK, (Vector2){ink_x, 14.0f}, 20.0f,
                         g->player.dry ? PAL_SHU : PAL_SUMI_DARK, 0.95f, false);
     char ink_buf[32];
@@ -87,16 +87,17 @@ static void draw_center_progress(RenderState *r, const GameState *g)
         return;
     }
 
+    const TextId act_id = text_act_short(g->run.act_index);
+    const char *act_str = text_get(act_id != TEXT_NONE ? act_id : TEXT_ACT1_SHORT, r->use_ja);
     char wave_buf[96];
     if (g->run.wave_index >= GAME_BOSS_WAVE_INDEX) {
-        snprintf(wave_buf, sizeof wave_buf, "%s  %s", text_get(TEXT_HUD_ACT, r->use_ja),
-                 text_get(TEXT_HUD_BOSS, r->use_ja));
+        snprintf(wave_buf, sizeof wave_buf, "%s  %s", act_str, text_get(TEXT_HUD_BOSS, r->use_ja));
         render_draw_text_centered(r, wave_buf, (Vector2){cx, 26.0f}, 20.0f, PAL_SUMI_DARK, 0.95f,
                                   false);
         return;
     }
-    snprintf(wave_buf, sizeof wave_buf, "%s  %s %d/3", text_get(TEXT_HUD_ACT, r->use_ja),
-             text_get(TEXT_HUD_WAVE, r->use_ja), g->run.wave_index + 1);
+    snprintf(wave_buf, sizeof wave_buf, "%s  %s %d/3", act_str, text_get(TEXT_HUD_WAVE, r->use_ja),
+             g->run.wave_index + 1);
     render_draw_text_centered(r, wave_buf, (Vector2){cx - 72.0f, 26.0f}, 20.0f, PAL_SUMI_DARK,
                               0.95f, false);
 
@@ -120,6 +121,11 @@ static void draw_score_and_chain(RenderState *r, const GameState *g)
                              0.96f);
 
     if (g->run.chain >= 2 && g->run.chain_t > 0.0f) {
+        static const float k_chain_grace[4] = {2.65f, 3.20f, 3.80f, 4.50f};
+        uint8_t lv = game_upgrade_level(g, UPG_CHAIN_PRIMER);
+        if (lv > 3u) {
+            lv = 3u;
+        }
         char ch_buf[48];
         snprintf(ch_buf, sizeof ch_buf, "%s%d", text_get(TEXT_CALLOUT_CHAIN, r->use_ja),
                  g->run.chain);
@@ -127,7 +133,7 @@ static void draw_score_and_chain(RenderState *r, const GameState *g)
         ink_fill_panel(r, cbg, PAL_GOFUN, 0.84f, PAL_SUMI_CLEAR, 0.0f, 349u);
         render_draw_text(r, ch_buf, (Vector2){rx, 64.0f}, 22.0f,
                          g->player.surge_t > 0.0f ? PAL_KIN : PAL_SUMI_SCORCH, 0.96f, false);
-        const float gauge = ink_clampf(g->run.chain_t / 2.65f, 0.0f, 1.0f);
+        const float gauge = ink_clampf(g->run.chain_t / k_chain_grace[lv], 0.0f, 1.0f);
         const Vector2 gpts[2] = {{rx, 92.0f}, {rx + 150.0f * gauge, 92.0f}};
         ink_stroke(r, gpts, 2,
                    (BrushProfile){.w_max = 4.2f,
@@ -138,6 +144,29 @@ static void draw_score_and_chain(RenderState *r, const GameState *g)
                                   .seed = 350u},
                    (InkTone){.color = g->player.surge_t > 0.0f ? PAL_KIN : PAL_SHU, .alpha = 0.90f},
                    1.0f);
+    }
+}
+
+static void draw_owned_relics_hud(RenderState *r, const GameState *g)
+{
+    if (g->run.relic_count <= 0) {
+        return;
+    }
+    const int32_t count =
+        g->run.relic_count > GAME_MAX_OWNED_RELICS ? GAME_MAX_OWNED_RELICS : g->run.relic_count;
+    const float tile_w = 112.0f;
+    const float tile_h = 28.0f;
+    const float gap = 8.0f;
+    const float y = (float)INK_SCREEN_H - 42.0f;
+
+    for (int32_t i = 0; i < count && i < 6; ++i) {
+        const RelicId rid = g->run.relics[i];
+        const float x = (float)INK_SCREEN_W - 18.0f - (float)(i + 1) * (tile_w + gap) + gap;
+        const Rectangle box = {x, y, tile_w, tile_h};
+        ink_fill_panel(r, box, PAL_GOFUN, 0.86f, PAL_KIN, 0.85f, 380u + (uint32_t)i);
+        const char *name = text_get(text_relic_name(rid), r->use_ja);
+        render_draw_text_centered(r, name, (Vector2){x + tile_w * 0.5f, y + tile_h * 0.5f}, 18.0f,
+                                  PAL_SUMI_SCORCH, 0.94f, false);
     }
 }
 
@@ -153,14 +182,29 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g)
         return;
     }
 
+    const BrushStyleId style = g->config.brush_style;
     const float ink_ratio =
         g->player.ink_max > 0.0f ? ink_clampf(g->player.ink / g->player.ink_max, 0.0f, 1.0f) : 0.0f;
     const float dry_ratio =
         g->player.ink_max > 0.0f ? ink_clampf(20.0f / g->player.ink_max, 0.0f, 1.0f) : 0.2f;
-    const float rad = 24.0f;
+    const float rad =
+        style == BRUSH_STYLE_HEAVY ? 26.0f : (style == BRUSH_STYLE_QUILL ? 21.0f : 24.0f);
     const float start_a = -k_hud_pi * 0.5f;
 
-    /* Subtle ring track */
+    /* Brush-style nib emblem at cursor center */
+    if (style == BRUSH_STYLE_HEAVY) {
+        ink_teardrop(r, c, (Vector2){-0.6f, 0.8f}, 11.0f, 8.5f,
+                     pal_color_alpha(PAL_SUMI_SCORCH, 0.88f));
+    } else if (style == BRUSH_STYLE_EMBER) {
+        ink_teardrop(r, c, (Vector2){-0.6f, 0.8f}, 10.0f, 6.8f, pal_color_alpha(PAL_SHU, 0.90f));
+        ink_teardrop(r, c, (Vector2){-0.6f, 0.8f}, 5.5f, 3.6f, pal_color_alpha(PAL_SHU_HOT, 0.95f));
+    } else {
+        ink_teardrop(r, c, (Vector2){-0.6f, 0.8f}, 10.5f, 4.4f,
+                     pal_color_alpha(PAL_SUMI_HEAVY, 0.88f));
+        ink_teardrop(r, (Vector2){c.x - 2.0f, c.y + 2.0f}, (Vector2){-0.6f, 0.8f}, 5.0f, 2.6f,
+                     pal_color_alpha(PAL_AO_HOT, 0.94f));
+    }
+
     ink_arc_stroke(r, c, rad, start_a, start_a + k_hud_two_pi * 0.96f,
                    (BrushProfile){.w_max = 2.6f,
                                   .w_min_ratio = 0.4f,
@@ -170,12 +214,19 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g)
                                   .seed = 360u},
                    (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.45f});
 
-    /* Active ink gauge arc */
     if (ink_ratio > 0.01f) {
-        const PaletteId ring_pal =
-            g->player.surge_t > 0.0f ? PAL_KIN : (g->player.dry ? PAL_SHU : PAL_SUMI_DARK);
+        PaletteId ring_pal = PAL_SUMI_DARK;
+        if (g->player.surge_t > 0.0f) {
+            ring_pal = PAL_KIN;
+        } else if (g->player.dry) {
+            ring_pal = PAL_SHU;
+        } else if (style == BRUSH_STYLE_EMBER) {
+            ring_pal = PAL_BENGARA;
+        } else if (style == BRUSH_STYLE_QUILL) {
+            ring_pal = PAL_AO;
+        }
         ink_arc_stroke(r, c, rad, start_a, start_a + k_hud_two_pi * ink_ratio,
-                       (BrushProfile){.w_max = 3.4f,
+                       (BrushProfile){.w_max = style == BRUSH_STYLE_HEAVY ? 4.2f : 3.2f,
                                       .w_min_ratio = 0.35f,
                                       .entry = 0.12f,
                                       .exit = 0.20f,
@@ -184,7 +235,6 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g)
                        (InkTone){.color = ring_pal, .alpha = 0.92f});
     }
 
-    /* Dry-brush tick mark at ink = 20 */
     const float tick_a = start_a + k_hud_two_pi * dry_ratio;
     const Vector2 tick[2] = {
         {c.x + cosf(tick_a) * (rad - 4.5f), c.y + sinf(tick_a) * (rad - 4.5f)},
@@ -199,7 +249,6 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g)
                               .seed = 362u},
                (InkTone){.color = PAL_SHU, .alpha = 0.85f}, 1.0f);
 
-    /* 2 skill readiness pips below cursor: Cyclone (left) & Gale (right) */
     const float cds[2] = {g->player.cyclone_cd, g->player.gale_cd};
     const float totals[2] = {g->player.cyclone_cd_total > 0.0f ? g->player.cyclone_cd_total : 1.4f,
                              g->player.gale_cd_total > 0.0f ? g->player.gale_cd_total : 1.0f};
@@ -222,13 +271,23 @@ void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui)
     if (r == NULL || g == NULL) {
         return;
     }
-    if (ui != NULL && ui->scene == UI_SCENE_SHOWCASE &&
-        (ui->showcase_page == 3 || ui->showcase_page == 4)) {
-        return;
+    if (ui != NULL) {
+        if (ui->scene == UI_SCENE_TITLE_LOBBY || ui->scene == UI_SCENE_BRUSH_SELECT ||
+            ui->scene == UI_SCENE_BOKUAN || ui->scene == UI_SCENE_SETTINGS) {
+            return;
+        }
+        if (ui->scene == UI_SCENE_SHOWCASE && ui->showcase_page >= 3) {
+            return;
+        }
     }
     draw_top_band(r, g->run.act_index);
     draw_shrine_flames_and_ink(r, g);
     draw_center_progress(r, g);
     draw_score_and_chain(r, g);
-    draw_cursor_ring_and_pips(r, g);
+    if (ui == NULL || ui->scene != UI_SCENE_SHOWCASE || ui->showcase_page != 1) {
+        draw_owned_relics_hud(r, g);
+    }
+    if (ui == NULL || !ui->paused) {
+        draw_cursor_ring_and_pips(r, g);
+    }
 }
