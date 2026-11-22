@@ -576,6 +576,8 @@ void waves_prepare_act(GameState *g)
     ecs_flush_destroy(&g->ecs);
 
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    g->hitstop_t = 0.0f;
+    g->pending_impulse_count = 0;
     g->internal.boss_vortex_t = 0.0f;
     g->internal.ryu_coil_t = 0.0f;
     g->internal.nue_trail_t[0] = 0.0f;
@@ -618,6 +620,8 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->run.wave_kills = 0;
     g->run.wave_quota = wdef->quota;
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    g->hitstop_t = 0.0f;
+    g->pending_impulse_count = 0;
     g->phase = RUN_PHASE_PLAYING;
     g->phase_t = 0.0f;
     g->internal.spawn_cd = wdef->spawn_interval;

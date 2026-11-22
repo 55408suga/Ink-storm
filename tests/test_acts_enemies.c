@@ -721,6 +721,9 @@ static void test_boss_nue_and_boss_ryu(void)
 
     ren->fire_cd = 0.01f;
     game_step(g, NULL, NULL);
+    /* Boss spawn swirl must not self-trigger Cataclysm or Thunderburst without player input. */
+    TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
     int32_t strike_n = 0;
     for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);

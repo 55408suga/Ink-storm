@@ -285,7 +285,7 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                         boss->gale_t = 0.0f;
                         boss->telegraph = 0.0f;
                         boss->telegraph_pattern = 0;
-                        static const float k_ryu_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.5f, 0.5f, 0.0f};
+                        static const float k_ryu_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
                         fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 50.0f, k_ryu_dye);
                         (void)game_push_event(g, (GameEvent){
                                                      .type = EV_BOSS_PHASE,
