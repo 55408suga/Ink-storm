@@ -1,3 +1,4 @@
+#include "core.h"
 #include "elements/elements.h"
 #include "fluid.h"
 #include "game.h"
@@ -445,6 +446,265 @@ static void test_pending_impulse_applied_next_tick(void)
     game_destroy(g);
 }
 
+static void test_thunderburst_trigger_impulse_decay_cd_and_cap(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Block (5, 5): x = 40..47, y = 40..47. 5 cells must NOT trigger. */
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int k = 0; k < 5; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT32(0, g->pending_impulse_count);
+    TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
+
+    /* Spawn Stone Oni (MASS_HEAVY) and stopped Nue inside 96px, plus an enemy outside 96px. */
+    const float cx = 43.0f * FLUID_CELL_PX; /* centroid of 40..45 cell centers is 43.0 -> 344px */
+    const float cy = cell_center_px(40);
+    const EntityId oni = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 40.0f, cy);
+    const EntityId nue = game_debug_spawn_enemy(g, ENEMY_BOSS_NUE, cx, cy + 40.0f);
+    const EntityId far_e = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, cx + 150.0f, cy);
+    game_enemy_mut(g, nue)->ai_state = 1; /* stopped */
+
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT32(1, g->run.thunderbursts);
+    TEST_ASSERT_EQUAL_INT32(1, g->pending_impulse_count);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 60.0f, g->pending_impulses[0].peak_speed);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 9.0f, g->pending_impulses[0].rad_cells);
+    TEST_ASSERT_TRUE(g->hitstop_t >= 0.03f - 1e-5f);
+
+    /* Stone Oni took 30 dmg and outward knockback (520 * 0.55 = 286 px/s); Stage 4 decays
+     * knockback_t by 1 tick after Stage 3 sets it to 1.0s. */
+    TEST_ASSERT_EQUAL_INT32(60, game_health(g, oni)->hp);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 286.0f, game_velocity(g, oni)->vx);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f - INK_FIXED_DT, game_status(g, oni)->knockback_t);
+
+    /* Stopped Nue took boss-halved storm dmg (15) and outward knockback (286 px/s). */
+    TEST_ASSERT_EQUAL_INT32(685, game_health(g, nue)->hp);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 286.0f, game_velocity(g, nue)->vy);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f - INK_FIXED_DT, game_status(g, nue)->knockback_t);
+
+    /* Far enemy untouched. */
+    TEST_ASSERT_EQUAL_INT32(30, game_health(g, far_e)->hp);
+
+    /* Dye decayed within 9 cells: fire *= 0.3, storm *= 0.2. */
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.45f * 0.3f, fire[cell_idx(42, 40)]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.45f * 0.2f, storm[cell_idx(42, 40)]);
+
+    /* Pending impulse applies outward velocity on the next non-hitstop game_step. */
+    clear_all_entities(g);
+    g->hitstop_t = 0.0f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_EQUAL_INT32(0, g->pending_impulse_count);
+    TEST_ASSERT_TRUE(g->fluid.u[cell_idx(45, 40)] > 0.0f);
+    TEST_ASSERT_TRUE(g->fluid.u[cell_idx(40, 40)] < 0.0f);
+
+    /* Block CD: 0.8s = 48 ticks. We already ran 1 game_step (1 elements_step), so 46 more ticks
+     * must not re-fire, and the 47th (48th total after trigger) re-fires. */
+    for (int t = 0; t < 46; ++t) {
+        for (int k = 0; k < 6; ++k) {
+            fire[cell_idx(40 + k, 40)] = 0.45f;
+            storm[cell_idx(40 + k, 40)] = 0.45f;
+        }
+        g->event_count = 0;
+        elements_step(g);
+        TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+    }
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+
+    /* Per-tick cap of 3: set 5 distinct blocks simultaneously, only top 3 fire. */
+    fluid_reset(&g->fluid);
+    for (int b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        g->internal.thunderburst_block_cd[b] = 0.0f;
+    }
+    g->pending_impulse_count = 0;
+    for (int blk = 0; blk < 5; ++blk) {
+        const int bx = (2 + blk * 3) * 8;
+        const int by = 2 * 8;
+        const int ncells = 6 + blk; /* 6, 7, 8, 9, 10 cells */
+        for (int k = 0; k < ncells; ++k) {
+            fire[cell_idx(bx + (k % 8), by + (k / 8))] = 0.45f;
+            storm[cell_idx(bx + (k % 8), by + (k / 8))] = 0.45f;
+        }
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(3, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT32(3, g->pending_impulse_count);
+
+    game_destroy(g);
+}
+
+static void test_cataclysm_trigger_excludes_thunderburst_and_cd(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Block (5, 5): x = 40..47, y = 40 -> centroid at (43.5 * 8 = 348, 40.5 * 8 = 324). */
+    const float cx = 348.0f;
+    const float cy = 324.0f;
+
+    const EntityId e_near = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 40.0f, cy);
+    const EntityId e_repel = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx - 50.0f, cy);
+    const EntityId e_bolt3 = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 160.0f, cy);
+    const EntityId e_bolt4 = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 190.0f, cy);
+    const EntityId e_bolt5 = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 220.0f, cy);
+    const EntityId e_bolt6 = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 250.0f, cy);
+    game_enemy_mut(g, e_repel)->elite_flags |= ELITE_INK_REPEL;
+    game_health_mut(g, e_near)->hp = 200;
+    game_health_mut(g, e_repel)->hp = 200;
+    game_health_mut(g, e_bolt3)->hp = 200;
+    game_health_mut(g, e_bolt4)->hp = 200;
+    game_health_mut(g, e_bolt5)->hp = 200;
+    game_health_mut(g, e_bolt6)->hp = 200;
+
+    fluid_reset(&g->fluid);
+    float *ink = fluid_channel_mut(&g->fluid, 0);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(40 + k, 40)] = 0.45f;
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+
+    g->event_count = 0;
+    elements_step(g);
+
+    /* Cataclysm fires and excludes same-block Thunderburst. */
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT32(1, g->run.cataclysms);
+    TEST_ASSERT_EQUAL_INT32(1, g->pending_impulse_count);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 90.0f, g->pending_impulses[0].peak_speed);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->pending_impulses[0].rad_cells);
+    TEST_ASSERT_TRUE(g->hitstop_t >= 0.06f - 1e-5f);
+
+    /* e_near: 80 AoE + ink mark applied -> 30*2 bolt = 140 dmg, knockback applied (Stage 4 decays
+     * timers by 1 tick after Stage 2 sets them). */
+    TEST_ASSERT_EQUAL_INT32(60, game_health(g, e_near)->hp);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 3.0f - INK_FIXED_DT, game_status(g, e_near)->ink_mark_t);
+    TEST_ASSERT_TRUE(game_velocity(g, e_near)->vx > 300.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f - INK_FIXED_DT, game_status(g, e_near)->knockback_t);
+
+    /* e_repel: 80 AoE + no ink mark (ELITE_INK_REPEL) + 30 bolt = 110 dmg. */
+    TEST_ASSERT_EQUAL_INT32(90, game_health(g, e_repel)->hp);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, game_status(g, e_repel)->ink_mark_t);
+
+    /* Wide lightning hits top 4 closest enemies only (e_near, e_repel, e_bolt3, e_bolt4). */
+    TEST_ASSERT_EQUAL_INT(4, count_events(g, EV_STORM_ZAP));
+    TEST_ASSERT_EQUAL_INT32(170, game_health(g, e_bolt3)->hp);
+    TEST_ASSERT_EQUAL_INT32(170, game_health(g, e_bolt4)->hp);
+    TEST_ASSERT_EQUAL_INT32(200, game_health(g, e_bolt5)->hp);
+    TEST_ASSERT_EQUAL_INT32(200, game_health(g, e_bolt6)->hp);
+
+    /* Global CD 2.0s (120 ticks): another block must not trigger Cataclysm for 119 ticks. */
+    clear_all_entities(g);
+    for (int t = 0; t < 119; ++t) {
+        fluid_reset(&g->fluid);
+        for (int k = 0; k < 8; ++k) {
+            ink[cell_idx(80 + k, 40)] = 0.45f;
+            fire[cell_idx(80 + k, 40)] = 0.45f;
+            storm[cell_idx(80 + k, 40)] = 0.45f;
+        }
+        g->event_count = 0;
+        elements_step(g);
+        TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CATACLYSM));
+    }
+    /* 120th tick (== 2.0s) triggers Cataclysm in the other block. */
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(80 + k, 40)] = 0.45f;
+        fire[cell_idx(80 + k, 40)] = 0.45f;
+        storm[cell_idx(80 + k, 40)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT32(2, g->run.cataclysms);
+
+    game_destroy(g);
+}
+
+static void test_thunderburst_fuse_upgrade(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+
+    /* Default thresh 0.30: fire=0.20, storm=0.20 must not trigger. */
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.20f;
+        storm[cell_idx(40 + k, 40)] = 0.20f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_THUNDERBURST_FUSE));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.26f, g->internal.mods.thunderburst_thresh);
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_THUNDERBURST_FUSE));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.22f, g->internal.mods.thunderburst_thresh);
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_THUNDERBURST));
+
+    /* Lv3: thresh 0.18, radius_mul 1.30 (96 * 1.3 = 124.8px). */
+    TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_THUNDERBURST_FUSE));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.18f, g->internal.mods.thunderburst_thresh);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.30f, g->internal.mods.thunderburst_radius_mul);
+
+    /* Centroid of x=40..45, y=40 is (42.5 + 0.5) * 8 = 344, 324. Place enemy 110px away. */
+    const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 344.0f + 110.0f, 324.0f);
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.20f;
+        storm[cell_idx(40 + k, 40)] = 0.20f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 72.0f * 1.30f, g->events[0].x2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 9.0f * 1.30f, g->pending_impulses[0].rad_cells);
+    TEST_ASSERT_EQUAL_INT32(60, game_health(g, e)->hp);
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -457,5 +717,8 @@ int main(void)
     RUN_TEST(test_sanitize_and_finite);
     RUN_TEST(test_processing_order_ignite_before_storm_zap);
     RUN_TEST(test_pending_impulse_applied_next_tick);
+    RUN_TEST(test_thunderburst_trigger_impulse_decay_cd_and_cap);
+    RUN_TEST(test_cataclysm_trigger_excludes_thunderburst_and_cd);
+    RUN_TEST(test_thunderburst_fuse_upgrade);
     return UNITY_END();
 }
