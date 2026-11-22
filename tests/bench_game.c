@@ -54,18 +54,15 @@ static int32_t count_reaction_events(const GameState *g)
     return n;
 }
 
-static void run_extra_stress_load(void)
+static void setup_act_boss_bench(GameState *g, int32_t act_index)
 {
-    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x5eed));
-    GameState *g = game_create(&cfg);
-    if (g == NULL) {
-        return;
-    }
+    game_debug_start_act(g, act_index);
     while (g->phase == RUN_PHASE_ACT_TRANSITION) {
         game_step(g, NULL, NULL);
     }
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
-    /* Keep shrine and boss alive throughout the stress window so all 600 ticks stay in PLAYING. */
+    /* Keep shrine and boss alive throughout the measured window so all 600 ticks stay in PLAYING.
+     */
     if (g->shrine_count > 0) {
         g->shrines[0].max_hp = 10000;
         g->shrines[0].hp = 10000;
@@ -77,11 +74,25 @@ static void run_extra_stress_load(void)
             bhp->hp = 100000;
         }
     }
+}
 
+static void run_extra_stress_load(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x5eed));
+    GameState *g = game_create(&cfg);
+    if (g == NULL) {
+        return;
+    }
+    /* Act 2 Torii + Rock Pillar solids + Nue + 16 mixed enemies + 48 mixed projectiles. */
+    setup_act_boss_bench(g, 1);
+
+    static const EnemyDefId k_stress_defs[6] = {
+        ENEMY_UMBRELLA,  ENEMY_LANTERN_STORM, ENEMY_KAMAITACHI,
+        ENEMY_STONE_ONI, ENEMY_INK_LEECH,     ENEMY_ARCHER,
+    };
     for (int i = 0; i < 16; ++i) {
         const float ang = (float)i * (6.2831853f / 16.0f);
-        const EnemyDefId def =
-            (i % 3 == 0) ? ENEMY_UMBRELLA : ((i % 3 == 1) ? ENEMY_LANTERN_FIRE : ENEMY_ARCHER);
+        const EnemyDefId def = k_stress_defs[i % 6];
         const EntityId eid = game_debug_spawn_enemy(g, def, 640.0f + cosf(ang) * 420.0f,
                                                     360.0f + sinf(ang) * 240.0f);
         HealthComp *ehp = game_health_mut(g, eid);
@@ -90,13 +101,15 @@ static void run_extra_stress_load(void)
             ehp->hp = 5000;
         }
     }
+    static const ProjKind k_stress_projs[5] = {
+        PROJ_FIREBALL, PROJ_STORM_ORB, PROJ_WIND_SICKLE, PROJ_BOUNCE_ORB, PROJ_ARROW,
+    };
     for (int i = 0; i < 48; ++i) {
         const float ang = (float)i * (6.2831853f / 48.0f);
         const float x = 640.0f + cosf(ang) * 320.0f;
         const float y = 360.0f + sinf(ang) * 200.0f;
-        const ProjKind pk =
-            (i % 3 == 0) ? PROJ_FIREBALL : ((i % 3 == 1) ? PROJ_STORM_ORB : PROJ_ARROW);
-        (void)game_debug_spawn_projectile(g, pk, x, y, -cosf(ang) * 200.0f, -sinf(ang) * 200.0f);
+        const ProjKind pk = k_stress_projs[i % 5];
+        (void)game_debug_spawn_projectile(g, pk, x, y, -cosf(ang) * 220.0f, -sinf(ang) * 220.0f);
     }
 
     double game_ms[MEASURED_TICKS];
@@ -128,8 +141,9 @@ static void run_extra_stress_load(void)
     }
     qsort(game_ms, MEASURED_TICKS, sizeof game_ms[0], compare_ms);
     qsort(fluid_ms, MEASURED_TICKS, sizeof fluid_ms[0], compare_ms);
-    printf("stress(+16 enemies,+48 proj) status=%s game_mean=%.6f game_p50=%.6f game_p95=%.6f "
-           "game_max=%.6f fluid_mean=%.6f fluid_p95=%.6f avg_alive=%.2f avg_proj=%.2f finite=%s\n",
+    printf("stress(act2 solids,+16 enemies,+48 proj) status=%s game_mean=%.6f game_p50=%.6f "
+           "game_p95=%.6f game_max=%.6f fluid_mean=%.6f fluid_p95=%.6f avg_alive=%.2f "
+           "avg_proj=%.2f finite=%s\n",
            all_playing ? "PLAYING" : "INVALID", game_sum / (double)MEASURED_TICKS,
            percentile(game_ms, 50), percentile(game_ms, 95), game_ms[MEASURED_TICKS - 1],
            fluid_sum / (double)MEASURED_TICKS, percentile(fluid_ms, 95),
@@ -154,14 +168,12 @@ int main(void)
             fputs("Cannot allocate GameState\n", stderr);
             return EXIT_FAILURE;
         }
-        while (g->phase == RUN_PHASE_ACT_TRANSITION) {
-            game_step(g, NULL, NULL);
-        }
-        game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+        /* Act 3 boss wave: rock/spirit pillars + mountain wind + Ippitsu-Ryu + escorts. */
+        setup_act_boss_bench(g, 2);
 
         if (trial == 0) {
             printf("grid=%dx%d project_iters=%d active_channels=%d hz=%d seed=0x%" PRIx64
-                   " wave=boss warmup=%d measured=%d trials=%d unit=ms/tick\n",
+                   " act=3 wave=boss warmup=%d measured=%d trials=%d unit=ms/tick\n",
                    FLUID_W, FLUID_H, g->fluid.cfg.project_iters, g->fluid.cfg.active_channels,
                    INK_TICK_HZ, cfg.seed, WARMUP_TICKS, MEASURED_TICKS, TRIALS);
         }

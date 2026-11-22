@@ -33,12 +33,18 @@ void archer_step(GameState *g, EntityId id)
     const float ph = (float)en->phase * 0.001f;
     en->phase = (en->phase + 24) % 6283;
 
+    float next_x = tr->x;
+    float next_y = tr->y;
     if (tr->x < 120.0f || tr->x > (float)INK_SCREEN_W - 120.0f) {
-        tr->y = ink_clampf(tr->y + sinf(ph) * 32.0f * slow * INK_FIXED_DT, 108.0f,
-                           (float)INK_SCREEN_H - 96.0f);
+        next_y = ink_clampf(tr->y + sinf(ph) * 32.0f * slow * INK_FIXED_DT, 108.0f,
+                            (float)INK_SCREEN_H - 96.0f);
     } else {
-        tr->x = ink_clampf(tr->x + cosf(ph) * 40.0f * slow * INK_FIXED_DT, 165.0f,
-                           (float)INK_SCREEN_W - 165.0f);
+        next_x = ink_clampf(tr->x + cosf(ph) * 40.0f * slow * INK_FIXED_DT, 165.0f,
+                            (float)INK_SCREEN_W - 165.0f);
+    }
+    if (!fluid_is_solid(&g->fluid, next_x, next_y)) {
+        tr->x = next_x;
+        tr->y = next_y;
     }
 
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;

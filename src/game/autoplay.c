@@ -35,7 +35,8 @@ BrushInput game_autoplay_input(const GameState *g)
     float ty = cy + sinf(orbit_a * 1.18f) * orbit_r * 0.90f;
     bool want_paint = !ink_dip;
 
-    /* Scan active entities once for orbs, projectiles, umbrellas, and boss. */
+    /* Scan active entities once for orbs, projectiles, slam targets, lightning strikes, and boss.
+     */
     const uint32_t hw = g->ecs.high_water;
     float best_orb_d2 = (ink_dip || g->player.ink < 55.0f) ? (620.0f * 620.0f) : (250.0f * 250.0f);
     bool has_orb = false;
@@ -56,10 +57,14 @@ BrushInput game_autoplay_input(const GameState *g)
     float fb_x = cx;
     float fb_y = cy;
 
-    float best_umb_d2 = 340.0f * 340.0f;
-    bool has_umb = false;
-    float umb_x = cx;
-    float umb_y = cy;
+    float best_slam_d2 = 340.0f * 340.0f;
+    bool has_slam_target = false;
+    float slam_x = cx;
+    float slam_y = cy;
+
+    bool has_strike = false;
+    float strike_x = cx;
+    float strike_y = cy;
 
     bool has_boss = false;
     float boss_x = cx;
@@ -110,7 +115,9 @@ BrushInput game_autoplay_input(const GameState *g)
                     fb_y = tr->y;
                 }
             }
-            const float score = d2 * (p->kind == PROJ_FIREBALL ? 0.65f : 1.0f);
+            const float prio =
+                (p->kind == PROJ_FIREBALL || p->kind == PROJ_BOUNCE_ORB) ? 0.65f : 1.0f;
+            const float score = d2 * prio;
             if (d2 > 34.0f * 34.0f && d2 < 460.0f * 460.0f && score < best_p_score) {
                 best_p_score = score;
                 has_proj = true;
@@ -119,22 +126,37 @@ BrushInput game_autoplay_input(const GameState *g)
                 proj_vx = vel->vx;
                 proj_vy = vel->vy;
             }
+        } else if (ecs_has_mask(&g->ecs, id, COMP_GIMMICK)) {
+            const GimmickComp *gim = game_gimmick(g, id);
+            if (gim != NULL && gim->kind == (int32_t)GIMMICK_LIGHTNING_STRIKE) {
+                const float dx = tr->x - cx;
+                const float dy = tr->y - cy;
+                if (dx * dx + dy * dy <= 56.0f * 56.0f) {
+                    has_strike = true;
+                    strike_x = tr->x;
+                    strike_y = tr->y;
+                }
+            }
         } else if (ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
             const EnemyComp *en = game_enemy(g, id);
             if (en == NULL) {
                 continue;
             }
-            if (en->def_id == ENEMY_UMBRELLA) {
+            const bool is_slam_cand = en->def_id == ENEMY_UMBRELLA ||
+                                      en->def_id == ENEMY_STONE_ONI ||
+                                      (en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1);
+            if (is_slam_cand) {
                 const float dx = tr->x - cx;
                 const float dy = tr->y - cy;
                 const float d2 = dx * dx + dy * dy;
-                if (d2 < best_umb_d2) {
-                    best_umb_d2 = d2;
-                    has_umb = true;
-                    umb_x = tr->x;
-                    umb_y = tr->y;
+                if (d2 < best_slam_d2) {
+                    best_slam_d2 = d2;
+                    has_slam_target = true;
+                    slam_x = tr->x;
+                    slam_y = tr->y;
                 }
-            } else if (game_is_boss_enemy(en->def_id)) {
+            }
+            if (game_is_boss_enemy(en->def_id)) {
                 has_boss = true;
                 boss_x = tr->x;
                 boss_y = tr->y;
@@ -154,19 +176,24 @@ BrushInput game_autoplay_input(const GameState *g)
             tx = proj_x;
             ty = proj_y;
         }
-    } else if (has_umb && best_umb_d2 < 260.0f * 260.0f) {
-        const float dx = umb_x - cx;
-        const float dy = umb_y - cy;
+    } else if (has_strike) {
+        /* Paint an ink lightning rod over incoming shrine lightning strikes. */
+        tx = strike_x + cosf(t * 14.0f) * 16.0f;
+        ty = strike_y + sinf(t * 14.0f) * 16.0f;
+        want_paint = true;
+    } else if (has_slam_target && best_slam_d2 < 260.0f * 260.0f) {
+        const float dx = slam_x - cx;
+        const float dy = slam_y - cy;
         const float d = hypotf(dx, dy);
         if (d > 1e-6f) {
-            tx = umb_x - (dx / d) * 32.0f;
-            ty = umb_y - (dy / d) * 32.0f;
+            tx = slam_x - (dx / d) * 32.0f;
+            ty = slam_y - (dy / d) * 32.0f;
         } else {
-            tx = umb_x;
-            ty = umb_y;
+            tx = slam_x;
+            ty = slam_y;
         }
         want_paint = true;
-        if (hypotf(umb_x - bx, umb_y - by) < 155.0f && g->player.gale_cd <= 0.0f &&
+        if (hypotf(slam_x - bx, slam_y - by) < 165.0f && g->player.gale_cd <= 0.0f &&
             g->player.ink >= gale_cost + 2.0f) {
             in.gale = true;
         }
@@ -212,8 +239,21 @@ BrushInput game_autoplay_input(const GameState *g)
         in.gale = true;
     }
 
-    in.mx = ink_clampf(bx + ink_clampf(tx - bx, -34.0f, 34.0f), 90.0f, (float)INK_SCREEN_W - 90.0f);
-    in.my = ink_clampf(by + ink_clampf(ty - by, -34.0f, 34.0f), 88.0f, (float)INK_SCREEN_H - 82.0f);
+    float next_mx =
+        ink_clampf(bx + ink_clampf(tx - bx, -34.0f, 34.0f), 90.0f, (float)INK_SCREEN_W - 90.0f);
+    float next_my =
+        ink_clampf(by + ink_clampf(ty - by, -34.0f, 34.0f), 88.0f, (float)INK_SCREEN_H - 82.0f);
+    if (fluid_is_solid(&g->fluid, next_mx, next_my)) {
+        float snx = 0.0f;
+        float sny = 0.0f;
+        if (fluid_solid_normal(&g->fluid, next_mx, next_my, &snx, &sny)) {
+            next_mx = ink_clampf(next_mx + snx * 28.0f, 90.0f, (float)INK_SCREEN_W - 90.0f);
+            next_my = ink_clampf(next_my + sny * 28.0f, 88.0f, (float)INK_SCREEN_H - 82.0f);
+        }
+    }
+
+    in.mx = next_mx;
+    in.my = next_my;
     in.paint = want_paint && !in.cyclone && !in.gale;
     return in;
 }
