@@ -260,7 +260,7 @@ static int32_t elements_stage2_cataclysm(GameState *g)
         float x;
         float y;
     } CataclysmBoltTarget;
-    CataclysmBoltTarget top[4];
+    CataclysmBoltTarget top[4] = {0};
     int32_t top_n = 0;
     const float bolt_rad2 = 260.0f * 260.0f;
 
@@ -419,7 +419,7 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
         int32_t b;
         int32_t count;
     } BurstBlock;
-    BurstBlock top[3];
+    BurstBlock top[3] = {0};
     int32_t top_n = 0;
 
     for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
