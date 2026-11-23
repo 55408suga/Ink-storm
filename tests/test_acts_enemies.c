@@ -41,6 +41,19 @@ static void assert_boss_alive_kind(const GameState *g, EnemyDefId expected_boss)
     TEST_ASSERT_GREATER_THAN_INT32(0, bhp->hp);
 }
 
+static int32_t count_projectiles(const GameState *g)
+{
+    int32_t n = 0;
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
 static void clear_enemies_and_projs(GameState *g)
 {
     const uint32_t hw = g->ecs.high_water;
@@ -886,10 +899,26 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
     TEST_ASSERT_TRUE(g->internal.wind_timer <= 1.5f);
 
-    /* Right after Phase 2 invuln ends, head must not fire immediately (< 0.65s warning). */
-    rhp->invuln_t = 0.0f;
+    /* Let the full 1.5s Phase 2 invuln expire naturally, then verify the head counts down from
+     * >= 0.90s without immediately firing (fire_cd decreases rather than resetting to 2.2s). */
+    g->internal.spawn_cd = 999.0f;
+    g->internal.ryu_coil_t = 0.0f;
+    int invuln_ticks = 0;
+    while (rhp->invuln_t > 0.0f && invuln_ticks < 100) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        ++invuln_ticks;
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, rhp->invuln_t);
+    TEST_ASSERT_TRUE(invuln_ticks >= 80 && invuln_ticks <= 95);
+    const float p2_cd_before = ren->fire_cd;
+    TEST_ASSERT_TRUE(p2_cd_before >= 0.85f && p2_cd_before <= 0.90f);
+    const int32_t p2_proj_before = count_projectiles(g);
     game_step(g, NULL, NULL);
-    TEST_ASSERT_TRUE(ren->fire_cd > 0.80f);
+    TEST_ASSERT_TRUE(ren->fire_cd < p2_cd_before);
+    TEST_ASSERT_TRUE(ren->fire_cd >= 0.80f && ren->fire_cd <= 0.90f);
+    TEST_ASSERT_EQUAL_INT32(p2_proj_before, count_projectiles(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->internal.ryu_coil_t);
 
     /* Phase 2 Cataclysm damage is 1x (80, NOT 160). */
     game_status_mut(g, ryu)->ink_mark_t = 0.0f;
@@ -914,12 +943,28 @@ static void test_boss_nue_and_boss_ryu(void)
     }
     TEST_ASSERT_TRUE(saw_ryu_p3);
 
-    /* Phase 3 Cataclysm damage x2: 80 -> 160; post-invuln warning preserved; attack CD x0.8
-     * (1.76s).
-     */
-    rhp->invuln_t = 0.0f;
+    /* Let the full 1.5s Phase 3 invuln expire naturally, then verify no immediate attack (fire_cd
+     * decreases from ~0.90s rather than resetting to 1.76s). */
+    g->internal.spawn_cd = 999.0f;
+    g->internal.ryu_coil_t = 0.0f;
+    invuln_ticks = 0;
+    while (rhp->invuln_t > 0.0f && invuln_ticks < 100) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        ++invuln_ticks;
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, rhp->invuln_t);
+    TEST_ASSERT_TRUE(invuln_ticks >= 80 && invuln_ticks <= 95);
+    const float p3_cd_before = ren->fire_cd;
+    TEST_ASSERT_TRUE(p3_cd_before >= 0.85f && p3_cd_before <= 0.90f);
+    const int32_t p3_proj_before = count_projectiles(g);
     game_step(g, NULL, NULL);
-    TEST_ASSERT_TRUE(ren->fire_cd > 0.80f);
+    TEST_ASSERT_TRUE(ren->fire_cd < p3_cd_before);
+    TEST_ASSERT_TRUE(ren->fire_cd >= 0.80f && ren->fire_cd <= 0.90f);
+    TEST_ASSERT_EQUAL_INT32(p3_proj_before, count_projectiles(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->internal.ryu_coil_t);
+
+    /* Phase 3 Cataclysm damage x2: 80 -> 160; attack CD x0.8 (1.76s). */
     game_status_mut(g, ryu)->ink_mark_t = 0.0f;
     const int32_t p3_cata =
         combat_apply_damage(g, ryu, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
