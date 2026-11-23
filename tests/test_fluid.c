@@ -542,6 +542,90 @@ static void test_deterministic_replay_and_hash_fields(void)
     TEST_ASSERT_TRUE(hash != fluid_hash(f));
 }
 
+static void test_geometry_cache_invalidation_on_solid_changes(void)
+{
+    FluidConfig cfg = fluid_config_default();
+    cfg.project_iters = 0;
+    cfg.vorticity_eps = 0;
+    fluid_init(f, &cfg);
+
+    /* 1. Add a vertical wall and step once to populate cached geometry. */
+    fluid_set_solid_rect(f, 640, 0, 16, 720, true);
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        for (int x = 1; x <= 79; ++x) {
+            f->dye[0][cell(x, y)] = 2.0f;
+        }
+    }
+    set_uniform_velocity(125.0f, 0.0f);
+    fluid_step(f, 0.05f);
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        TEST_ASSERT_TRUE(f->dye[0][cell(82, y)] == 0.0f);
+    }
+
+    /* 2. Remove the wall via fluid_set_solid_rect(..., false) and verify immediate passage. */
+    fluid_set_solid_rect(f, 640, 0, 16, 720, false);
+    for (int t = 0; t < 3; ++t) {
+        set_uniform_velocity(125.0f, 0.0f);
+        fluid_step(f, 0.05f);
+    }
+    TEST_ASSERT_TRUE(f->dye[0][cell(82, 45)] > 0.1f);
+
+    /* 3. Add a circular solid obstacle and verify interior remains blocked after step. */
+    fluid_set_solid_circle(f, 804, 364, 24, true);
+    for (int t = 0; t < 3; ++t) {
+        set_uniform_velocity(125.0f, 0.0f);
+        fluid_step(f, 0.05f);
+    }
+    assert_walls_are_empty();
+    TEST_ASSERT_TRUE(fluid_is_solid(f, 804, 364));
+
+    /* 4. Clear solids via fluid_clear_solids and verify dye crosses the former obstacle center. */
+    fluid_clear_solids(f);
+    for (int y = 40; y <= 50; ++y) {
+        for (int x = 90; x <= 97; ++x) {
+            f->dye[0][cell(x, y)] = 2.0f;
+        }
+    }
+    for (int t = 0; t < 3; ++t) {
+        set_uniform_velocity(125.0f, 0.0f);
+        fluid_step(f, 0.05f);
+    }
+    TEST_ASSERT_FALSE(fluid_is_solid(f, 804, 364));
+    TEST_ASSERT_TRUE(f->dye[0][cell(100, 45)] > 0.1f);
+}
+
+static void test_extreme_flt_max_config_stays_finite(void)
+{
+    FluidConfig cfg = fluid_config_default();
+    cfg.max_vel = FLT_MAX;
+    cfg.max_dye = FLT_MAX;
+    cfg.project_iters = 12;
+    cfg.vorticity_eps = 9.5f;
+    fluid_init(f, &cfg);
+    fluid_set_solid_rect(f, 640, 320, 16, 48, true);
+
+    for (int y = 40; y <= 46; ++y) {
+        for (int x = 74; x <= 78; ++x) {
+            int i = cell(x, y);
+            f->u[i] = (x % 2 == 0) ? 0.5f * FLT_MAX : -0.5f * FLT_MAX;
+            f->v[i] = (y % 2 == 0) ? 0.5f * FLT_MAX : -0.5f * FLT_MAX;
+            f->dye[0][i] = FLT_MAX;
+            f->dye[1][i] = 0.75f * FLT_MAX;
+            f->dye[2][i] = 0.5f * FLT_MAX;
+        }
+    }
+    for (int t = 0; t < 5; ++t) {
+        fluid_step(f, k_dt);
+        TEST_ASSERT_TRUE(fluid_validate_finite(f));
+    }
+    float su = 0.0f, sv = 0.0f, sdye[FLUID_MAX_CHANNELS] = {0};
+    fluid_sample(f, 610.0f, 344.0f, &su, &sv, sdye);
+    TEST_ASSERT_TRUE(isfinite(su) && isfinite(sv));
+    for (int ch = 0; ch < FLUID_MAX_CHANNELS; ++ch) {
+        TEST_ASSERT_TRUE(isfinite(sdye[ch]));
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -555,5 +639,7 @@ int main(void)
     RUN_TEST(test_mutable_channels_are_sanitized);
     RUN_TEST(test_sampling_units_and_channels);
     RUN_TEST(test_deterministic_replay_and_hash_fields);
+    RUN_TEST(test_geometry_cache_invalidation_on_solid_changes);
+    RUN_TEST(test_extreme_flt_max_config_stays_finite);
     return UNITY_END();
 }

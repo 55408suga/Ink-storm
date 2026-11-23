@@ -26,7 +26,7 @@ static bool parse_positive_int(const char *s, int *out_val)
     return true;
 }
 
-static bool is_valid_save_path(const char *p)
+static bool is_valid_cli_path(const char *p)
 {
     if (p == NULL || p[0] == '\0') {
         return false;
@@ -35,6 +35,14 @@ static bool is_valid_save_path(const char *p)
         return false;
     }
     return strlen(p) < (size_t)PATH_MAX;
+}
+
+static bool is_valid_snap_dir(const char *p)
+{
+    if (!is_valid_cli_path(p)) {
+        return false;
+    }
+    return strlen(p) + 16u < (size_t)PATH_MAX;
 }
 
 bool cli_parse(int argc, char *const argv[], CliOptions *out)
@@ -49,8 +57,11 @@ bool cli_parse(int argc, char *const argv[], CliOptions *out)
     bool seen_no_save = false;
     bool seen_save_path = false;
     bool seen_showcase = false;
+    bool seen_demo = false;
+    bool seen_snap = false;
     int smoke_frames = 0;
     const char *save_path = NULL;
+    const char *snap_dir = NULL;
 
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -85,7 +96,7 @@ bool cli_parse(int argc, char *const argv[], CliOptions *out)
                 return false;
             }
             const char *path = argv[++i];
-            if (!is_valid_save_path(path)) {
+            if (!is_valid_cli_path(path)) {
                 return false;
             }
             save_path = path;
@@ -95,27 +106,53 @@ bool cli_parse(int argc, char *const argv[], CliOptions *out)
                 return false;
             }
             seen_showcase = true;
+        } else if (strcmp(arg, "--demo") == 0) {
+            if (seen_demo) {
+                return false;
+            }
+            seen_demo = true;
+        } else if (strcmp(arg, "--snap") == 0) {
+            if (seen_snap || i + 1 >= argc) {
+                return false;
+            }
+            const char *dir = argv[++i];
+            if (!is_valid_snap_dir(dir)) {
+                return false;
+            }
+            snap_dir = dir;
+            seen_snap = true;
         } else {
             return false;
         }
     }
 
-    if (seen_headless && (seen_smoke_frames || seen_showcase || seen_save_path)) {
+    if (seen_headless &&
+        (seen_smoke_frames || seen_showcase || seen_demo || seen_snap || seen_save_path)) {
         return false;
     }
-    if (seen_save_path && (seen_no_save || seen_smoke_frames || seen_showcase)) {
+    if (seen_save_path &&
+        (seen_no_save || seen_smoke_frames || seen_showcase || seen_demo || seen_snap)) {
+        return false;
+    }
+    if (seen_showcase && seen_demo) {
+        return false;
+    }
+    if (seen_snap && seen_smoke_frames) {
         return false;
     }
 
-    out->mode = seen_headless   ? APP_MODE_HEADLESS
-                : seen_showcase ? APP_MODE_SHOWCASE
-                                : APP_MODE_WINDOW;
+    out->mode = seen_headless              ? APP_MODE_HEADLESS
+                : seen_showcase            ? APP_MODE_SHOWCASE
+                : (seen_demo || seen_snap) ? APP_MODE_DEMO
+                                           : APP_MODE_WINDOW;
     out->smoke_frames = smoke_frames;
     out->use_post = !seen_no_post;
+    out->snap_dir = snap_dir;
     if (seen_save_path) {
         out->save_mode = SAVE_MODE_EXPLICIT;
         out->save_path = save_path;
-    } else if (seen_headless || seen_smoke_frames || seen_showcase || seen_no_save) {
+    } else if (seen_headless || seen_smoke_frames || seen_showcase || seen_demo || seen_snap ||
+               seen_no_save) {
         out->save_mode = SAVE_MODE_DISABLED;
         out->save_path = NULL;
     } else {
@@ -132,8 +169,8 @@ void cli_print_usage(FILE *stream, const char *program)
     }
     const char *prog = (program != NULL && program[0] != '\0') ? program : "inkstorm";
     fprintf(stream,
-            "Usage: %s [--headless-smoke | --smoke-frames N] [--showcase] [--no-post] "
-            "[--no-save | --save-path PATH]\n",
+            "Usage: %s [--headless-smoke | --smoke-frames N | --snap DIR] "
+            "[--showcase | --demo] [--no-post] [--no-save | --save-path PATH]\n",
             prog);
 }
 

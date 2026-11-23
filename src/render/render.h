@@ -227,6 +227,8 @@ void render_set_lang_mode(RenderState *r, UiLangMode mode);
 void render_consume_events(RenderState *r, const GameState *g);
 void render_update_vfx(RenderState *r, const GameState *g, float dt);
 void render_draw(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui,
+                            RenderTexture2D target);
 void render_close(RenderState *r);
 
 void render_reward_layout(const GameState *g, RewardLayout *out);

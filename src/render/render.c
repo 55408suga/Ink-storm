@@ -168,15 +168,19 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
     render_reset_blend(r);
 }
 
-void render_draw(RenderState *r, const GameState *g, const UiView *ui)
+static void render_draw_internal(RenderState *r, const GameState *g, const UiView *ui,
+                                 bool to_texture, RenderTexture2D target)
 {
-    if (r == NULL || g == NULL) {
-        return;
-    }
     const double t0 = GetTime();
     r->metrics = (RenderMetrics){0};
     r->cur_blend = BLEND_ALPHA;
     ++r->frames_drawn;
+
+    /* Bake act edge background into r->bg_cache BEFORE entering scene/target/window FBO
+     * so EndTextureMode() inside bake_act_background never unbinds the active render target. */
+    const bool combat = scene_draws_combat_world(ui);
+    const int act = combat ? g->run.act_index : 0;
+    render_paper_prepare_bg(r, act);
 
     if (r->post_enabled && r->post_shader.id != 0 && r->scene.id != 0) {
         BeginTextureMode(r->scene);
@@ -185,21 +189,51 @@ void render_draw(RenderState *r, const GameState *g, const UiView *ui)
 
         const Texture2D tex = r->scene.texture;
         const Rectangle src = {0.0f, 0.0f, (float)tex.width, -(float)tex.height};
-        BeginDrawing();
+        if (to_texture) {
+            BeginTextureMode(target);
+        } else {
+            BeginDrawing();
+        }
         /* 8. Post shader (paper fiber, subtle pooling edge, warm vignette) */
         BeginShaderMode(r->post_shader);
         DrawTextureRec(tex, src, (Vector2){0.0f, 0.0f}, pal_white());
         EndShaderMode();
         draw_ui_layers(r, g, ui);
     } else {
-        BeginDrawing();
+        if (to_texture) {
+            BeginTextureMode(target);
+        } else {
+            BeginDrawing();
+        }
         draw_world_layers(r, g, ui);
         draw_ui_layers(r, g, ui);
     }
 
     r->metrics.draw_ms = (GetTime() - t0) * 1000.0;
     r->last_metrics = r->metrics;
-    EndDrawing();
+    if (to_texture) {
+        EndTextureMode();
+    } else {
+        EndDrawing();
+    }
+}
+
+void render_draw(RenderState *r, const GameState *g, const UiView *ui)
+{
+    if (r == NULL || g == NULL) {
+        return;
+    }
+    const RenderTexture2D unused = {0};
+    render_draw_internal(r, g, ui, false, unused);
+}
+
+void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui,
+                            RenderTexture2D target)
+{
+    if (r == NULL || g == NULL || target.id == 0 || target.id == r->scene.id) {
+        return;
+    }
+    render_draw_internal(r, g, ui, true, target);
 }
 
 void render_close(RenderState *r)

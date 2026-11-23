@@ -12,7 +12,7 @@
   - 戦闘ランのシミュレーション（`GameState`）だけでなく、ロビーのメタ進行・墨庵ショップ・設定/操作ヒントの純粋ロジック（`MetaState`：墨晶精算・購入判定・`RunConfig` 生成・シリアライズ文字列変換）も保持する。
   - これにより、戦闘・3 択報酬・エンドレス移行・墨庵購入まで、すべて raylib なしの Unity 単体テスト＋ASan/UBSan でヘッドレス検証できる。
 - **`src/app/`（`inkstorm` 実行体）**:
-  - ウィンドウ管理、入力収集、シーン遷移と UI 操作のブリッジ、アセット読み込み、セーブファイルの読み書き I/O、CLI オプション（`--headless-smoke`, `--smoke-frames`, `--no-post`, `--no-save`, `--save-path`, `--demo`, `--snap`）のみを担当する。
+  - ウィンドウ管理、入力収集、シーン遷移と UI 操作のブリッジ、アセット読み込み、セーブファイルの読み書き I/O、CLI オプション（`--headless-smoke`, `--smoke-frames`, `--showcase`, `--demo`, `--snap`, `--no-post`, `--no-save`, `--save-path`）のみを担当する。
 - **モジュール依存境界の検証主体**:
   - 依存境界（`core`/`fluid`/`ecs`/`game`/`audio` の raylib 禁止およびターゲット間依存）は CMake ターゲットで機械的に強制する。
   - スタンドアロン配布用の `Makefile`（`tools/dist.mk`）は全モジュールの include パスを公開するため、配布ビルド成功は「配布アーカイブの自己完結性」の検証と位置づけ、依存境界の確認は CMake ビルド側で行う。
@@ -162,7 +162,7 @@ typedef enum {
    - `render_consume_events(render, g)` → `render_update_vfx(render, g, INK_FIXED_DT)`
 
 ### 3.3 デバッグ API と自動入力（テスト・開発用）
-テスト・ベンチ・ヘッドレススモーク・`--smoke-frames`・見本帳（`--showcase`）・将来の `--demo` 用に次の API を `game.h` に定義する。通常のプレイ経路からは呼ばない。
+テスト・ベンチ・ヘッドレススモーク・`--smoke-frames`・見本帳（`src/app/showcase.c`）・自動デモおよびスナップ撮影（`src/app/demo.c`）用に次の API を `game.h` に定義する。通常プレイ経路（`src/app/app_loop.c`）からは呼ばない。
 
 | 関数 | 役割 |
 | :--- | :--- |
@@ -217,6 +217,11 @@ typedef struct {
     float dye[FLUID_MAX_CHANNELS][FLUID_N];
     float dye0[FLUID_MAX_CHANNELS][FLUID_N];
     uint8_t solid[FLUID_N];               /* 0=流体, 1=障害物/外周壁 */
+    /* 内部ジオメトリキャッシュ（solid 変更時のみ再構築、決定性ハッシュ対象外） */
+    float inv_neighbors[FLUID_N];
+    float inv_rb[2][FLUID_N / 2];
+    uint8_t near_wall[FLUID_N];
+    uint8_t geometry_valid;
 } FluidState;
 ```
 
@@ -566,7 +571,7 @@ typedef struct {
   4. フォールバック：実行ファイル基準の `inkstorm_save.txt`
 - **原子的書き込みと失敗時契約**:
   - 同一ディレクトリへ `.tmp` を書き出し、`fflush`・`fclose`・`rename` の戻り値をすべて検査する。いずれかが失敗した場合は `.tmp` を削除し、**既存の `save.txt` を破壊せず** に失敗をログ出力して続行する。
-- **テスト・デモ隔離**: `--no-save`・`--headless-smoke`・`--smoke-frames`・`--demo` 指定時はセーブファイルの読み書きを行わない（`--save-path` と `--no-save` の同時指定は CLI 排他エラーとする）。
+- **テスト・デモ隔離**: `--no-save`・`--headless-smoke`・`--smoke-frames`・`--showcase`・`--demo`・`--snap` 指定時はセーブファイルの読み書きを行わない（`--save-path` とこれらのオプションの同時指定は CLI 排他エラーとする）。
 
 ---
 

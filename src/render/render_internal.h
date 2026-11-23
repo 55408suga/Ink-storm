@@ -34,6 +34,7 @@ void render_reset_blend(RenderState *r);
 void render_paper_init(RenderState *r);
 void render_paper_close(RenderState *r);
 void render_paper_draw_base(RenderState *r, int act_index);
+void render_paper_prepare_bg(RenderState *r, int act_index);
 void render_paper_draw_bg(RenderState *r, int act_index);
 void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index);
 void render_paper_draw_weather(RenderState *r, const GameState *g, int act_index);

@@ -57,6 +57,59 @@ static void test_cli_valid_options(void)
     TEST_ASSERT_EQUAL_INT(3, opts.smoke_frames);
     TEST_ASSERT_FALSE(opts.use_post);
     TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NULL(opts.snap_dir);
+
+    char *argv_demo[] = {"inkstorm", "--demo"};
+    TEST_ASSERT_TRUE(cli_parse(2, argv_demo, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_EQUAL_INT(0, opts.smoke_frames);
+    TEST_ASSERT_TRUE(opts.use_post);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NULL(opts.save_path);
+    TEST_ASSERT_NULL(opts.snap_dir);
+
+    char *argv_demo_flags[] = {"inkstorm", "--demo", "--no-post", "--no-save"};
+    TEST_ASSERT_TRUE(cli_parse(4, argv_demo_flags, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_FALSE(opts.use_post);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NULL(opts.snap_dir);
+
+    char *argv_demo_smoke[] = {"inkstorm", "--demo", "--smoke-frames", "10"};
+    TEST_ASSERT_TRUE(cli_parse(4, argv_demo_smoke, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_EQUAL_INT(10, opts.smoke_frames);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NULL(opts.snap_dir);
+
+    char *argv_demo_snap[] = {"inkstorm", "--demo", "--snap", "build/snaps/out"};
+    TEST_ASSERT_TRUE(cli_parse(4, argv_demo_snap, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NOT_NULL(opts.snap_dir);
+    TEST_ASSERT_EQUAL_STRING("build/snaps/out", opts.snap_dir);
+
+    char *argv_snap_only[] = {"inkstorm", "--snap", "build/snaps/out"};
+    TEST_ASSERT_TRUE(cli_parse(3, argv_snap_only, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_TRUE(opts.use_post);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NOT_NULL(opts.snap_dir);
+    TEST_ASSERT_EQUAL_STRING("build/snaps/out", opts.snap_dir);
+
+    char *argv_snap_nopost[] = {"inkstorm", "--snap", "build/snaps/out", "--no-post"};
+    TEST_ASSERT_TRUE(cli_parse(4, argv_snap_nopost, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_DEMO, opts.mode);
+    TEST_ASSERT_FALSE(opts.use_post);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_EQUAL_STRING("build/snaps/out", opts.snap_dir);
+
+    char *argv_showcase_snap[] = {"inkstorm", "--showcase", "--snap", "build/snaps/sc"};
+    TEST_ASSERT_TRUE(cli_parse(4, argv_showcase_snap, &opts));
+    TEST_ASSERT_EQUAL_INT(APP_MODE_SHOWCASE, opts.mode);
+    TEST_ASSERT_EQUAL_INT(SAVE_MODE_DISABLED, opts.save_mode);
+    TEST_ASSERT_NOT_NULL(opts.snap_dir);
+    TEST_ASSERT_EQUAL_STRING("build/snaps/sc", opts.snap_dir);
 }
 
 static void test_cli_usage_errors(void)
@@ -65,6 +118,10 @@ static void test_cli_usage_errors(void)
     memset(long_path, 'a', PATH_MAX);
     long_path[PATH_MAX] = '\0';
 
+    char near_max_snap[PATH_MAX - 10];
+    memset(near_max_snap, 'b', sizeof near_max_snap - 1u);
+    near_max_snap[sizeof near_max_snap - 1u] = '\0';
+
     typedef struct {
         int argc;
         char *argv[6];
@@ -72,8 +129,6 @@ static void test_cli_usage_errors(void)
 
     const BadCase cases[] = {
         {2, {"inkstorm", "--bogus"}},
-        {2, {"inkstorm", "--demo"}},
-        {3, {"inkstorm", "--snap", "d"}},
         {2, {"inkstorm", "--smoke-frames"}},
         {3, {"inkstorm", "--smoke-frames", "0"}},
         {3, {"inkstorm", "--smoke-frames", "-1"}},
@@ -84,13 +139,26 @@ static void test_cli_usage_errors(void)
         {3, {"inkstorm", "--save-path", ""}},
         {3, {"inkstorm", "--save-path", "--no-save"}},
         {3, {"inkstorm", "--save-path", long_path}},
+        {2, {"inkstorm", "--snap"}},
+        {3, {"inkstorm", "--snap", ""}},
+        {3, {"inkstorm", "--snap", "--no-post"}},
+        {3, {"inkstorm", "--snap", long_path}},
+        {3, {"inkstorm", "--snap", near_max_snap}},
         {4, {"inkstorm", "--no-save", "--save-path", "x"}},
         {4, {"inkstorm", "--headless-smoke", "--smoke-frames", "1"}},
         {3, {"inkstorm", "--headless-smoke", "--showcase"}},
+        {3, {"inkstorm", "--demo", "--headless-smoke"}},
+        {3, {"inkstorm", "--demo", "--showcase"}},
+        {4, {"inkstorm", "--demo", "--save-path", "x"}},
+        {4, {"inkstorm", "--snap", "a", "--headless-smoke"}},
+        {5, {"inkstorm", "--snap", "a", "--save-path", "x"}},
+        {5, {"inkstorm", "--snap", "a", "--smoke-frames", "1"}},
         {5, {"inkstorm", "--save-path", "x", "--smoke-frames", "1"}},
         {4, {"inkstorm", "--save-path", "x", "--showcase"}},
         {4, {"inkstorm", "--save-path", "x", "--headless-smoke"}},
         {3, {"inkstorm", "--no-post", "--no-post"}},
+        {3, {"inkstorm", "--demo", "--demo"}},
+        {5, {"inkstorm", "--snap", "a", "--snap", "b"}},
         {5, {"inkstorm", "--smoke-frames", "1", "--smoke-frames", "2"}},
     };
 
