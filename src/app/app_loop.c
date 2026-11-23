@@ -39,6 +39,17 @@ static void sync_meta_view(AppRunContext *ctx)
 {
     ctx->ui.meta_view = ctx->meta;
     ctx->ui.shake_scale = ctx->meta.settings.shake_scale;
+    ctx->ui.reduce_flash = ctx->meta.settings.reduce_flash;
+    ctx->ui.cursor_scale = ctx->meta.settings.cursor_scale;
+}
+
+static void apply_all_settings(AppRunContext *ctx, RenderState *render, AudioState *audio)
+{
+    const SettingsState *st = &ctx->meta.settings;
+    audio_set_volumes(audio, st->master_vol, st->bgm_vol, st->se_vol);
+    render_set_post_enabled(render, ctx->cli_use_post && st->post_shader_on);
+    render_set_lang_mode(render, (UiLangMode)st->ui_lang);
+    sync_meta_view(ctx);
 }
 
 static uint64_t next_run_seed(const MetaState *meta)
@@ -77,6 +88,7 @@ static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *rend
     ctx->ui.paused = false;
     ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
     ctx->ui.settled = false;
+    ctx->ui.settle_preview = false;
     ctx->ui.settle = (MetaSettleBreakdown){0};
     ctx->ui.hover_choice = UI_HOVER_NONE;
     clear_hint_queue(ctx);
@@ -147,14 +159,42 @@ static void step_hint_queue(AppRunContext *ctx, float dt)
     }
 }
 
-static void app_after_tick(AppRunContext *ctx, GameState *game)
+static void settle_victory_if_pending(AppRunContext *ctx, GameState *game)
 {
-    consume_hint_events(ctx, game);
-    if ((game->phase == RUN_PHASE_VICTORY || game->phase == RUN_PHASE_GAME_OVER) &&
-        !game->run.run_settled) {
+    if (game->phase == RUN_PHASE_VICTORY && !game->run.run_settled) {
         MetaSettleBreakdown br = {0};
         if (meta_settle_run(&ctx->meta, game, &br)) {
             ctx->ui.settled = true;
+            ctx->ui.settle_preview = false;
+            ctx->ui.settle = br;
+            ctx->ui.crystals_after = ctx->meta.ink_crystals;
+            sync_meta_view(ctx);
+            persist_meta(ctx);
+        }
+    }
+}
+
+static void app_after_tick(AppRunContext *ctx, GameState *game)
+{
+    consume_hint_events(ctx, game);
+    if (game->phase == RUN_PHASE_VICTORY && !game->run.run_settled && game->run.endless_loop == 0) {
+        /* Deferred settlement: preview crystals without committing so player may enter Endless */
+        const MetaRunResult res = game_run_result(game);
+        ctx->ui.settle = meta_calc_crystals(&res);
+        ctx->ui.settle_preview = true;
+        ctx->ui.settled = false;
+        int64_t after = (int64_t)ctx->meta.ink_crystals + (int64_t)ctx->ui.settle.total_crystals;
+        if (after > META_MAX_CRYSTALS) {
+            after = META_MAX_CRYSTALS;
+        }
+        ctx->ui.crystals_after = (int32_t)after;
+    } else if ((game->phase == RUN_PHASE_GAME_OVER ||
+                (game->phase == RUN_PHASE_VICTORY && game->run.endless_loop > 0)) &&
+               !game->run.run_settled) {
+        MetaSettleBreakdown br = {0};
+        if (meta_settle_run(&ctx->meta, game, &br)) {
+            ctx->ui.settled = true;
+            ctx->ui.settle_preview = false;
             ctx->ui.settle = br;
             ctx->ui.crystals_after = ctx->meta.ink_crystals;
             sync_meta_view(ctx);
@@ -187,6 +227,7 @@ static void app_finish_run_on_exit(AppRunContext *ctx, GameState *game)
     if (!ctx->save_enabled || !is_active_run_scene(&ctx->ui)) {
         return;
     }
+    settle_victory_if_pending(ctx, game);
     abort_current_run_if_started(ctx, game);
 }
 
@@ -239,11 +280,24 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
         }
     } else if (row == 5) {
         st->hints_on = !st->hints_on;
+    } else if (row == 6) {
+        const int next_lang =
+            ((int)st->ui_lang + (delta > 0 ? 1 : (UI_LANG_COUNT - 1))) % (int)UI_LANG_COUNT;
+        st->ui_lang = (uint8_t)next_lang;
+    } else if (row == 7) {
+        st->reduce_flash = !st->reduce_flash;
+    } else if (row == 8) {
+        if (delta > 0) {
+            st->cursor_scale =
+                st->cursor_scale == 100 ? 125 : (st->cursor_scale == 125 ? 150 : 100);
+        } else {
+            st->cursor_scale =
+                st->cursor_scale == 150 ? 125 : (st->cursor_scale == 125 ? 100 : 150);
+        }
     }
 
-    audio_set_volumes(audio, st->master_vol, st->bgm_vol, st->se_vol);
-    render_set_post_enabled(render, ctx->cli_use_post && st->post_shader_on);
-    sync_meta_view(ctx);
+    apply_all_settings(ctx, render, audio);
+    persist_meta(ctx);
 }
 
 static void step_lobby_fluid_demo(AppRunContext *ctx, GameState *game, RenderState *render,
@@ -305,6 +359,8 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.settings_return_scene = UI_SCENE_TITLE_LOBBY;
         ctx->ui.scene = UI_SCENE_SETTINGS;
         ctx->ui.settings_cursor = 0;
+        ctx->ui.settings_notice_t = 0.0f;
+        ctx->ui.settings_notice_kind = 0;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         sync_meta_view(ctx);
         break;
@@ -320,6 +376,8 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_BACK:
         if (ctx->ui.scene == UI_SCENE_SETTINGS) {
             persist_meta(ctx);
+            ctx->ui.settings_notice_t = 0.0f;
+            ctx->ui.settings_notice_kind = 0;
             ctx->ui.scene = ctx->ui.settings_return_scene;
             ctx->ui.hover_choice = UI_HOVER_NONE;
         } else {
@@ -344,6 +402,22 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_SETTINGS_CHANGE:
         apply_settings_change(ctx, render, audio, menu->arg, menu->delta);
+        break;
+    case MENU_ACT_SETTINGS_RESET_HINTS:
+        ctx->meta.seen_hints_mask = 0u;
+        audio_trigger_ui_stamp(audio);
+        ctx->ui.settings_notice_kind = 1;
+        ctx->ui.settings_notice_t = 1.8f;
+        sync_meta_view(ctx);
+        persist_meta(ctx);
+        break;
+    case MENU_ACT_SETTINGS_RESET_DEFAULTS:
+        ctx->meta.settings = meta_settings_default();
+        apply_all_settings(ctx, render, audio);
+        audio_trigger_ui_stamp(audio);
+        ctx->ui.settings_notice_kind = 2;
+        ctx->ui.settings_notice_t = 1.8f;
+        persist_meta(ctx);
         break;
     case MENU_ACT_TOGGLE_PAUSE:
         ctx->ui.paused = true;
@@ -372,6 +446,8 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.settings_return_scene = UI_SCENE_RUN;
         ctx->ui.scene = UI_SCENE_SETTINGS;
         ctx->ui.settings_cursor = 0;
+        ctx->ui.settings_notice_t = 0.0f;
+        ctx->ui.settings_notice_kind = 0;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         sync_meta_view(ctx);
         break;
@@ -399,14 +475,32 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         }
         break;
     }
+    case MENU_ACT_RESULT_ENDLESS:
+        if (render->victory_scroll_t >= 0.75f && game->phase == RUN_PHASE_VICTORY &&
+            !game->run.run_settled && game->run.endless_loop == 0) {
+            const GameCommand cmd = {.type = CMD_START_ENDLESS, .arg = 0};
+            game_step(game, NULL, &cmd);
+            ctx->ui.settle_preview = false;
+            ctx->ui.settled = false;
+            ctx->ui.hover_choice = UI_HOVER_NONE;
+            render->victory_scroll_t = 0.0f;
+            audio_consume_events(audio, game);
+            render_consume_events(render, game);
+            frame_clock_reset(clock);
+            input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
+                                                menu->left_down);
+        }
+        break;
     case MENU_ACT_RESULT_LOBBY:
         if (render->victory_scroll_t >= 0.75f) {
+            settle_victory_if_pending(ctx, game);
             enter_lobby_scene(ctx, game, render, audio);
             frame_clock_reset(clock);
         }
         break;
     case MENU_ACT_RESULT_RETRY:
         if (render->victory_scroll_t >= 0.75f) {
+            settle_victory_if_pending(ctx, game);
             start_new_run(ctx, game, render, audio, ctx->ui.selected_brush);
             frame_clock_reset(clock);
             input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
@@ -450,15 +544,11 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
         .title_font_path = has_title_font ? title_font_path : NULL,
     };
     render_init(render, &render_opts);
-    render_set_post_enabled(render, opts->use_post && ctx.meta.settings.post_shader_on);
-
     audio_init(audio, UINT64_C(1));
-    audio_set_volumes(audio, ctx.meta.settings.master_vol, ctx.meta.settings.bgm_vol,
-                      ctx.meta.settings.se_vol);
 
     ctx.ui.hover_choice = UI_HOVER_NONE;
     ctx.ui.selected_brush = BRUSH_STYLE_HEAVY;
-    sync_meta_view(&ctx);
+    apply_all_settings(&ctx, render, audio);
 
     if (opts->smoke_frames > 0) {
         start_new_run(&ctx, game, render, audio, BRUSH_STYLE_HEAVY);
@@ -495,6 +585,11 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
 
             if (ctx.quit_requested) {
                 break;
+            }
+
+            if (ctx.ui.scene == UI_SCENE_SETTINGS && ctx.ui.settings_notice_t > 0.0f) {
+                const float dt = ink_clampf(GetFrameTime(), 0.0f, 0.1f);
+                ctx.ui.settings_notice_t = fmaxf(0.0f, ctx.ui.settings_notice_t - dt);
             }
 
             if (ctx.ui.scene == UI_SCENE_RUN && !ctx.ui.paused) {

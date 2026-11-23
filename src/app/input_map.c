@@ -43,6 +43,10 @@ RawInput input_map_read(const GameState *g, UiView *ui)
             CheckCollisionPointRec(mouse, layout.repair_rect)) {
             hover = UI_HOVER_REPAIR;
         }
+        if (hover == UI_HOVER_NONE && layout.has_crystal &&
+            CheckCollisionPointRec(mouse, layout.crystal_rect)) {
+            hover = UI_HOVER_CRYSTAL;
+        }
         if (hover == UI_HOVER_NONE && layout.has_reroll &&
             CheckCollisionPointRec(mouse, layout.reroll_rect)) {
             hover = UI_HOVER_REROLL;
@@ -57,23 +61,33 @@ RawInput input_map_read(const GameState *g, UiView *ui)
                 raw.pick_pressed = hover;
             } else if (hover == UI_HOVER_REPAIR) {
                 raw.repair_pressed = true;
+            } else if (hover == UI_HOVER_CRYSTAL) {
+                raw.crystal_pressed = true;
             } else if (hover == UI_HOVER_REROLL) {
                 raw.reroll_pressed = true;
             }
         }
 
-        if (IsKeyPressed(KEY_ONE)) {
-            raw.pick_pressed = 0;
-        } else if (IsKeyPressed(KEY_TWO)) {
-            raw.pick_pressed = 1;
-        } else if (IsKeyPressed(KEY_THREE)) {
-            raw.pick_pressed = 2;
-        }
-        if (IsKeyPressed(KEY_FOUR)) {
-            raw.repair_pressed = true;
-        }
-        if (IsKeyPressed(KEY_R)) {
-            raw.reroll_pressed = true;
+        if (g->run.reward.kind == REWARD_KIND_FALLBACK) {
+            if (IsKeyPressed(KEY_ONE) || IsKeyPressed(KEY_FOUR)) {
+                raw.repair_pressed = true;
+            } else if (IsKeyPressed(KEY_TWO) && layout.has_crystal) {
+                raw.crystal_pressed = true;
+            }
+        } else {
+            if (IsKeyPressed(KEY_ONE)) {
+                raw.pick_pressed = 0;
+            } else if (IsKeyPressed(KEY_TWO)) {
+                raw.pick_pressed = 1;
+            } else if (IsKeyPressed(KEY_THREE)) {
+                raw.pick_pressed = 2;
+            }
+            if (IsKeyPressed(KEY_FOUR)) {
+                raw.repair_pressed = true;
+            }
+            if (IsKeyPressed(KEY_R)) {
+                raw.reroll_pressed = true;
+            }
         }
         return raw;
     }
@@ -285,15 +299,26 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
     if (ui->scene == UI_SCENE_SETTINGS) {
         SettingsLayout layout;
         render_settings_layout(&layout);
+        const int32_t focus_count =
+            SETTINGS_ROW_COUNT + 3; /* 0..8 rows, 9 hints, 10 def, 11 back */
+        const int32_t idx_hints = SETTINGS_ROW_COUNT;
+        const int32_t idx_defaults = SETTINGS_ROW_COUNT + 1;
+        const int32_t idx_back = SETTINGS_ROW_COUNT + 2;
+
         int32_t hover = UI_HOVER_NONE;
-        for (int32_t i = 0; i < 6; ++i) {
+        for (int32_t i = 0; i < SETTINGS_ROW_COUNT; ++i) {
             if (CheckCollisionPointRec(mouse, layout.rows[i])) {
                 hover = i;
                 break;
             }
         }
-        if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
-            hover = 6;
+        if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.reset_hints_rect)) {
+            hover = idx_hints;
+        } else if (hover == UI_HOVER_NONE &&
+                   CheckCollisionPointRec(mouse, layout.reset_defaults_rect)) {
+            hover = idx_defaults;
+        } else if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
+            hover = idx_back;
         }
         ui->hover_choice = hover;
         if (hover >= 0) {
@@ -301,19 +326,35 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         }
 
         if (IsKeyPressed(KEY_UP)) {
-            ui->settings_cursor = (ui->settings_cursor + 6) % 7;
+            ui->settings_cursor = (ui->settings_cursor + focus_count - 1) % focus_count;
         } else if (IsKeyPressed(KEY_DOWN)) {
-            ui->settings_cursor = (ui->settings_cursor + 1) % 7;
+            ui->settings_cursor = (ui->settings_cursor + 1) % focus_count;
+        } else if (ui->settings_cursor == idx_hints && IsKeyPressed(KEY_RIGHT)) {
+            ui->settings_cursor = idx_defaults;
+        } else if (ui->settings_cursor == idx_defaults && IsKeyPressed(KEY_LEFT)) {
+            ui->settings_cursor = idx_hints;
         }
 
-        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == 6) ||
-            (is_enter_pressed() && ui->settings_cursor == 6)) {
+        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == idx_back) ||
+            (is_enter_pressed() && ui->settings_cursor == idx_back)) {
             out.action = MENU_ACT_BACK;
             out.ui_clicked = left_pressed;
             return out;
         }
+        if ((left_pressed && hover == idx_hints) ||
+            (is_enter_pressed() && ui->settings_cursor == idx_hints)) {
+            out.action = MENU_ACT_SETTINGS_RESET_HINTS;
+            out.ui_clicked = left_pressed;
+            return out;
+        }
+        if ((left_pressed && hover == idx_defaults) ||
+            (is_enter_pressed() && ui->settings_cursor == idx_defaults)) {
+            out.action = MENU_ACT_SETTINGS_RESET_DEFAULTS;
+            out.ui_clicked = left_pressed;
+            return out;
+        }
 
-        if (left_pressed && hover >= 0 && hover < 6) {
+        if (left_pressed && hover >= 0 && hover < SETTINGS_ROW_COUNT) {
             out.ui_clicked = true;
             if (CheckCollisionPointRec(mouse, layout.minus_rects[hover])) {
                 out.action = MENU_ACT_SETTINGS_CHANGE;
@@ -327,7 +368,7 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             return out;
         }
 
-        if (ui->settings_cursor >= 0 && ui->settings_cursor < 6) {
+        if (ui->settings_cursor >= 0 && ui->settings_cursor < SETTINGS_ROW_COUNT) {
             if (IsKeyPressed(KEY_LEFT)) {
                 out.action = MENU_ACT_SETTINGS_CHANGE;
                 out.arg = ui->settings_cursor;
@@ -343,16 +384,23 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
 
     /* UI_SCENE_RUN */
     if (g != NULL && (g->phase == RUN_PHASE_VICTORY || g->phase == RUN_PHASE_GAME_OVER)) {
+        const bool show_endless =
+            (g->phase == RUN_PHASE_VICTORY && !g->run.run_settled && g->run.endless_loop == 0);
         ResultLayout layout;
-        render_result_layout(&layout);
+        render_result_layout(show_endless, &layout);
         int32_t hover = UI_HOVER_NONE;
-        if (CheckCollisionPointRec(mouse, layout.lobby_rect)) {
+        if (layout.has_endless && CheckCollisionPointRec(mouse, layout.endless_rect)) {
+            hover = 2;
+        } else if (CheckCollisionPointRec(mouse, layout.lobby_rect)) {
             hover = 0;
         } else if (CheckCollisionPointRec(mouse, layout.retry_rect)) {
             hover = 1;
         }
         ui->hover_choice = hover;
-        if (left_pressed && hover == 0) {
+        if (left_pressed && hover == 2 && layout.has_endless) {
+            out.action = MENU_ACT_RESULT_ENDLESS;
+            out.ui_clicked = true;
+        } else if (left_pressed && hover == 0) {
             out.action = MENU_ACT_RESULT_LOBBY;
             out.ui_clicked = true;
         } else if (left_pressed && hover == 1) {

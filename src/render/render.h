@@ -17,6 +17,7 @@
 #define RENDER_MAX_CRACKS 8
 #define RENDER_MAX_INTRO_QUEUE 8
 #define RENDER_RYU_TRAIL_LEN 24
+#define SETTINGS_ROW_COUNT 9
 
 typedef struct {
     bool use_post;
@@ -32,6 +33,8 @@ typedef struct {
     bool has_repair;
     Rectangle reroll_rect;
     bool has_reroll;
+    Rectangle crystal_rect;
+    bool has_crystal;
 } RewardLayout;
 
 typedef struct {
@@ -56,13 +59,17 @@ typedef struct {
 } PauseLayout;
 
 typedef struct {
-    Rectangle rows[6];
-    Rectangle minus_rects[6];
-    Rectangle plus_rects[6];
+    Rectangle rows[SETTINGS_ROW_COUNT];
+    Rectangle minus_rects[SETTINGS_ROW_COUNT];
+    Rectangle plus_rects[SETTINGS_ROW_COUNT];
+    Rectangle reset_hints_rect;
+    Rectangle reset_defaults_rect;
     Rectangle back_rect;
 } SettingsLayout;
 
 typedef struct {
+    Rectangle endless_rect;
+    bool has_endless;
     Rectangle lobby_rect;
     Rectangle retry_rect;
 } ResultLayout;
@@ -108,7 +115,7 @@ typedef struct {
     bool active;
     int32_t kind; /* 0=cyclone, 1=gale, 2=act wipe, 3=orb trail, 4=boss burst,
                      5=thunderburst enso, 6=cataclysm gold enso, 7=bounce enso,
-                     8=nue dash trail */
+                     8=nue dash trail, 9=ryu orb break */
     float x, y, dx, dy;
     float radius;
     float age, life;
@@ -216,6 +223,7 @@ typedef struct {
 void render_init(RenderState *r, const RenderOptions *opt);
 void render_reset_vfx(RenderState *r, uint64_t seed);
 void render_set_post_enabled(RenderState *r, bool enabled);
+void render_set_lang_mode(RenderState *r, UiLangMode mode);
 void render_consume_events(RenderState *r, const GameState *g);
 void render_update_vfx(RenderState *r, const GameState *g, float dt);
 void render_draw(RenderState *r, const GameState *g, const UiView *ui);
@@ -227,6 +235,6 @@ void render_brush_select_layout(BrushSelectLayout *out);
 void render_bokuan_layout(BokuanLayout *out);
 void render_pause_layout(PauseLayout *out);
 void render_settings_layout(SettingsLayout *out);
-void render_result_layout(ResultLayout *out);
+void render_result_layout(bool show_endless, ResultLayout *out);
 
 #endif

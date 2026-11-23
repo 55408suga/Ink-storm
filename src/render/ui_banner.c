@@ -19,14 +19,38 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const float u = ink_clampf(g->phase_t / 2.0f, 0.0f, 1.0f);
         const float open =
             u < 0.25f ? (u / 0.25f) : (u > 0.80f ? (1.0f - (u - 0.80f) / 0.20f) : 1.0f);
-        const float bw = 720.0f * ink_clampf(open, 0.1f, 1.0f);
+
+        char title_buf[128];
+        const char *title_str = NULL;
+        if (g->run.act_index >= GAME_MAIN_ACT_COUNT) {
+            static const TextId k_subtitles[GAME_MAIN_ACT_COUNT] = {
+                TEXT_ACT1_SUBTITLE, TEXT_ACT2_SUBTITLE, TEXT_ACT3_SUBTITLE};
+            const int32_t stage_act = g->run.act_index % GAME_MAIN_ACT_COUNT;
+            const int32_t loop_n = g->run.act_index / GAME_MAIN_ACT_COUNT;
+            const char *sub = text_get(k_subtitles[stage_act], r->use_ja);
+            if (r->use_ja) {
+                snprintf(title_buf, sizeof title_buf, "%s%d%s (%s%d) %s",
+                         text_get(TEXT_ENDLESS_ACT_PREFIX, true), g->run.act_index + 1,
+                         text_get(TEXT_ENDLESS_ACT_SUFFIX, true),
+                         text_get(TEXT_ENDLESS_LOOP_LABEL, true), loop_n, sub);
+            } else {
+                snprintf(title_buf, sizeof title_buf, "Act %d (Loop %d): %s", g->run.act_index + 1,
+                         loop_n, sub);
+            }
+            title_str = title_buf;
+        } else {
+            const TextId title_id = text_act_title(g->run.act_index);
+            title_str = text_get(title_id != TEXT_NONE ? title_id : TEXT_ACT1_TITLE, r->use_ja);
+        }
+
+        const Vector2 tm = render_measure_text(r, title_str, 44.0f, true);
+        const float target_bw = ink_clampf(fmaxf(720.0f, tm.x + 96.0f), 720.0f, 1180.0f);
+        const float bw = target_bw * ink_clampf(open, 0.1f, 1.0f);
         const Rectangle band = {cx - bw * 0.5f, (float)INK_SCREEN_H * 0.38f, bw, 118.0f};
         ink_fill_panel(r, band, PAL_GOFUN, 0.92f * open, PAL_SUMI_DARK, 0.88f * open, 600u);
         if (open > 0.35f) {
-            const TextId title_id = text_act_title(g->run.act_index);
-            render_draw_text_centered(
-                r, text_get(title_id != TEXT_NONE ? title_id : TEXT_ACT1_TITLE, r->use_ja),
-                (Vector2){cx, band.y + band.height * 0.5f}, 44.0f, PAL_SUMI_SCORCH, open, true);
+            render_draw_text_centered(r, title_str, (Vector2){cx, band.y + band.height * 0.5f},
+                                      44.0f, PAL_SUMI_SCORCH, open, true);
         }
     }
 
@@ -162,16 +186,20 @@ void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiVi
         seal_stamp(r, TEXT_SEAL_PURIFY, (Vector2){784.0f, py}, 44.0f, SEAL_HAKUBUN, 0.8f);
         seal_stamp(r, TEXT_SEAL_SANGEN, (Vector2){844.0f, py}, 44.0f, SEAL_SHUBUN, 0.8f);
 
-        render_draw_text(r, "P1: 7 Regulars / 4 Elites / 3 Bosses / 5 Proj / Terrain / 6 Prims",
-                         (Vector2){624.0f, 574.0f}, 18.0f, PAL_SUMI_DARK, 0.92f, false);
+        const char *p1_label =
+            ui->showcase_subpage == 0
+                ? "P1: 7 Regulars / 4 Elites / 3 Bosses / 5 Proj / Terrain / 6 Prims"
+                : "P2: Ofuda Fox / Barrier / Homing Ofuda / Multi-part Ryu / Sunago";
+        render_draw_text(r, p1_label, (Vector2){624.0f, 574.0f}, 18.0f, PAL_SUMI_DARK, 0.92f,
+                         false);
         render_draw_text(r, "[1-6] Page  [Tab] Sub  [F1] Metrics  [F12] Save",
                          (Vector2){884.0f, 642.0f}, 16.0f, PAL_SUMI_HEAVY, 0.88f, false);
     }
 
     char pg[64];
-    snprintf(pg, sizeof pg, "%s %d/6", text_get(TEXT_SHOWCASE_HEADER, r->use_ja),
-             ui->showcase_page);
-    const Rectangle badge = {14.0f, (float)INK_SCREEN_H - 38.0f, 168.0f, 28.0f};
+    snprintf(pg, sizeof pg, "%s %d/6 [%d]", text_get(TEXT_SHOWCASE_HEADER, r->use_ja),
+             ui->showcase_page, ui->showcase_subpage + 1);
+    const Rectangle badge = {14.0f, (float)INK_SCREEN_H - 38.0f, 192.0f, 28.0f};
     ink_fill_panel(r, badge, PAL_GOFUN, 0.88f, PAL_SUMI_LIGHT, 0.65f, 830u);
     render_draw_text(r, pg, (Vector2){24.0f, (float)INK_SCREEN_H - 34.0f}, 18.0f, PAL_SUMI_SCORCH,
                      0.94f, false);

@@ -98,7 +98,7 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
         /* 5 & 6. Ink orbs, projectiles, shrines, enemies, boss */
         render_draw_entities(r, g, act);
         /* 7. World VFX & Act 3 rain / wind telegraph */
-        render_vfx_draw_world(r, g);
+        render_vfx_draw_world(r, g, ui);
         render_paper_draw_weather(r, g, act);
     }
     render_reset_blend(r);
@@ -138,8 +138,10 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         } else if (ui->showcase_page == 5) {
             if (ui->showcase_subpage == 0) {
                 render_draw_bokuan_ui(r, g, ui);
-            } else {
+            } else if (ui->showcase_subpage == 1) {
                 render_draw_pause_ui(r, g, ui);
+            } else {
+                render_draw_settings_ui(r, g, ui);
             }
         } else {
             render_draw_result_ui(r, g, ui);

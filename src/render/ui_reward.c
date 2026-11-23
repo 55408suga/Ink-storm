@@ -43,16 +43,29 @@ void render_reward_layout(const GameState *g, RewardLayout *out)
 
     if (rw->kind == REWARD_KIND_FALLBACK) {
         out->has_repair = true;
-        out->repair_rect =
-            (Rectangle){((float)INK_SCREEN_W - 280.0f) * 0.5f, 270.0f, 280.0f, 112.0f};
         out->has_reroll = false;
+        if (rw->crystal_reward > 0) {
+            out->has_crystal = true;
+            const float cw = 320.0f;
+            const float ch = 286.0f;
+            const float cgap = 48.0f;
+            const float cx = (float)INK_SCREEN_W * 0.5f;
+            out->repair_rect = (Rectangle){cx - cw - cgap * 0.5f, 196.0f, cw, ch};
+            out->crystal_rect = (Rectangle){cx + cgap * 0.5f, 196.0f, cw, ch};
+        } else {
+            out->has_crystal = false;
+            out->repair_rect =
+                (Rectangle){((float)INK_SCREEN_W - 280.0f) * 0.5f, 270.0f, 280.0f, 112.0f};
+        }
     } else if (rw->kind == REWARD_KIND_RELIC) {
         out->has_repair = false;
+        out->has_crystal = false;
         out->has_reroll = true;
         out->reroll_rect =
             (Rectangle){((float)INK_SCREEN_W - 236.0f) * 0.5f, 548.0f, 236.0f, 68.0f};
     } else {
         out->has_repair = true;
+        out->has_crystal = false;
         out->has_reroll = true;
         out->reroll_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f - 260.0f, 548.0f, 236.0f, 68.0f};
         out->repair_rect = (Rectangle){(float)INK_SCREEN_W * 0.5f + 24.0f, 548.0f, 236.0f, 68.0f};
@@ -123,6 +136,123 @@ static void draw_relic_emblem(RenderState *r, Vector2 c, RelicId rid)
         ink_teardrop(r, (Vector2){c.x, c.y + 2.0f}, (Vector2){0.0f, -1.0f}, 10.0f, 7.0f,
                      pal_color_alpha(PAL_SHU_HOT, 0.95f));
         break;
+    case RELIC_SEAL_OF_TRINITY:
+        /* Three-element crest ringed by gold arc */
+        ink_arc_stroke(r, c, 19.0f, 0.15f, 5.75f,
+                       (BrushProfile){.w_max = 3.2f,
+                                      .w_min_ratio = 0.28f,
+                                      .entry = 0.12f,
+                                      .exit = 0.30f,
+                                      .dry = 0.20f,
+                                      .seed = 437u},
+                       (InkTone){.color = PAL_KIN, .alpha = 0.94f});
+        ink_teardrop(r, (Vector2){c.x, c.y - 8.5f}, (Vector2){0.0f, -1.0f}, 8.5f, 6.2f,
+                     pal_color_alpha(PAL_SHU, 0.95f));
+        ink_teardrop(r, (Vector2){c.x - 8.5f, c.y + 6.5f}, (Vector2){-0.7f, 0.7f}, 8.5f, 6.2f,
+                     pal_color_alpha(PAL_AO, 0.95f));
+        ink_teardrop(r, (Vector2){c.x + 8.5f, c.y + 6.5f}, (Vector2){0.7f, 0.7f}, 8.5f, 6.2f,
+                     pal_color_alpha(PAL_SUMI_SCORCH, 0.95f));
+        break;
+    case RELIC_INKSTORM_SECRET:
+        /* Deep swirling ink enso + gold core flick */
+        ink_arc_stroke(r, c, 18.0f, 0.2f, 5.4f,
+                       (BrushProfile){.w_max = 5.2f,
+                                      .w_min_ratio = 0.22f,
+                                      .entry = 0.14f,
+                                      .exit = 0.35f,
+                                      .dry = 0.35f,
+                                      .seed = 438u},
+                       (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f});
+        ink_arc_stroke(r, c, 10.5f, 1.4f, 6.1f,
+                       (BrushProfile){.w_max = 3.4f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.12f,
+                                      .exit = 0.35f,
+                                      .dry = 0.20f,
+                                      .seed = 439u},
+                       (InkTone){.color = PAL_KIN, .alpha = 0.95f});
+        break;
+    case RELIC_THUNDERFIRE_GEM: {
+        /* Crimson-and-azure dual orb with lightning crack */
+        ink_teardrop(r, (Vector2){c.x - 4.0f, c.y}, (Vector2){-0.2f, -1.0f}, 16.0f, 11.0f,
+                     pal_color_alpha(PAL_SHU, 0.92f));
+        ink_teardrop(r, (Vector2){c.x + 5.0f, c.y + 1.0f}, (Vector2){0.2f, -1.0f}, 15.0f, 10.5f,
+                     pal_color_alpha(PAL_AO, 0.92f));
+        const Vector2 zap[4] = {{c.x - 2.0f, c.y - 12.0f},
+                                {c.x + 3.0f, c.y - 2.0f},
+                                {c.x - 3.0f, c.y + 3.0f},
+                                {c.x + 2.0f, c.y + 12.0f}};
+        ink_stroke(r, zap, 4,
+                   (BrushProfile){.w_max = 2.8f,
+                                  .w_min_ratio = 0.32f,
+                                  .entry = 0.10f,
+                                  .exit = 0.25f,
+                                  .dry = 0.0f,
+                                  .seed = 441u},
+                   (InkTone){.color = PAL_KIN_HOT, .alpha = 0.96f}, 1.0f);
+        break;
+    }
+    case RELIC_ONI_TILE: {
+        /* Stout horned roof tile silhouette */
+        const Vector2 tile[6] = {
+            {c.x - 16.0f, c.y - 10.0f}, {c.x, c.y - 15.0f}, {c.x + 16.0f, c.y - 10.0f},
+            {c.x + 18.0f, c.y + 12.0f}, {c.x, c.y + 15.0f}, {c.x - 18.0f, c.y + 12.0f},
+        };
+        ink_fill_poly(r, tile, 6, pal_color_alpha(PAL_SUMI_HEAVY, 0.85f));
+        ink_outline(r, tile, 6, true, 3.6f, (Vector2){0.7f, 0.7f}, 442u);
+        const Vector2 lh[2] = {{c.x - 10.0f, c.y - 11.0f}, {c.x - 16.0f, c.y - 22.0f}};
+        const Vector2 rh[2] = {{c.x + 10.0f, c.y - 11.0f}, {c.x + 16.0f, c.y - 22.0f}};
+        const BrushProfile hp = {.w_max = 3.4f,
+                                 .w_min_ratio = 0.22f,
+                                 .entry = 0.12f,
+                                 .exit = 0.55f,
+                                 .dry = 0.15f,
+                                 .seed = 443u};
+        ink_stroke(r, lh, 2, hp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f}, 1.0f);
+        ink_stroke(r, rh, 2, hp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f}, 1.0f);
+        ink_teardrop(r, (Vector2){c.x - 6.0f, c.y - 1.0f}, (Vector2){1.0f, 0.0f}, 5.5f, 3.5f,
+                     pal_color_alpha(PAL_GOFUN, 0.95f));
+        ink_teardrop(r, (Vector2){c.x + 6.0f, c.y - 1.0f}, (Vector2){-1.0f, 0.0f}, 5.5f, 3.5f,
+                     pal_color_alpha(PAL_GOFUN, 0.95f));
+        break;
+    }
+    case RELIC_ENDLESS_BRUSH: {
+        /* Continuous figure-eight calligraphic brush ribbon */
+        const Vector2 loop[9] = {
+            {c.x, c.y}, {c.x - 11.0f, c.y - 11.0f}, {c.x - 20.0f, c.y}, {c.x - 11.0f, c.y + 11.0f},
+            {c.x, c.y}, {c.x + 11.0f, c.y - 11.0f}, {c.x + 20.0f, c.y}, {c.x + 11.0f, c.y + 11.0f},
+            {c.x, c.y},
+        };
+        ink_stroke(r, loop, 9,
+                   (BrushProfile){.w_max = 4.2f,
+                                  .w_min_ratio = 0.24f,
+                                  .entry = 0.12f,
+                                  .exit = 0.30f,
+                                  .dry = 0.30f,
+                                  .seed = 444u},
+                   (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.95f}, 1.0f);
+        ink_teardrop(r, (Vector2){c.x + 16.0f, c.y - 2.0f}, (Vector2){0.5f, -0.8f}, 7.0f, 4.5f,
+                     pal_color_alpha(PAL_KIN, 0.94f));
+        break;
+    }
+    case RELIC_NIGHT_PARADE_SCROLL: {
+        /* Unfurled painted scroll with twin rollers and vermilion seal */
+        const Rectangle sc = {c.x - 18.0f, c.y - 11.0f, 36.0f, 22.0f};
+        ink_fill_panel(r, sc, PAL_PAPER_ACT1, 0.95f, PAL_SUMI_DARK, 0.92f, 448u);
+        const Vector2 lrod[2] = {{c.x - 19.0f, c.y - 14.0f}, {c.x - 19.0f, c.y + 14.0f}};
+        const Vector2 rrod[2] = {{c.x + 19.0f, c.y - 14.0f}, {c.x + 19.0f, c.y + 14.0f}};
+        const BrushProfile rp = {.w_max = 4.4f,
+                                 .w_min_ratio = 0.40f,
+                                 .entry = 0.10f,
+                                 .exit = 0.10f,
+                                 .dry = 0.10f,
+                                 .seed = 449u};
+        ink_stroke(r, lrod, 2, rp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f}, 1.0f);
+        ink_stroke(r, rrod, 2, rp, (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f}, 1.0f);
+        ink_teardrop(r, (Vector2){c.x + 7.0f, c.y + 2.0f}, (Vector2){0.0f, -1.0f}, 6.5f, 5.5f,
+                     pal_color_alpha(PAL_SHU, 0.94f));
+        break;
+    }
     default:
         ink_arc_stroke(r, c, 15.0f, 0.3f, 5.5f,
                        (BrushProfile){.w_max = 3.8f,
@@ -153,6 +283,20 @@ static void draw_mini_shrine_icon(RenderState *r, Vector2 c, bool enabled)
                (InkTone){.color = ink, .alpha = 0.95f}, 1.0f);
     ink_teardrop(r, (Vector2){c.x, c.y + 4.0f}, (Vector2){0.0f, -1.0f}, 7.0f, 4.5f,
                  pal_color_alpha(enabled ? PAL_SHU : PAL_SUMI_CLEAR, 0.92f));
+}
+
+static void draw_crystal_emblem(RenderState *r, Vector2 c)
+{
+    ink_wash(r, c, 32.0f, 26.0f, 0.12f, (InkTone){.color = PAL_KIN, .alpha = 0.28f}, 2, 490u);
+    const Vector2 gem[5] = {
+        {c.x, c.y - 22.0f},         {c.x + 15.0f, c.y - 4.0f}, {c.x + 10.0f, c.y + 18.0f},
+        {c.x - 11.0f, c.y + 17.0f}, {c.x - 15.0f, c.y - 5.0f},
+    };
+    ink_fill_poly(r, gem, 5, pal_color_alpha(PAL_SUMI_SCORCH, 0.92f));
+    ink_outline_tone(r, gem, 5, true, 3.2f, (Vector2){0.7f, 0.7f},
+                     (InkTone){.color = PAL_KIN, .alpha = 0.96f}, 491u);
+    ink_teardrop(r, (Vector2){c.x - 4.0f, c.y - 6.0f}, (Vector2){0.6f, -0.8f}, 8.5f, 5.0f,
+                 pal_color_alpha(PAL_KIN_HOT, 0.96f));
 }
 
 void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
@@ -192,7 +336,10 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     render_draw_text_centered(r, text_get(heading, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 76.0f}, 42.0f, PAL_SUMI_SCORCH,
                               0.96f, true);
-    render_draw_text_centered(r, text_get(TEXT_REWARD_HINT, r->use_ja),
+    const TextId hint_id = (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal)
+                               ? TEXT_REWARD_FALLBACK_HINT
+                               : TEXT_REWARD_HINT;
+    render_draw_text_centered(r, text_get(hint_id, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 116.0f}, 18.0f, PAL_SUMI_HEAVY,
                               0.88f, false);
 
@@ -324,17 +471,71 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     if (layout.has_repair) {
         const bool can_rep = rw->repair_available;
         const bool hov = hover == UI_HOVER_REPAIR && can_rep;
-        ink_fill_panel(r, layout.repair_rect, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR,
-                       can_rep ? 0.94f : 0.45f,
-                       hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.90f, 481u);
-        draw_mini_shrine_icon(r,
-                              (Vector2){layout.repair_rect.x + 30.0f,
-                                        layout.repair_rect.y + layout.repair_rect.height * 0.5f},
-                              can_rep);
-        render_draw_text_centered(
-            r, text_get(TEXT_REWARD_REPAIR, r->use_ja),
-            (Vector2){layout.repair_rect.x + layout.repair_rect.width * 0.5f + 14.0f,
-                      layout.repair_rect.y + layout.repair_rect.height * 0.5f},
-            19.0f, can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
+        if (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal) {
+            Rectangle card = layout.repair_rect;
+            if (hov) {
+                card.y -= 8.0f;
+            }
+            const float rcx = card.x + card.width * 0.5f;
+            ink_fill_panel(r, card, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR, can_rep ? 0.96f : 0.45f,
+                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.94f, 481u);
+            draw_mini_shrine_icon(r, (Vector2){rcx, card.y + 62.0f}, can_rep);
+            render_draw_text_centered(r, "[1] / [4]", (Vector2){rcx, card.y + 104.0f}, 18.0f,
+                                      PAL_SUMI_HEAVY, 0.92f, false);
+            const int32_t rep_amt = rw->repair_amount > 0 ? rw->repair_amount : 1;
+            char rep_buf[64];
+            snprintf(rep_buf, sizeof rep_buf, "%s +%d",
+                     text_get(TEXT_REWARD_REPAIR_SHORT, r->use_ja), rep_amt);
+            render_draw_text_centered(r, rep_buf, (Vector2){rcx, card.y + 150.0f}, 26.0f,
+                                      can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.98f, false);
+            render_draw_text_centered(r, text_get(TEXT_REWARD_REPAIR_EXCESS, r->use_ja),
+                                      (Vector2){rcx, card.y + 206.0f}, 18.0f, PAL_KIN, 0.94f,
+                                      false);
+            if (hov) {
+                seal_stamp(r, TEXT_SEAL_DONE,
+                           (Vector2){card.x + card.width - 32.0f, card.y + card.height - 32.0f},
+                           34.0f, SEAL_SHUBUN, 0.5f);
+            }
+        } else {
+            ink_fill_panel(r, layout.repair_rect, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR,
+                           can_rep ? 0.94f : 0.45f,
+                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.90f, 481u);
+            draw_mini_shrine_icon(
+                r,
+                (Vector2){layout.repair_rect.x + 30.0f,
+                          layout.repair_rect.y + layout.repair_rect.height * 0.5f},
+                can_rep);
+            render_draw_text_centered(
+                r, text_get(TEXT_REWARD_REPAIR, r->use_ja),
+                (Vector2){layout.repair_rect.x + layout.repair_rect.width * 0.5f + 14.0f,
+                          layout.repair_rect.y + layout.repair_rect.height * 0.5f},
+                19.0f, can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
+        }
+    }
+
+    if (layout.has_crystal) {
+        Rectangle card = layout.crystal_rect;
+        const bool hov = (hover == UI_HOVER_CRYSTAL);
+        if (hov) {
+            card.y -= 8.0f;
+        }
+        const float ccx = card.x + card.width * 0.5f;
+        ink_fill_panel(r, card, PAL_GOFUN, 0.96f, hov ? PAL_SHU : PAL_KIN, 0.94f, 482u);
+        draw_crystal_emblem(r, (Vector2){ccx, card.y + 62.0f});
+        render_draw_text_centered(r, "[2]", (Vector2){ccx, card.y + 104.0f}, 18.0f, PAL_KIN, 0.94f,
+                                  false);
+        render_draw_text_centered(r, text_get(TEXT_REWARD_CRYSTAL_TITLE, r->use_ja),
+                                  (Vector2){ccx, card.y + 150.0f}, 26.0f, PAL_SUMI_SCORCH, 0.98f,
+                                  false);
+        char cry_buf[64];
+        snprintf(cry_buf, sizeof cry_buf, "+%d %s", rw->crystal_reward,
+                 text_get(TEXT_BOKUAN_COST_UNIT, r->use_ja));
+        render_draw_text_centered(r, cry_buf, (Vector2){ccx, card.y + 206.0f}, 24.0f, PAL_KIN,
+                                  0.98f, false);
+        if (hov) {
+            seal_stamp(r, TEXT_SEAL_DONE,
+                       (Vector2){card.x + card.width - 32.0f, card.y + card.height - 32.0f}, 34.0f,
+                       SEAL_SHUBUN, 0.5f);
+        }
     }
 }

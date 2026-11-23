@@ -14,6 +14,12 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_ACT1_SHORT] = {.ja = "第一幕", .en = "Act 1"},
     [TEXT_ACT2_SHORT] = {.ja = "第二幕", .en = "Act 2"},
     [TEXT_ACT3_SHORT] = {.ja = "第三幕", .en = "Act 3"},
+    [TEXT_ACT1_SUBTITLE] = {.ja = "開けた和紙の社", .en = "Open Washi Shrine"},
+    [TEXT_ACT2_SUBTITLE] = {.ja = "鳥居と岩柱", .en = "Torii and Rock Pillars"},
+    [TEXT_ACT3_SUBTITLE] = {.ja = "嵐の霊峰", .en = "Storm of the Spirit Peak"},
+    [TEXT_ENDLESS_ACT_PREFIX] = {.ja = "第", .en = "Act "},
+    [TEXT_ENDLESS_ACT_SUFFIX] = {.ja = "幕", .en = "Act"},
+    [TEXT_ENDLESS_LOOP_LABEL] = {.ja = "周回", .en = "Loop"},
 
     [TEXT_HUD_WAVE] = {.ja = "波", .en = "Wave"},
     [TEXT_HUD_BOSS] = {.ja = "主", .en = "Boss"},
@@ -54,6 +60,12 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_ENEMY_BOSS_RYU_INTRO] = {.ja = "三つの龍玉を凌ぎ、点睛後は三元共鳴で討て",
                                    .en =
                                        "Endure three orbs; finish with Cataclysm after awakening"},
+    [TEXT_ENEMY_OFUDA_FOX_NAME] = {.ja = "狐符", .en = "Ofuda Fox"},
+    [TEXT_ENEMY_OFUDA_FOX_INTRO] = {.ja = "味方に結界を張り、追尾符を放つ",
+                                    .en = "Wards allies with barriers and fires homing ofuda"},
+    [TEXT_ENEMY_BOSS_RYU_ORB_NAME] = {.ja = "龍玉", .en = "Dragon Orb"},
+    [TEXT_ENEMY_BOSS_RYU_ORB_INTRO] = {.ja = "一筆龍が宿す属性の核",
+                                       .en = "Elemental core borne by Ippitsu-Ryu"},
     [TEXT_BOSS_TENGU_EPITHET] = {.ja = "紅風の大天狗", .en = "O-Tengu of the Crimson Wind"},
     [TEXT_BOSS_NUE_EPITHET] = {.ja = "雷雲の鵺", .en = "Nue of the Thunderclouds"},
     [TEXT_BOSS_RYU_EPITHET] = {.ja = "霊峰の龍脈", .en = "Dragon Vein of the Spirit Peak"},
@@ -73,8 +85,13 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_REWARD_FALLBACK_TITLE] = {.ja = "社を整えよ", .en = "Tend the Shrine"},
     [TEXT_REWARD_REROLL] = {.ja = "引き直し [R]", .en = "Reroll [R]"},
     [TEXT_REWARD_REPAIR] = {.ja = "社を修繕 +1 [4]", .en = "Repair Shrine +1 [4]"},
+    [TEXT_REWARD_REPAIR_SHORT] = {.ja = "社を修繕", .en = "Repair Shrine"},
+    [TEXT_REWARD_REPAIR_EXCESS] = {.ja = "超過分 +15 墨晶/HP", .en = "+15 Cr per excess HP"},
+    [TEXT_REWARD_CRYSTAL_TITLE] = {.ja = "墨晶を得る", .en = "Claim Ink Crystals"},
     [TEXT_REWARD_LV] = {.ja = "Lv", .en = "Lv"},
     [TEXT_REWARD_HINT] = {.ja = "1〜3 またはクリックで選択", .en = "Press 1-3 or click to pick"},
+    [TEXT_REWARD_FALLBACK_HINT] = {.ja = "1 / 2 またはクリックで選択",
+                                   .en = "Press 1-2 or click to pick"},
     [TEXT_REWARD_TRADEOFF] = {.ja = "代償: ", .en = "Cost: "},
 
     [TEXT_AXIS_BLAZE] = {.ja = "紅蓮", .en = "Blaze"},
@@ -201,8 +218,26 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_UPG_BARRIER_LV2] = {.ja = "社無敵 +0.6秒", .en = "Shrine invuln +0.6s"},
     [TEXT_UPG_BARRIER_LV3] = {.ja = "+0.9秒・12秒毎敵弾1発無効",
                               .en = "+0.9s + block 1 shot per 12s"},
+    [TEXT_UPG_LINGERING_EMBERS_NAME] = {.ja = "残り火", .en = "Lingering Embers"},
+    [TEXT_UPG_LINGERING_EMBERS_LV1] = {.ja = "炎の減衰 0.945", .en = "Fire decay 0.945"},
+    [TEXT_UPG_LINGERING_EMBERS_LV2] = {.ja = "炎の減衰 0.955", .en = "Fire decay 0.955"},
+    [TEXT_UPG_LINGERING_EMBERS_LV3] = {.ja = "炎の減衰 0.965", .en = "Fire decay 0.965"},
+    [TEXT_UPG_STORM_BRUSH_NAME] = {.ja = "雷雲の筆", .en = "Storm Brush"},
+    [TEXT_UPG_STORM_BRUSH_LV1] = {.ja = "連殺の雷がチェイン×2毎", .en = "Chain lightning every x2"},
+    [TEXT_UPG_STORM_BRUSH_LV2] = {.ja = "連殺の雷の量 ×1.5", .en = "Chain storm power x1.5"},
+    [TEXT_UPG_STORM_BRUSH_LV3] = {.ja = "墨昇華中の風筆に雷が混ざる",
+                                  .en = "Surge strokes infuse storm"},
+    [TEXT_UPG_DOUBLE_GALE_NAME] = {.ja = "二段風斬り", .en = "Double Gale"},
+    [TEXT_UPG_DOUBLE_GALE_LV1] = {.ja = "風斬りの CD 0.85秒", .en = "Gale Burst CD 0.85s"},
+    [TEXT_UPG_DOUBLE_GALE_LV2] = {.ja = "風斬りの CD 0.70秒", .en = "Gale Burst CD 0.70s"},
+    [TEXT_UPG_DOUBLE_GALE_LV3] = {.ja = "風斬りを2回まで蓄積", .en = "Store up to 2 Gale charges"},
+    [TEXT_UPG_INKSTONE_BLESSING_NAME] = {.ja = "硯の恵み", .en = "Inkstone Blessing"},
+    [TEXT_UPG_INKSTONE_BLESSING_LV1] = {.ja = "硯の回復 +20%", .en = "Inkstone regen +20%"},
+    [TEXT_UPG_INKSTONE_BLESSING_LV2] = {.ja = "硯の回復 +40%", .en = "Inkstone regen +40%"},
+    [TEXT_UPG_INKSTONE_BLESSING_LV3] = {.ja = "硯の回復 +60%・待ち時間0",
+                                        .en = "Regen +60%, 0 delay"},
 
-    /* 9 Initial Relics */
+    /* 15 Relics (9 Initial + 6 Unlocked) */
     [TEXT_RELIC_VERMILION_INKSTONE_NAME] = {.ja = "朱の硯", .en = "Vermilion Inkstone"},
     [TEXT_RELIC_VERMILION_INKSTONE_EFFECT] = {.ja = "筆跡200pxごとに火種を置く",
                                               .en = "Drops ember every 200px of stroke"},
@@ -233,6 +268,28 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_RELIC_WIND_RETURN_NAME] = {.ja = "返し風", .en = "Wind Return"},
     [TEXT_RELIC_WIND_RETURN_EFFECT] = {.ja = "被弾直前に社から自動風斬り（12秒毎）",
                                        .en = "Auto gale from shrine before hit (12s CD)"},
+    [TEXT_RELIC_SEAL_OF_TRINITY_NAME] = {.ja = "三元の印", .en = "Seal of Trinity"},
+    [TEXT_RELIC_SEAL_OF_TRINITY_EFFECT] = {.ja = "三元共鳴の閾値 0.22・CD 1.2秒",
+                                           .en = "Cataclysm thresh 0.22, CD 1.2s"},
+    [TEXT_RELIC_INKSTORM_SECRET_NAME] = {.ja = "墨嵐の極意", .en = "Inkstorm Secret"},
+    [TEXT_RELIC_INKSTORM_SECRET_EFFECT] = {.ja = "墨昇華中の全反応ダメ ×1.5",
+                                           .en = "Reaction damage x1.5 in Surge"},
+    [TEXT_RELIC_INKSTORM_SECRET_TRADEOFF] = {.ja = "墨昇華がチェイン×3から",
+                                             .en = "Ink Surge starts at Chain x3"},
+    [TEXT_RELIC_THUNDERFIRE_GEM_NAME] = {.ja = "雷火の宝珠", .en = "Thunderfire Gem"},
+    [TEXT_RELIC_THUNDERFIRE_GEM_EFFECT] = {.ja = "爆雷地点に墨玉を1個落とす（1.5秒毎）",
+                                           .en = "Thunderburst drops 1 Ink Orb (1.5s CD)"},
+    [TEXT_RELIC_ONI_TILE_NAME] = {.ja = "鬼瓦", .en = "Oni Tile"},
+    [TEXT_RELIC_ONI_TILE_EFFECT] = {.ja = "中量も叩きつけ即撃破・重量を1段軽減",
+                                    .en = "Slam one-shots medium; lightens heavy"},
+    [TEXT_RELIC_ENDLESS_BRUSH_NAME] = {.ja = "無尽の筆", .en = "Endless Brush"},
+    [TEXT_RELIC_ENDLESS_BRUSH_EFFECT] = {.ja = "硯の自然回復 ×2.5", .en = "Inkstone regen x2.5"},
+    [TEXT_RELIC_ENDLESS_BRUSH_TRADEOFF] = {.ja = "墨ゲージ上限 -40", .en = "Ink Max -40"},
+    [TEXT_RELIC_NIGHT_PARADE_SCROLL_NAME] = {.ja = "百鬼夜行の巻物", .en = "Night Parade Scroll"},
+    [TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT] = {.ja = "獲得墨晶 ×1.5・撃破時墨玉 +1",
+                                               .en = "Crystals x1.5, +1 Ink Orb per kill"},
+    [TEXT_RELIC_NIGHT_PARADE_SCROLL_TRADEOFF] = {.ja = "増援間隔×0.75・同時上限+2",
+                                                 .en = "Spawn interval x0.75, max alive +2"},
 
     /* 4 Bokuan Permanent Upgrades */
     [TEXT_SHOP_UPG_SHRINE_HP_NAME] = {.ja = "社の加護", .en = "Shrine Blessing"},
@@ -342,6 +399,18 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_SETTINGS_POST] = {.ja = "ポストシェーダ", .en = "Post Shader"},
     [TEXT_SETTINGS_SHAKE] = {.ja = "画面揺れ", .en = "Screen Shake"},
     [TEXT_SETTINGS_HINTS] = {.ja = "操作ヒント", .en = "Control Hints"},
+    [TEXT_SETTINGS_LANG] = {.ja = "表示言語", .en = "Language"},
+    [TEXT_SETTINGS_LANG_AUTO] = {.ja = "自動", .en = "Auto"},
+    [TEXT_SETTINGS_LANG_JA] = {.ja = "日本語", .en = "Japanese"},
+    [TEXT_SETTINGS_LANG_EN] = {.ja = "English", .en = "English"},
+    [TEXT_SETTINGS_REDUCE_FLASH] = {.ja = "閃光軽減", .en = "Reduce Flash"},
+    [TEXT_SETTINGS_CURSOR_SCALE] = {.ja = "カーソル倍率", .en = "Cursor Scale"},
+    [TEXT_SETTINGS_RESET_HINTS] = {.ja = "初回ヒントを初期化", .en = "Reset First-Time Hints"},
+    [TEXT_SETTINGS_RESET_DEFAULTS] = {.ja = "設定を既定に戻す", .en = "Reset Settings to Default"},
+    [TEXT_SETTINGS_NOTICE_HINTS] = {.ja = "初回ヒントを初期化しました",
+                                    .en = "First-time hints reset"},
+    [TEXT_SETTINGS_NOTICE_DEFAULTS] = {.ja = "設定を既定に戻しました",
+                                       .en = "Settings restored to defaults"},
     [TEXT_SETTINGS_ON] = {.ja = "ON", .en = "ON"},
     [TEXT_SETTINGS_OFF] = {.ja = "OFF", .en = "OFF"},
     [TEXT_SETTINGS_BACK] = {.ja = "戻る [Esc]", .en = "Back [Esc]"},
@@ -376,12 +445,16 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_RESULT_RELICS] = {.ja = "大遺物", .en = "Relics"},
     [TEXT_RESULT_SEED] = {.ja = "シード", .en = "Seed"},
     [TEXT_RESULT_CRYSTALS] = {.ja = "墨晶精算", .en = "Ink Crystals"},
+    [TEXT_RESULT_CRYSTALS_PREVIEW] = {.ja = "墨晶内訳（未精算）", .en = "Ink Crystals (Preview)"},
     [TEXT_RESULT_CRYSTAL_ACTS] = {.ja = "幕踏破", .en = "Acts"},
     [TEXT_RESULT_CRYSTAL_KILLS] = {.ja = "撃破", .en = "Kills"},
     [TEXT_RESULT_CRYSTAL_CHAIN] = {.ja = "最大連殺", .en = "Max Chain"},
     [TEXT_RESULT_CRYSTAL_REACTIONS] = {.ja = "反応", .en = "Reactions"},
+    [TEXT_RESULT_CRYSTAL_ENDLESS] = {.ja = "エンドレス", .en = "Endless"},
+    [TEXT_RESULT_CRYSTAL_BONUS] = {.ja = "巻物ボーナス", .en = "Scroll Bonus"},
     [TEXT_RESULT_CRYSTAL_TOTAL] = {.ja = "獲得計", .en = "Earned"},
     [TEXT_RESULT_CRYSTAL_OWNED] = {.ja = "所持計", .en = "Total Owned"},
+    [TEXT_RESULT_ENDLESS] = {.ja = "エンドレスへ進む", .en = "Enter Endless"},
     [TEXT_RESULT_TO_LOBBY] = {.ja = "ロビーへ戻る", .en = "Return to Lobby"},
     [TEXT_RESULT_PLAY_AGAIN] = {.ja = "再出陣", .en = "Play Again"},
 
@@ -392,7 +465,6 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_SEAL_SANGEN] = {.ja = "三元", .en = "TRI"},
     [TEXT_SEAL_INKSTORM] = {.ja = "墨嵐", .en = "INK"},
     [TEXT_SHOWCASE_HEADER] = {.ja = "見本帳", .en = "Showcase"},
-    [TEXT_P2_STUB] = {.ja = "準備中", .en = "TBD"},
 };
 
 const char *text_get(TextId id, bool use_ja)
@@ -427,8 +499,9 @@ TextId text_enemy_name(EnemyDefId id)
     case ENEMY_BOSS_RYU:
         return TEXT_ENEMY_BOSS_RYU_NAME;
     case ENEMY_OFUDA_FOX:
+        return TEXT_ENEMY_OFUDA_FOX_NAME;
     case ENEMY_BOSS_RYU_ORB:
-        return TEXT_P2_STUB;
+        return TEXT_ENEMY_BOSS_RYU_ORB_NAME;
     default:
         return TEXT_NONE;
     }
@@ -458,8 +531,9 @@ TextId text_enemy_intro(EnemyDefId id)
     case ENEMY_BOSS_RYU:
         return TEXT_ENEMY_BOSS_RYU_INTRO;
     case ENEMY_OFUDA_FOX:
+        return TEXT_ENEMY_OFUDA_FOX_INTRO;
     case ENEMY_BOSS_RYU_ORB:
-        return TEXT_P2_STUB;
+        return TEXT_ENEMY_BOSS_RYU_ORB_INTRO;
     default:
         return TEXT_NONE;
     }
@@ -484,9 +558,6 @@ TextId text_upgrade_name(UpgradeId id)
     if ((unsigned)id >= (unsigned)UPG_COUNT) {
         return TEXT_NONE;
     }
-    if (id >= UPG_LINGERING_EMBERS) {
-        return TEXT_P2_STUB;
-    }
     return (TextId)(TEXT_UPG_EMBER_TIP_NAME + (int)id * 4);
 }
 
@@ -494,9 +565,6 @@ TextId text_upgrade_effect(UpgradeId id, int level)
 {
     if ((unsigned)id >= (unsigned)UPG_COUNT || level < 1 || level > 3) {
         return TEXT_NONE;
-    }
-    if (id >= UPG_LINGERING_EMBERS) {
-        return TEXT_P2_STUB;
     }
     return (TextId)(TEXT_UPG_EMBER_TIP_NAME + (int)id * 4 + level);
 }
@@ -569,12 +637,17 @@ TextId text_relic_name(RelicId id)
     case RELIC_WIND_RETURN:
         return TEXT_RELIC_WIND_RETURN_NAME;
     case RELIC_SEAL_OF_TRINITY:
+        return TEXT_RELIC_SEAL_OF_TRINITY_NAME;
     case RELIC_INKSTORM_SECRET:
+        return TEXT_RELIC_INKSTORM_SECRET_NAME;
     case RELIC_THUNDERFIRE_GEM:
+        return TEXT_RELIC_THUNDERFIRE_GEM_NAME;
     case RELIC_ONI_TILE:
+        return TEXT_RELIC_ONI_TILE_NAME;
     case RELIC_ENDLESS_BRUSH:
+        return TEXT_RELIC_ENDLESS_BRUSH_NAME;
     case RELIC_NIGHT_PARADE_SCROLL:
-        return TEXT_P2_STUB;
+        return TEXT_RELIC_NIGHT_PARADE_SCROLL_NAME;
     default:
         return TEXT_NONE;
     }
@@ -602,12 +675,17 @@ TextId text_relic_effect(RelicId id)
     case RELIC_WIND_RETURN:
         return TEXT_RELIC_WIND_RETURN_EFFECT;
     case RELIC_SEAL_OF_TRINITY:
+        return TEXT_RELIC_SEAL_OF_TRINITY_EFFECT;
     case RELIC_INKSTORM_SECRET:
+        return TEXT_RELIC_INKSTORM_SECRET_EFFECT;
     case RELIC_THUNDERFIRE_GEM:
+        return TEXT_RELIC_THUNDERFIRE_GEM_EFFECT;
     case RELIC_ONI_TILE:
+        return TEXT_RELIC_ONI_TILE_EFFECT;
     case RELIC_ENDLESS_BRUSH:
+        return TEXT_RELIC_ENDLESS_BRUSH_EFFECT;
     case RELIC_NIGHT_PARADE_SCROLL:
-        return TEXT_P2_STUB;
+        return TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT;
     default:
         return TEXT_NONE;
     }
@@ -624,6 +702,12 @@ TextId text_relic_tradeoff(RelicId id)
         return TEXT_RELIC_TWIN_BRUSH_TRADEOFF;
     case RELIC_PACT_OF_FIRE:
         return TEXT_RELIC_PACT_OF_FIRE_TRADEOFF;
+    case RELIC_INKSTORM_SECRET:
+        return TEXT_RELIC_INKSTORM_SECRET_TRADEOFF;
+    case RELIC_ENDLESS_BRUSH:
+        return TEXT_RELIC_ENDLESS_BRUSH_TRADEOFF;
+    case RELIC_NIGHT_PARADE_SCROLL:
+        return TEXT_RELIC_NIGHT_PARADE_SCROLL_TRADEOFF;
     default:
         return TEXT_NONE;
     }

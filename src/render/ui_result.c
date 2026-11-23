@@ -7,15 +7,27 @@
 #include <stdio.h>
 #include <string.h>
 
-void render_result_layout(ResultLayout *out)
+void render_result_layout(bool show_endless, ResultLayout *out)
 {
     if (out == NULL) {
         return;
     }
     memset(out, 0, sizeof *out);
     const float cx = (float)INK_SCREEN_W * 0.5f;
-    out->lobby_rect = (Rectangle){cx - 260.0f, 580.0f, 236.0f, 54.0f};
-    out->retry_rect = (Rectangle){cx + 24.0f, 580.0f, 236.0f, 54.0f};
+    if (show_endless) {
+        const float bw = 246.0f;
+        const float gap = 26.0f;
+        const float total_w = bw * 3.0f + gap * 2.0f;
+        const float x0 = cx - total_w * 0.5f;
+        out->has_endless = true;
+        out->endless_rect = (Rectangle){x0, 580.0f, bw, 54.0f};
+        out->lobby_rect = (Rectangle){x0 + bw + gap, 580.0f, bw, 54.0f};
+        out->retry_rect = (Rectangle){x0 + (bw + gap) * 2.0f, 580.0f, bw, 54.0f};
+    } else {
+        out->has_endless = false;
+        out->lobby_rect = (Rectangle){cx - 260.0f, 580.0f, 236.0f, 54.0f};
+        out->retry_rect = (Rectangle){cx + 24.0f, 580.0f, 236.0f, 54.0f};
+    }
 }
 
 static void draw_ledger_row(const RenderState *r, float x, float y, float w, TextId label,
@@ -24,6 +36,14 @@ static void draw_ledger_row(const RenderState *r, float x, float y, float w, Tex
     render_draw_text_id(r, label, (Vector2){x, y}, 20.0f, PAL_SUMI_HEAVY, 0.95f, false);
     const Vector2 m = render_measure_text(r, val_str, 20.0f, false);
     render_draw_number_fixed(r, val_str, (Vector2){x + w - m.x, y}, 20.0f, val_pal, 0.96f);
+}
+
+static void draw_ledger_text_row(const RenderState *r, float x, float y, float w, TextId label,
+                                 const char *val_str, PaletteId val_pal)
+{
+    render_draw_text_id(r, label, (Vector2){x, y}, 20.0f, PAL_SUMI_HEAVY, 0.95f, false);
+    const Vector2 m = render_measure_text(r, val_str, 20.0f, false);
+    render_draw_text(r, val_str, (Vector2){x + w - m.x, y}, 20.0f, val_pal, 0.96f, false);
 }
 
 void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
@@ -70,8 +90,29 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
     float y = 162.0f;
     char buf[96];
 
-    snprintf(buf, sizeof buf, "%d-%d", g->run.act_index + 1, g->run.wave_index + 1);
-    draw_ledger_row(r, lx, y, lw, TEXT_RESULT_REACHED, buf, PAL_SUMI_SCORCH);
+    if (g->run.act_index >= GAME_MAIN_ACT_COUNT) {
+        const int32_t loop_n = g->run.act_index / GAME_MAIN_ACT_COUNT;
+        if (r->use_ja) {
+            if (g->run.wave_index >= GAME_BOSS_WAVE_INDEX) {
+                snprintf(buf, sizeof buf, "%s%d%s %s (%s%d)",
+                         text_get(TEXT_ENDLESS_ACT_PREFIX, true), g->run.act_index + 1,
+                         text_get(TEXT_ENDLESS_ACT_SUFFIX, true), text_get(TEXT_HUD_BOSS, true),
+                         text_get(TEXT_ENDLESS_LOOP_LABEL, true), loop_n);
+            } else {
+                snprintf(buf, sizeof buf, "%s%d%s %d/3 (%s%d)",
+                         text_get(TEXT_ENDLESS_ACT_PREFIX, true), g->run.act_index + 1,
+                         text_get(TEXT_ENDLESS_ACT_SUFFIX, true), g->run.wave_index + 1,
+                         text_get(TEXT_ENDLESS_LOOP_LABEL, true), loop_n);
+            }
+        } else {
+            snprintf(buf, sizeof buf, "Act %d-%d (Loop %d)", g->run.act_index + 1,
+                     g->run.wave_index + 1, loop_n);
+        }
+        draw_ledger_text_row(r, lx, y, lw, TEXT_RESULT_REACHED, buf, PAL_SUMI_SCORCH);
+    } else {
+        snprintf(buf, sizeof buf, "%d-%d", g->run.act_index + 1, g->run.wave_index + 1);
+        draw_ledger_row(r, lx, y, lw, TEXT_RESULT_REACHED, buf, PAL_SUMI_SCORCH);
+    }
     y += 30.0f;
 
     snprintf(buf, sizeof buf, "%d", g->run.score);
@@ -115,59 +156,76 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
                               .seed = 510u},
                (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.72f}, 1.0f);
 
-    /* Right column: Ink Crystal settlement + up to 9 upgrades (2 cols) + relics */
+    /* Right column: Ink Crystal settlement / preview + up to 9 upgrades (2 cols) + relics */
     const float rx = cx + 40.0f;
     const float rw = 436.0f;
-    float ry = 162.0f;
-    render_draw_text_id(r, TEXT_RESULT_CRYSTALS, (Vector2){rx, ry}, 20.0f, PAL_SUMI_SCORCH, 0.96f,
-                        false);
-    ry += 28.0f;
+    float ry = 160.0f;
+    const bool has_breakdown = (ui != NULL && (ui->settled || ui->settle_preview));
+    const TextId cry_hdr = (ui != NULL && ui->settle_preview && !ui->settled)
+                               ? TEXT_RESULT_CRYSTALS_PREVIEW
+                               : TEXT_RESULT_CRYSTALS;
+    render_draw_text_id(r, cry_hdr, (Vector2){rx, ry}, 20.0f, PAL_SUMI_SCORCH, 0.96f, false);
+    ry += 26.0f;
 
-    const MetaSettleBreakdown st =
-        (ui != NULL && ui->settled) ? ui->settle : (MetaSettleBreakdown){0};
+    const MetaSettleBreakdown st = has_breakdown ? ui->settle : (MetaSettleBreakdown){0};
+    const int extra_rows = (st.from_endless > 0 ? 1 : 0) + (st.from_bonus > 0 ? 1 : 0);
+    const float row_step = extra_rows > 0 ? 22.0f : 24.0f;
+
     snprintf(buf, sizeof buf, "+%d", st.from_acts);
     draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_ACTS, buf, PAL_SUMI_DARK);
-    ry += 24.0f;
+    ry += row_step;
     snprintf(buf, sizeof buf, "+%d", st.from_kills);
     draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_KILLS, buf, PAL_SUMI_DARK);
-    ry += 24.0f;
+    ry += row_step;
     snprintf(buf, sizeof buf, "+%d", st.from_chain);
     draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_CHAIN, buf, PAL_SUMI_DARK);
-    ry += 24.0f;
+    ry += row_step;
     snprintf(buf, sizeof buf, "+%d", st.from_reactions);
     draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_REACTIONS, buf, PAL_SUMI_DARK);
-    ry += 26.0f;
+    ry += row_step;
+
+    if (st.from_endless > 0) {
+        snprintf(buf, sizeof buf, "+%d", st.from_endless);
+        draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_ENDLESS, buf, PAL_KIN);
+        ry += row_step;
+    }
+    if (st.from_bonus > 0) {
+        snprintf(buf, sizeof buf, "+%d", st.from_bonus);
+        draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_BONUS, buf, PAL_SHU);
+        ry += row_step;
+    }
 
     snprintf(buf, sizeof buf, "+%d", st.total_crystals);
     draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_TOTAL, buf, PAL_KIN);
-    ry += 24.0f;
-    if (ui != NULL && ui->settled) {
+    ry += row_step;
+    if (has_breakdown) {
         snprintf(buf, sizeof buf, "%d", ui->crystals_after);
         draw_ledger_row(r, rx, ry, rw, TEXT_RESULT_CRYSTAL_OWNED, buf, PAL_SUMI_SCORCH);
     }
-    ry += 30.0f;
+    ry += 26.0f;
 
     /* Owned upgrades (up to 9, 2 columns compact) */
     render_draw_text_id(r, TEXT_RESULT_UPGRADES, (Vector2){rx, ry}, 18.0f, PAL_SUMI_DARK, 0.96f,
                         false);
-    ry += 24.0f;
+    ry += 22.0f;
     const int32_t shown_upgs = g->run.upgrade_count < 9 ? g->run.upgrade_count : 9;
+    const float upg_step = extra_rows > 0 ? 20.0f : 22.0f;
     for (int32_t i = 0; i < shown_upgs; ++i) {
         const OwnedUpgrade *ou = &g->run.upgrades[i];
         const int col = i % 2;
         const int row = i / 2;
         snprintf(buf, sizeof buf, "%s %s%u", text_get(text_upgrade_name(ou->id), r->use_ja),
                  text_get(TEXT_REWARD_LV, r->use_ja), (unsigned)ou->level);
-        render_draw_text(r, buf, (Vector2){rx + (float)col * 218.0f, ry + (float)row * 22.0f},
+        render_draw_text(r, buf, (Vector2){rx + (float)col * 218.0f, ry + (float)row * upg_step},
                          18.0f, pal_axis_color(game_upgrade_axis(ou->id)), 0.94f, false);
     }
     const int upg_rows = (shown_upgs + 1) / 2;
-    ry += (float)(upg_rows > 0 ? upg_rows : 1) * 22.0f + 12.0f;
+    ry += (float)(upg_rows > 0 ? upg_rows : 1) * upg_step + 8.0f;
 
     /* Owned relics */
     render_draw_text_id(r, TEXT_RESULT_RELICS, (Vector2){rx, ry}, 18.0f, PAL_SUMI_DARK, 0.96f,
                         false);
-    ry += 24.0f;
+    ry += 22.0f;
     if (g->run.relic_count <= 0) {
         render_draw_text_id(r, TEXT_PAUSE_NONE, (Vector2){rx + 8.0f, ry}, 18.0f, PAL_SUMI_LIGHT,
                             0.90f, false);
@@ -177,15 +235,28 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
             const int col = i % 2;
             const int row = i / 2;
             render_draw_text_id(r, text_relic_name(g->run.relics[i]),
-                                (Vector2){rx + (float)col * 218.0f, ry + (float)row * 22.0f}, 18.0f,
+                                (Vector2){rx + (float)col * 218.0f, ry + (float)row * 20.0f}, 18.0f,
                                 PAL_KIN, 0.96f, false);
         }
     }
 
-    /* 2 action buttons: Return to Lobby (default) & Play Again */
+    /* Action buttons: [Enter Endless] (on main campaign Victory) + Return to Lobby + Play Again */
+    const bool show_endless =
+        (g->phase == RUN_PHASE_VICTORY && !g->run.run_settled && g->run.endless_loop == 0);
     ResultLayout layout;
-    render_result_layout(&layout);
+    render_result_layout(show_endless, &layout);
     const int32_t hov = ui != NULL ? ui->hover_choice : UI_HOVER_NONE;
+
+    if (layout.has_endless) {
+        const bool ehov = (hov == 2);
+        ink_fill_panel(r, layout.endless_rect, ehov ? PAL_PAPER_ACT1 : PAL_GOFUN, 0.98f, PAL_SHU,
+                       0.98f, 519u);
+        render_draw_text_centered(
+            r, text_get(TEXT_RESULT_ENDLESS, r->use_ja),
+            (Vector2){layout.endless_rect.x + layout.endless_rect.width * 0.5f,
+                      layout.endless_rect.y + layout.endless_rect.height * 0.5f},
+            20.0f, PAL_SHU, 0.98f, false);
+    }
 
     ink_fill_panel(r, layout.lobby_rect, PAL_GOFUN, 0.96f, hov == 0 ? PAL_SHU : PAL_SUMI_DARK,
                    0.94f, 520u);

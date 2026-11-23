@@ -337,6 +337,33 @@ static void test_latch_ui_transition_suppresses_paint_until_release(void)
     TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
 }
 
+static void test_latch_endless_crystal_command(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 0.0f, 0.0f);
+
+    /* Non-reward phase must not emit CMD_PICK_ENDLESS_CRYSTAL and must clear pending flag */
+    RawInput cry = make_raw(0.0f, 0.0f);
+    cry.crystal_pressed = true;
+    input_latch_feed(&l, &cry);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_PLAYING).type);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+
+    /* RUN_PHASE_REWARD emits CMD_PICK_ENDLESS_CRYSTAL exactly once */
+    input_latch_feed(&l, &cry);
+    const GameCommand c1 = input_latch_take_command(&l, RUN_PHASE_REWARD);
+    TEST_ASSERT_EQUAL_INT(CMD_PICK_ENDLESS_CRYSTAL, c1.type);
+    TEST_ASSERT_EQUAL_INT32(0, c1.arg);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+
+    /* UI transition reset clears crystal_pending */
+    input_latch_feed(&l, &cry);
+    TEST_ASSERT_TRUE(l.crystal_pending);
+    input_latch_reset_for_ui_transition(&l, 10.0f, 20.0f, false);
+    TEST_ASSERT_FALSE(l.crystal_pending);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -351,5 +378,6 @@ int main(void)
     RUN_TEST(test_latch_paint_suppression_after_ui_click);
     RUN_TEST(test_latch_confirm_once);
     RUN_TEST(test_latch_ui_transition_suppresses_paint_until_release);
+    RUN_TEST(test_latch_endless_crystal_command);
     return UNITY_END();
 }

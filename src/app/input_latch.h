@@ -14,6 +14,7 @@ typedef struct {
     int32_t pick_pressed;
     bool reroll_pressed;
     bool repair_pressed;
+    bool crystal_pressed;
     bool confirm_pressed;
     bool ui_click;
 } RawInput;
@@ -27,6 +28,7 @@ typedef struct {
     bool gale_pending;
     int32_t pick_pending;
     bool repair_pending;
+    bool crystal_pending;
     bool reroll_pending;
     bool confirm_pending;
 } InputLatch;

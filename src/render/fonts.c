@@ -202,6 +202,18 @@ void render_fonts_close(RenderState *r)
     r->use_ja = false;
 }
 
+void render_set_lang_mode(RenderState *r, UiLangMode mode)
+{
+    if (r == NULL) {
+        return;
+    }
+    const bool want_ja = (mode == UI_LANG_EN) ? false : r->custom_fonts;
+    if (r->use_ja != want_ja) {
+        r->use_ja = want_ja;
+        memset(r->text_size_valid, 0, sizeof r->text_size_valid);
+    }
+}
+
 static Font pick_font(const RenderState *r, bool title_font)
 {
     return title_font ? r->font_title : r->font_body;

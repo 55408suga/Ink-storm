@@ -246,6 +246,22 @@ static float step_single_voice(AudioVoice *v, float nz)
         v->env *= 0.99915f;
         break;
     }
+    case AUDIO_VOICE_PART_BREAK: {
+        /* Clear crystalline bell shatter + mid-taiko impact for Dragon Orb break */
+        const float f_bell = v->freq > 100.0f ? v->freq : 987.77f;
+        const float f_drum = 108.0f + 190.0f * v->env * v->env;
+        v->phase += f_drum / sr;
+        v->phase2 += f_bell / sr;
+        v->lp += 0.28f * (nz - v->lp);
+        const float drum = sinf(v->phase * k_two_pi) * 0.55f * v->env;
+        const float bell = sinf(v->phase2 * k_two_pi) * 0.44f +
+                           sinf(v->phase2 * k_two_pi * 2.32f) * 0.28f * v->env +
+                           sinf(v->phase2 * k_two_pi * 3.85f) * 0.16f * v->env * v->env;
+        const float shatter = (nz - v->lp) * 0.48f * v->env * v->env * v->env;
+        out = (drum + bell + shatter) * v->env * 0.68f;
+        v->env *= 0.99962f;
+        break;
+    }
     default:
         v->active = false;
         return 0.0f;

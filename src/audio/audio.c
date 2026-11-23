@@ -236,6 +236,9 @@ void audio_consume_events(AudioState *audio, const struct GameState *game)
             audio_voice_spawn(audio, AUDIO_VOICE_BOSS_TAIKO, at_sample, 68.0f, 0.0f);
             audio_voice_spawn(audio, AUDIO_VOICE_SHRINE_GONG, at_sample, 152.0f, 0.0f);
             break;
+        case EV_BOSS_PART_BREAK:
+            audio_voice_spawn(audio, AUDIO_VOICE_PART_BREAK, at_sample, 987.77f, (float)ev->value);
+            break;
         case EV_WAVE_CLEAR:
             audio_voice_spawn(audio, AUDIO_VOICE_WAVE_CLEAR, at_sample, k_yo_scale[2], 0.0f);
             break;
