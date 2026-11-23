@@ -1,6 +1,7 @@
 #include "app_loop.h"
 #include "audio.h"
 #include "cli.h"
+#include "demo.h"
 #include "game.h"
 #include "headless.h"
 #include "render.h"
@@ -55,6 +56,8 @@ int main(int argc, char **argv)
         } else {
             if (opts.mode == APP_MODE_SHOWCASE) {
                 status = app_run_showcase(game, render, &opts, fault_mask);
+            } else if (opts.mode == APP_MODE_DEMO) {
+                status = app_run_demo(game, audio, render, &opts, fault_mask);
             } else {
                 status = app_run_window_loop(game, audio, render, &opts, fault_mask);
             }

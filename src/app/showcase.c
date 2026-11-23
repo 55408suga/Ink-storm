@@ -1,6 +1,7 @@
 #include "showcase.h"
 
 #include "core.h"
+#include "demo.h"
 #include "paths.h"
 #include "raylib.h"
 
@@ -614,10 +615,42 @@ static void save_showcase_screenshot(int page, int subpage)
     }
 }
 
+static int run_showcase_snap_mode(GameState *game, RenderState *render, UiView *ui,
+                                  const char *snap_dir)
+{
+    static const int k_snap_page[6] = {1, 1, 2, 3, 5, 6};
+    static const int k_snap_sub[6] = {0, 1, 0, 0, 2, 0};
+
+    RenderTexture2D target = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
+    if (target.id == 0 || target.id == render->scene.id) {
+        fputs("INKSTORM: failed to create offscreen render texture for showcase --snap\n", stderr);
+        if (target.id != 0) {
+            UnloadRenderTexture(target);
+        }
+        return EXIT_FAILURE;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < 6 && ok; ++i) {
+        setup_page(game, render, ui, k_snap_page[i], k_snap_sub[i]);
+        game->ticks++;
+        render->vfx_time += INK_FIXED_DT;
+        ok = app_snap_capture(render, game, ui, target, snap_dir, i + 1);
+    }
+
+    UnloadRenderTexture(target);
+    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 int app_run_showcase(GameState *game, RenderState *render, const CliOptions *opts,
                      uint32_t fault_mask)
 {
-    if (opts->smoke_frames > 0) {
+    const bool snap_mode = (opts->snap_dir != NULL);
+    if (snap_mode && !app_snap_ensure_dir(opts->snap_dir)) {
+        return EXIT_FAILURE;
+    }
+
+    if (snap_mode || opts->smoke_frames > 0) {
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
     }
     InitWindow(INK_SCREEN_W, INK_SCREEN_H, "INKSTORM - Showcase");
@@ -648,6 +681,13 @@ int app_run_showcase(GameState *game, RenderState *render, const CliOptions *opt
         .showcase_page = 1,
         .showcase_subpage = 0,
     };
+
+    if (snap_mode) {
+        const int status = run_showcase_snap_mode(game, render, &ui, opts->snap_dir);
+        render_close(render);
+        CloseWindow();
+        return status;
+    }
 
     int page = 1;
     int subpage = 0;

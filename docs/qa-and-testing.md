@@ -26,10 +26,10 @@
 | :--- | :---: | :--- |
 | `test_core_smoke`（既存） | Phase 1（P2 でヒープ化、P3/P4/P5 で契約追加） | SplitMix64 RNG、クランプ、FNV-1a ハッシュ補助、初期化・中断・Component アクセサ・イベント上限・Phase 5 契約（28 札/15 遺物・解放マスク・`RyuBodyState`・`CMD_START_ENDLESS`） |
 | `test_cli_headless_smoke`（既存） | Phase 1（P3 で本番化） | `./inkstorm --headless-smoke` の正常終了。Phase 3 以降はスタブではなく本番 `game_step` を 60Hz で複数ティック通過させる |
-| `test_cli_usage_*`（3 件） | Phase 3 | `tools/expect_usage.sh` による CLI Usage エラーの実行ファイル配線・終了コード 1・`Usage: ` 行の検証（未知オプション・セーブ排他・ヘッドレス排他） |
-| `test_app_core` | Phase 3 | CLI オプション解析（全正常・全 Usage エラー・排他・重複・`PATH_MAX`・`INKSTORM_DEBUG_FAULTS`）、`FrameClock`（60Hz/144Hz/頭打ち/非有限入力）、`InputLatch` の規則 |
+| `test_cli_usage_*`（6 件） | Phase 3（P6 で拡張） | `tools/expect_usage.sh` による CLI Usage エラーの実行ファイル配線・終了コード 1・`Usage: ` 行の検証（未知オプション・セーブ排他・ヘッドレス排他・`--demo`/`--showcase` 排他・`--snap`/`--smoke-frames` 排他・`--snap` 引数不足） |
+| `test_app_core` | Phase 3（P6 で拡張） | CLI オプション解析（`--demo` / `--snap DIR` を含む全正常・全 Usage エラー・排他・重複・`PATH_MAX`・セーブ隔離・`INKSTORM_DEBUG_FAULTS`）、`FrameClock`（60Hz/144Hz/頭打ち/非有限入力）、`InputLatch` の規則 |
 | `test_text_table` | Phase 3（P4/P5 拡張） | 文字列表の全エントリの非空・英語 ASCII 限定（0x20〜0x7E）・内容 ID 対応関数と範囲外検査（Phase 5 で 28 札・15 遺物・狐符/龍玉・拡充設定/エンドレス UI を含む） |
-| `test_fluid` | Phase 2 | 静止場・中心/端/四隅/強入力連続での NaN・Inf ゼロ＆クランプ、圧力投影後の発散低下、`solid` no-slip 境界と法線クエリ、**薄い柱（2 セル幅）の壁横断防止＆角（コーナー）回帰**、`fluid_add_radial_impulse` の速度クランプ、非有限/範囲外入力の安全拒否、同一入力の `fluid_hash` 完全一致 |
+| `test_fluid` | Phase 2（P6 で拡張） | 静止場・中心/端/四隅/強入力連続での NaN・Inf ゼロ＆クランプ、圧力投影後の発散低下、`solid` no-slip 境界と法線クエリ、**薄い柱（2 セル幅）の壁横断防止＆角（コーナー）回帰**、**動的 `solid` 切替時のジオメトリキャッシュ無効化回帰**、`FLT_MAX` 境界設定での有限性維持、`fluid_add_radial_impulse` の速度クランプ、非有限/範囲外入力の安全拒否、同一入力の `fluid_hash` 完全一致 |
 | `test_ecs` | Phase 2 | `spawn`/`destroy` による世代インクリメント、無効/旧世代 `EntityId` 拒否、**満杯（512）時のスポーン失敗（`ECS_INVALID_INDEX`）**、**削除予約中エンティティへのアクセス拒否（`ecs_is_alive == false`）**、遅延削除フラッシュ後の再利用、昇順ビットマスク走査 |
 | `test_roguelike_meta` | Phase 2（メタ）→ Phase 3/4/5（報酬・P2 拡張） | `MetaState` の購入残高チェック、`int32_t` 上限付近での**飽和加算（符号付きオーバーフローなし）**、**精算の二重適用防止（`run_settled`・エンドレス遅延精算）**、`key=value` シリアライズ往復・未知キー無視・破損入力デフォルト復帰・**拡充設定（`opt_lang`/`opt_reduce_flash`/`opt_cursor_scale`）の P1 セーブ後方互換と正規化**；Phase 3〜5 で `RunModifiers` 再計算・7 フック取得順実行・全 28 札/15 遺物（解放マスク制御）・3 択/リロール/修繕・**候補枯渇 2 択フォールバック（修繕＋墨晶変換）**・無効コマンド no-op を検証 |
 | `test_app_save` | Phase 3（P5 拡張） | 一時ディレクトリを用いた `src/app/save.c` の原子的保存テスト（正常読み書き・拡充設定 3 項目の往復、ディレクトリ自動生成、**書き込み/`rename` 失敗時に既存 `save.txt` が破損・消失しないこと**、`--no-save` の隔離） |
@@ -66,12 +66,12 @@
 | `--no-post` | 和紙ポストシェーダを無効化し直接描画経路を使用 | 通常どおり |
 | `--no-save` | セーブファイルの読み込み・書き込みを完全に抑止 | 無効 |
 | `--save-path <path>` | セーブファイルパスを明示指定（空・`--` 開始・`PATH_MAX` 以上は不可） | 指定先を使用 |
-| `--demo`（Phase 6 で導入） | 固定シード・自動入力によるデモプレイを起動（Phase 6 まで未知オプション） | 無効 |
-| `--snap <dir>`（Phase 6 で導入） | 指定ディレクトリへ要所 PNG を自動保存（Phase 6 まで未知オプション） | 無効 |
+| `--demo` | 固定シード・自動入力によるデモプレイを起動（`--smoke-frames N` / `--snap <dir>` / `--no-post` 併用可、`F1` X 線切替・`Esc` 終了） | 無効 |
+| `--snap <dir>` | 指定ディレクトリへ要所 PNG 6 枚（`snap_01.png`〜`snap_06.png`）をオフスクリーン描画で自動保存して終了。単独指定は `--demo --snap <dir>` として動作し、`--showcase --snap <dir>` で見本帳 6 枚を保存する（`<dir>` が既存ファイル〈非ディレクトリ〉または書き出し失敗時は終了コード 1） | 無効 |
 
 - **排他・重複・エラー時の終了コード契約**:
-  - 排他組み合わせ：`--headless-smoke` と `--smoke-frames` / `--showcase` / `--save-path`、`--save-path` と `--no-save` / `--smoke-frames` / `--showcase`。
-  - 未知オプション、引数不足、不正な値、排他指定、**同一オプションの重複** は、ファイル I/O・ウィンドウ作成・メモリ確保を行わずに `stderr` へ `Usage: ` で始まる行を出力して **`EXIT_FAILURE (1)`** で終了する。
+  - 排他組み合わせ：`--headless-smoke` と `--smoke-frames` / `--showcase` / `--demo` / `--snap` / `--save-path`、`--save-path` と `--no-save` / `--smoke-frames` / `--showcase` / `--demo` / `--snap`、`--showcase` と `--demo`、`--snap` と `--smoke-frames`。
+  - 未知オプション、引数不足、不正な値（`--snap <dir>` は `"<dir>/snap_06.png"` が `PATH_MAX` 未満に収まらない場合を含む）、排他指定、**同一オプションの重複** は、ファイル I/O・ウィンドウ作成・メモリ確保を行わずに `stderr` へ `Usage: ` で始まる行を出力して **`EXIT_FAILURE (1)`** で終了する。
 - **障害の注入（環境変数 `INKSTORM_DEBUG_FAULTS`）**:
   - カンマ区切りで `shader`（シェーダ読込失敗）・`font`（フォント欠損）を指定し、本物の失敗と同じ分岐を通して検証する（併用は `shader,font`、前後空白は無視）。未知の語は `stderr` へ `INKSTORM: unknown debug fault '<語>' ignored` を 1 行出力して無視する。
 

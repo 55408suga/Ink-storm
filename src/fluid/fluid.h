@@ -38,6 +38,11 @@ typedef struct {
     float dye[FLUID_MAX_CHANNELS][FLUID_N];
     float dye0[FLUID_MAX_CHANNELS][FLUID_N];
     uint8_t solid[FLUID_N]; /* 0=流体, 1=障害物/外周壁 */
+    /* 内部ジオメトリキャッシュ（solid 変更時のみ再構築、決定性ハッシュ対象外） */
+    float inv_neighbors[FLUID_N];
+    float inv_rb[2][FLUID_N / 2];
+    uint8_t near_wall[FLUID_N];
+    uint8_t geometry_valid;
 } FluidState;
 
 FluidConfig fluid_config_default(void);

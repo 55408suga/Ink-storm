@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-typedef enum { APP_MODE_WINDOW = 0, APP_MODE_HEADLESS, APP_MODE_SHOWCASE } AppMode;
+typedef enum { APP_MODE_WINDOW = 0, APP_MODE_HEADLESS, APP_MODE_SHOWCASE, APP_MODE_DEMO } AppMode;
 
 typedef enum { SAVE_MODE_DEFAULT = 0, SAVE_MODE_DISABLED, SAVE_MODE_EXPLICIT } SaveMode;
 
@@ -18,6 +18,7 @@ typedef struct {
     bool use_post;
     SaveMode save_mode;
     const char *save_path;
+    const char *snap_dir; /* --snap DIR 指定時のみ非 NULL */
 } CliOptions;
 
 bool cli_parse(int argc, char *const argv[], CliOptions *out);

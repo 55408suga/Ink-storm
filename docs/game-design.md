@@ -669,6 +669,6 @@
 
 ## 13. 後続フェーズで詳細化する保留項目
 
-- 本書の数値を実プレイで調整する（ウェーブの所要時間、墨晶の値付け、ボスの HP）
+- **[Phase 6 確定]** 本書の数値（筆 3 種の特性・ウェーブ所要時間・墨経済・墨晶値付け・各幕ボスおよび多部位一筆龍 HP・エンドレス周回スケール）は、流体最適化後のゼロメタ 3 筆通し検証（豪筆 3.00 min / 一筆龍 23.8 s / 197 墨晶、朱筆 2.98 min / 21.1 s / 196 墨晶、細筆 3.17 min / 25.0 s / 197 墨晶、全 3 筆エンドレス第 7 幕到達）および `--demo` / `--snap` 視覚確認の結果、明白な破綻・違和感がないため現行数値で確定した。
 - **[Phase 4 確定]** 題字用の毛筆体フォントは Yuji Syuku Regular（SIL OFL 1.1・未改変、`assets/fonts/title_brush.ttf`）、外部 BGM 音源は CC0 の決定論的和風 OGG 4 曲（`assets/audio/bgm_{lobby,battle,boss,victory}.ogg`）を採用し、本文用の明朝体（`assets/fonts/ui_mincho.ttf`）とあわせて `assets/LICENSES.txt` へ記録済み。
 - **[Phase 5 確定]** 一筆龍（第 3 幕最終ボス）の多部位版は、`GameState.ryu_body`（`RyuBodyState`：8px 間隔・最大 128 点リングバッファ `trail[128]`、3 龍玉エンティティ `ENEMY_BOSS_RYU_ORB` の `orb_ids[3]`・`orb_broken_mask`・`active_orb_slot`）で頭の軌跡履歴と弧長配置（0 / 450 / 900px）を管理し、描画側（`ink_render`）は `trail` を弧長リサンプルした 24 点の一筆胴体・龍玉破壊区間のかすれ骨折表現・独立 3 龍玉・`EV_BOSS_PART_BREAK` 破砕 VFX/SE・上中央合算 HP バー＋3 龍玉印・第 3 フェーズ金輪郭オーラとして実装・実機検証済み（見た目の規約は [art-direction.md](art-direction.md) §10.5、データ契約は [architecture.md](architecture.md) で確定済み）。

@@ -331,14 +331,22 @@ static void bake_act_background(RenderState *r, int act_index)
     r->bg_cached_act = act_index;
 }
 
-void render_paper_draw_bg(RenderState *r, int act_index)
+void render_paper_prepare_bg(RenderState *r, int act_index)
 {
-    if (r->bg_cache.id == 0) {
+    if (r == NULL || r->bg_cache.id == 0) {
         return;
     }
     if (r->bg_cached_act != act_index) {
         bake_act_background(r, act_index);
     }
+}
+
+void render_paper_draw_bg(RenderState *r, int act_index)
+{
+    if (r->bg_cache.id == 0) {
+        return;
+    }
+    (void)act_index;
     const Rectangle src = {0.0f, 0.0f, (float)r->bg_cache.texture.width,
                            -(float)r->bg_cache.texture.height};
     const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};

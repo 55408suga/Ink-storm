@@ -83,7 +83,11 @@ void fluid_reset(FluidState *f)
 
 static void set_solid(FluidState *f, int i, bool solid)
 {
-    f->solid[i] = solid;
+    const uint8_t next = solid ? 1u : 0u;
+    if (f->solid[i] != next) {
+        f->solid[i] = next;
+        f->geometry_valid = 0;
+    }
     if (solid) {
         f->u[i] = 0.0f;
         f->v[i] = 0.0f;
@@ -104,6 +108,7 @@ void fluid_clear_solids(FluidState *f)
             set_solid(f, y * FLUID_W + x, edge);
         }
     }
+    f->geometry_valid = 0;
 }
 
 static float center_px(int cell) { return ((float)cell + 0.5f) * FLUID_CELL_PX; }
