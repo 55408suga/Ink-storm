@@ -124,8 +124,8 @@ static void populate_p2_entities_showcase(GameState *g, RenderState *r, UiView *
     }
 
     /* Homing Ofuda projectiles: clean + flying over fire blob (crimson scorched edge) */
-    const EntityId of1 = game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 238.0f, 412.0f, 140.0f,
-                                                     -24.0f);
+    const EntityId of1 =
+        game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 238.0f, 412.0f, 140.0f, -24.0f);
     ProjComp *op1 = game_proj_mut(g, of1);
     if (op1 != NULL) {
         op1->trail_n = 8;
@@ -133,8 +133,8 @@ static void populate_p2_entities_showcase(GameState *g, RenderState *r, UiView *
             op1->trail[t] = (GameVec2){238.0f - (float)(7 - t) * 7.0f, 412.0f + (float)(7 - t)};
         }
     }
-    const EntityId of2 = game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 404.0f, 412.0f, 140.0f,
-                                                     0.0f);
+    const EntityId of2 =
+        game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 404.0f, 412.0f, 140.0f, 0.0f);
     ProjComp *op2 = game_proj_mut(g, of2);
     if (op2 != NULL) {
         op2->trail_n = 8;

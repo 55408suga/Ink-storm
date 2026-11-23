@@ -70,10 +70,9 @@ void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *u
     render_settings_layout(&layout);
     const SettingsState *st = &ui->meta_view.settings;
     static const TextId k_labels[SETTINGS_ROW_COUNT] = {
-        TEXT_SETTINGS_MASTER,       TEXT_SETTINGS_BGM,   TEXT_SETTINGS_SE,
-        TEXT_SETTINGS_POST,         TEXT_SETTINGS_SHAKE, TEXT_SETTINGS_HINTS,
-        TEXT_SETTINGS_LANG,         TEXT_SETTINGS_REDUCE_FLASH,
-        TEXT_SETTINGS_CURSOR_SCALE,
+        TEXT_SETTINGS_MASTER, TEXT_SETTINGS_BGM,          TEXT_SETTINGS_SE,
+        TEXT_SETTINGS_POST,   TEXT_SETTINGS_SHAKE,        TEXT_SETTINGS_HINTS,
+        TEXT_SETTINGS_LANG,   TEXT_SETTINGS_REDUCE_FLASH, TEXT_SETTINGS_CURSOR_SCALE,
     };
 
     const int32_t max_idx = SETTINGS_ROW_COUNT + 2; /* 0..8 rows, 9 hints, 10 defaults, 11 back */

@@ -161,9 +161,9 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
     const float rw = 436.0f;
     float ry = 160.0f;
     const bool has_breakdown = (ui != NULL && (ui->settled || ui->settle_preview));
-    const TextId cry_hdr =
-        (ui != NULL && ui->settle_preview && !ui->settled) ? TEXT_RESULT_CRYSTALS_PREVIEW
-                                                           : TEXT_RESULT_CRYSTALS;
+    const TextId cry_hdr = (ui != NULL && ui->settle_preview && !ui->settled)
+                               ? TEXT_RESULT_CRYSTALS_PREVIEW
+                               : TEXT_RESULT_CRYSTALS;
     render_draw_text_id(r, cry_hdr, (Vector2){rx, ry}, 20.0f, PAL_SUMI_SCORCH, 0.96f, false);
     ry += 26.0f;
 

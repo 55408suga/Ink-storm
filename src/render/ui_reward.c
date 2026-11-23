@@ -195,8 +195,8 @@ static void draw_relic_emblem(RenderState *r, Vector2 c, RelicId rid)
     case RELIC_ONI_TILE: {
         /* Stout horned roof tile silhouette */
         const Vector2 tile[6] = {
-            {c.x - 16.0f, c.y - 10.0f}, {c.x, c.y - 15.0f},         {c.x + 16.0f, c.y - 10.0f},
-            {c.x + 18.0f, c.y + 12.0f}, {c.x, c.y + 15.0f},         {c.x - 18.0f, c.y + 12.0f},
+            {c.x - 16.0f, c.y - 10.0f}, {c.x, c.y - 15.0f}, {c.x + 16.0f, c.y - 10.0f},
+            {c.x + 18.0f, c.y + 12.0f}, {c.x, c.y + 15.0f}, {c.x - 18.0f, c.y + 12.0f},
         };
         ink_fill_poly(r, tile, 6, pal_color_alpha(PAL_SUMI_HEAVY, 0.85f));
         ink_outline(r, tile, 6, true, 3.6f, (Vector2){0.7f, 0.7f}, 442u);
@@ -219,14 +219,8 @@ static void draw_relic_emblem(RenderState *r, Vector2 c, RelicId rid)
     case RELIC_ENDLESS_BRUSH: {
         /* Continuous figure-eight calligraphic brush ribbon */
         const Vector2 loop[9] = {
-            {c.x, c.y},
-            {c.x - 11.0f, c.y - 11.0f},
-            {c.x - 20.0f, c.y},
-            {c.x - 11.0f, c.y + 11.0f},
-            {c.x, c.y},
-            {c.x + 11.0f, c.y - 11.0f},
-            {c.x + 20.0f, c.y},
-            {c.x + 11.0f, c.y + 11.0f},
+            {c.x, c.y}, {c.x - 11.0f, c.y - 11.0f}, {c.x - 20.0f, c.y}, {c.x - 11.0f, c.y + 11.0f},
+            {c.x, c.y}, {c.x + 11.0f, c.y - 11.0f}, {c.x + 20.0f, c.y}, {c.x + 11.0f, c.y + 11.0f},
             {c.x, c.y},
         };
         ink_stroke(r, loop, 9,
@@ -295,7 +289,7 @@ static void draw_crystal_emblem(RenderState *r, Vector2 c)
 {
     ink_wash(r, c, 32.0f, 26.0f, 0.12f, (InkTone){.color = PAL_KIN, .alpha = 0.28f}, 2, 490u);
     const Vector2 gem[5] = {
-        {c.x, c.y - 22.0f},        {c.x + 15.0f, c.y - 4.0f}, {c.x + 10.0f, c.y + 18.0f},
+        {c.x, c.y - 22.0f},         {c.x + 15.0f, c.y - 4.0f}, {c.x + 10.0f, c.y + 18.0f},
         {c.x - 11.0f, c.y + 17.0f}, {c.x - 15.0f, c.y - 5.0f},
     };
     ink_fill_poly(r, gem, 5, pal_color_alpha(PAL_SUMI_SCORCH, 0.92f));
@@ -342,9 +336,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     render_draw_text_centered(r, text_get(heading, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 76.0f}, 42.0f, PAL_SUMI_SCORCH,
                               0.96f, true);
-    const TextId hint_id =
-        (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal) ? TEXT_REWARD_FALLBACK_HINT
-                                                                 : TEXT_REWARD_HINT;
+    const TextId hint_id = (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal)
+                               ? TEXT_REWARD_FALLBACK_HINT
+                               : TEXT_REWARD_HINT;
     render_draw_text_centered(r, text_get(hint_id, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 116.0f}, 18.0f, PAL_SUMI_HEAVY,
                               0.88f, false);
@@ -483,10 +477,8 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                 card.y -= 8.0f;
             }
             const float rcx = card.x + card.width * 0.5f;
-            ink_fill_panel(r, card, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR,
-                           can_rep ? 0.96f : 0.45f,
-                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.94f,
-                           481u);
+            ink_fill_panel(r, card, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR, can_rep ? 0.96f : 0.45f,
+                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.94f, 481u);
             draw_mini_shrine_icon(r, (Vector2){rcx, card.y + 62.0f}, can_rep);
             render_draw_text_centered(r, "[1] / [4]", (Vector2){rcx, card.y + 104.0f}, 18.0f,
                                       PAL_SUMI_HEAVY, 0.92f, false);
@@ -507,12 +499,12 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         } else {
             ink_fill_panel(r, layout.repair_rect, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR,
                            can_rep ? 0.94f : 0.45f,
-                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.90f,
-                           481u);
-            draw_mini_shrine_icon(r,
-                                  (Vector2){layout.repair_rect.x + 30.0f,
-                                            layout.repair_rect.y + layout.repair_rect.height * 0.5f},
-                                  can_rep);
+                           hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.90f, 481u);
+            draw_mini_shrine_icon(
+                r,
+                (Vector2){layout.repair_rect.x + 30.0f,
+                          layout.repair_rect.y + layout.repair_rect.height * 0.5f},
+                can_rep);
             render_draw_text_centered(
                 r, text_get(TEXT_REWARD_REPAIR, r->use_ja),
                 (Vector2){layout.repair_rect.x + layout.repair_rect.width * 0.5f + 14.0f,

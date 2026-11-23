@@ -334,12 +334,10 @@ void render_consume_events(RenderState *r, const GameState *g)
             break;
         }
         case EV_BOSS_PART_BREAK: {
-            const PaletteId pal = (ev->value == 0)
-                                      ? PAL_SHU
-                                      : ((ev->value == 1) ? PAL_AO : PAL_GOFUN);
-            const PaletteId hot = (ev->value == 0)
-                                      ? PAL_SHU_HOT
-                                      : ((ev->value == 1) ? PAL_AO_HOT : PAL_SUMI_LIGHT);
+            const PaletteId pal =
+                (ev->value == 0) ? PAL_SHU : ((ev->value == 1) ? PAL_AO : PAL_GOFUN);
+            const PaletteId hot =
+                (ev->value == 0) ? PAL_SHU_HOT : ((ev->value == 1) ? PAL_AO_HOT : PAL_SUMI_LIGHT);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 14, 240.0f, 10.5f, 0.55f, pal, true);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 190.0f, 7.5f, 0.42f, hot, false);
             push_stroke(r, 9, ev->x, ev->y, (float)ev->value, 0.0f, 52.0f, 0.48f);
@@ -820,8 +818,8 @@ void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
             /* Ryu Dragon Orb shatter: elemental ink splatter + broken enso */
             const int part = (int)lroundf(s->dx);
             const PaletteId pal = (part == 0) ? PAL_SHU : ((part == 1) ? PAL_AO : PAL_GOFUN);
-            const PaletteId rim = (part == 0) ? PAL_SHU_HOT
-                                              : ((part == 1) ? PAL_AO_HOT : PAL_SUMI_DARK);
+            const PaletteId rim =
+                (part == 0) ? PAL_SHU_HOT : ((part == 1) ? PAL_AO_HOT : PAL_SUMI_DARK);
             const float rad = s->radius * (0.45f + 0.85f * u);
             const float gap_a = (float)(s->seed % 360u) * 0.01745f;
             ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 4.95f,

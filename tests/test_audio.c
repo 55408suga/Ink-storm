@@ -45,10 +45,10 @@ static void test_audio_initial_state(void)
 static void test_audio_se_events_audible(void)
 {
     static const GameEventType se_events[] = {
-        EV_KILL,         EV_DEFLECT,    EV_SLAM,           EV_IGNITE,          EV_STORM_ZAP,
-        EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,         EV_GALE,
-        EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,      EV_BOSS_PHASE,
-        EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL,   EV_BOSS_PART_BREAK,
+        EV_KILL,         EV_DEFLECT,    EV_SLAM,           EV_IGNITE,        EV_STORM_ZAP,
+        EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,       EV_GALE,
+        EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,    EV_BOSS_PHASE,
+        EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL, EV_BOSS_PART_BREAK,
     };
 
     GameState *g = game_create(NULL);

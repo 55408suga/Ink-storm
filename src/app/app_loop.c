@@ -281,16 +281,18 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
     } else if (row == 5) {
         st->hints_on = !st->hints_on;
     } else if (row == 6) {
-        const int next_lang = ((int)st->ui_lang + (delta > 0 ? 1 : (UI_LANG_COUNT - 1))) %
-                              (int)UI_LANG_COUNT;
+        const int next_lang =
+            ((int)st->ui_lang + (delta > 0 ? 1 : (UI_LANG_COUNT - 1))) % (int)UI_LANG_COUNT;
         st->ui_lang = (uint8_t)next_lang;
     } else if (row == 7) {
         st->reduce_flash = !st->reduce_flash;
     } else if (row == 8) {
         if (delta > 0) {
-            st->cursor_scale = st->cursor_scale == 100 ? 125 : (st->cursor_scale == 125 ? 150 : 100);
+            st->cursor_scale =
+                st->cursor_scale == 100 ? 125 : (st->cursor_scale == 125 ? 150 : 100);
         } else {
-            st->cursor_scale = st->cursor_scale == 150 ? 125 : (st->cursor_scale == 125 ? 100 : 150);
+            st->cursor_scale =
+                st->cursor_scale == 150 ? 125 : (st->cursor_scale == 125 ? 100 : 150);
         }
     }
 

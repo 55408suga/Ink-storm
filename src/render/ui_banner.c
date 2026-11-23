@@ -190,7 +190,8 @@ void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiVi
             ui->showcase_subpage == 0
                 ? "P1: 7 Regulars / 4 Elites / 3 Bosses / 5 Proj / Terrain / 6 Prims"
                 : "P2: Ofuda Fox / Barrier / Homing Ofuda / Multi-part Ryu / Sunago";
-        render_draw_text(r, p1_label, (Vector2){624.0f, 574.0f}, 18.0f, PAL_SUMI_DARK, 0.92f, false);
+        render_draw_text(r, p1_label, (Vector2){624.0f, 574.0f}, 18.0f, PAL_SUMI_DARK, 0.92f,
+                         false);
         render_draw_text(r, "[1-6] Page  [Tab] Sub  [F1] Metrics  [F12] Save",
                          (Vector2){884.0f, 642.0f}, 16.0f, PAL_SUMI_HEAVY, 0.88f, false);
     }

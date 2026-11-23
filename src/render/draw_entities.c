@@ -1041,8 +1041,8 @@ static int resample_ryu_body_trail(const RyuBodyState *body, Vector2 hx_hy,
             ++seg;
         }
         const float seg_len = cum[seg + 1] - cum[seg];
-        const float t = seg_len > 1e-4f ? ink_clampf((target - cum[seg]) / seg_len, 0.0f, 1.0f)
-                                        : 0.0f;
+        const float t =
+            seg_len > 1e-4f ? ink_clampf((target - cum[seg]) / seg_len, 0.0f, 1.0f) : 0.0f;
         out[i] = (Vector2){
             raw[seg].x + (raw[seg + 1].x - raw[seg].x) * t,
             raw[seg].y + (raw[seg + 1].y - raw[seg].y) * t,
@@ -1059,8 +1059,8 @@ static void draw_boss_ryu_orb(RenderState *r, const TransformComp *tr, const Bos
     const float base_rad = tr->radius > 10.0f ? tr->radius : 30.0f;
     const int32_t part = boss != NULL ? boss->part_id : 0;
     const float tele = boss != NULL ? ink_clampf(boss->telegraph, 0.0f, 1.0f) : 0.0f;
-    const float pulse = 1.0f + 0.05f * sinf((float)ticks * 0.16f + (float)part * 2.1f) +
-                        0.22f * tele;
+    const float pulse =
+        1.0f + 0.05f * sinf((float)ticks * 0.16f + (float)part * 2.1f) + 0.22f * tele;
     const float rad = base_rad * pulse;
 
     /* Pointed-top hoju (sacred jewel) silhouette */
@@ -1090,22 +1090,21 @@ static void draw_boss_ryu_orb(RenderState *r, const TransformComp *tr, const Bos
                 {cx + (float)k * rad * 1.12f, cy - rad * 0.36f},
                 {cx + (float)k * rad * 0.42f, cy - rad * 1.24f},
             };
-            ink_stroke(r, rim, 3,
-                       (BrushProfile){.w_max = 3.6f,
-                                      .w_min_ratio = 0.20f,
-                                      .entry = 0.14f,
-                                      .exit = 0.55f,
-                                      .dry = 0.22f,
-                                      .seed = seed + 12u + (uint32_t)(k + 1)},
-                       (InkTone){.color = tele > 0.01f ? PAL_SHU_HOT : PAL_SHU,
-                                 .alpha = 0.94f * alpha},
-                       1.0f);
+            ink_stroke(
+                r, rim, 3,
+                (BrushProfile){.w_max = 3.6f,
+                               .w_min_ratio = 0.20f,
+                               .entry = 0.14f,
+                               .exit = 0.55f,
+                               .dry = 0.22f,
+                               .seed = seed + 12u + (uint32_t)(k + 1)},
+                (InkTone){.color = tele > 0.01f ? PAL_SHU_HOT : PAL_SHU, .alpha = 0.94f * alpha},
+                1.0f);
         }
     } else if (part == 1) {
         /* Storm Orb: Ao body + Ao Hot core + crackling lightning rim */
         ink_wash(r, (Vector2){cx, cy + 2.0f}, rad * 1.08f, rad * 1.12f, -0.06f,
-                 (InkTone){.color = PAL_AO, .alpha = (0.62f + 0.28f * tele) * alpha}, 2,
-                 seed + 1u);
+                 (InkTone){.color = PAL_AO, .alpha = (0.62f + 0.28f * tele) * alpha}, 2, seed + 1u);
         ink_fill_poly(r, jewel, 7, pal_color_alpha(PAL_AO, 0.94f * alpha));
         ink_teardrop(r, (Vector2){cx, cy + rad * 0.12f}, (Vector2){0.0f, -1.0f},
                      rad * (0.85f + 0.35f * tele), rad * (0.68f + 0.22f * tele),
@@ -1189,8 +1188,7 @@ static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const
 
     /* Multi-part body trail (arc-length resampled 24 pts) or P1 render-side trail fallback */
     const bool has_body_trail = (g != NULL && g->ryu_body.head_id.index == id.index &&
-                                 g->ryu_body.head_id.gen == id.gen &&
-                                 g->ryu_body.trail_count >= 2);
+                                 g->ryu_body.head_id.gen == id.gen && g->ryu_body.trail_count >= 2);
     const uint8_t broken_mask = has_body_trail ? g->ryu_body.orb_broken_mask : 0u;
 
     Vector2 spine[RENDER_RYU_TRAIL_LEN];
@@ -1407,15 +1405,15 @@ static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const
         } else {
             ink_teardrop(r, orb_pos, (Vector2){0.0f, -1.0f}, orb_r * 1.45f, orb_r * 1.2f,
                          pal_color_alpha(PAL_GOFUN, 0.96f * alpha));
-            ink_arc_stroke(r, orb_pos, orb_r * 0.58f, 0.2f, 5.2f,
-                           (BrushProfile){.w_max = 2.6f,
-                                          .w_min_ratio = 0.35f,
-                                          .entry = 0.1f,
-                                          .exit = 0.3f,
-                                          .dry = 0.15f,
-                                          .seed = seed + 33u},
-                           (InkTone){.color = tele ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT,
-                                     .alpha = 0.90f});
+            ink_arc_stroke(
+                r, orb_pos, orb_r * 0.58f, 0.2f, 5.2f,
+                (BrushProfile){.w_max = 2.6f,
+                               .w_min_ratio = 0.35f,
+                               .entry = 0.1f,
+                               .exit = 0.3f,
+                               .dry = 0.15f,
+                               .seed = seed + 33u},
+                (InkTone){.color = tele ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, .alpha = 0.90f});
         }
     }
 }

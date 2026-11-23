@@ -299,7 +299,8 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
     if (ui->scene == UI_SCENE_SETTINGS) {
         SettingsLayout layout;
         render_settings_layout(&layout);
-        const int32_t focus_count = SETTINGS_ROW_COUNT + 3; /* 0..8 rows, 9 hints, 10 def, 11 back */
+        const int32_t focus_count =
+            SETTINGS_ROW_COUNT + 3; /* 0..8 rows, 9 hints, 10 def, 11 back */
         const int32_t idx_hints = SETTINGS_ROW_COUNT;
         const int32_t idx_defaults = SETTINGS_ROW_COUNT + 1;
         const int32_t idx_back = SETTINGS_ROW_COUNT + 2;

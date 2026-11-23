@@ -111,10 +111,9 @@ static void draw_center_progress(RenderState *r, const GameState *g)
         ink_fill_panel(r, (Rectangle){bar_x, bar_y, bar_w, bar_h}, PAL_GOFUN, 0.90f, border_pal,
                        0.88f, 320u);
         if (ratio > 0.005f) {
-            ink_fill_panel(r,
-                           (Rectangle){bar_x + 2.0f, bar_y + 2.0f, (bar_w - 4.0f) * ratio,
-                                       bar_h - 4.0f},
-                           PAL_BENGARA, 0.92f, PAL_BENGARA, 0.0f, 321u);
+            ink_fill_panel(
+                r, (Rectangle){bar_x + 2.0f, bar_y + 2.0f, (bar_w - 4.0f) * ratio, bar_h - 4.0f},
+                PAL_BENGARA, 0.92f, PAL_BENGARA, 0.0f, 321u);
         }
 
         /* 3 Dragon Orb status marks directly beneath HP bar (Fire=Shu, Storm=Ao, Wind=Gofun) */
@@ -360,10 +359,9 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g, const 
     const float cyc_x = c.x + (double_gale ? -14.0f : -11.0f) * cs + cyc_shake;
     const bool cyc_ready = g->player.cyclone_cd <= 0.001f;
     const float cyc_fill = ink_clampf(1.0f - g->player.cyclone_cd / cyc_total, 0.0f, 1.0f);
-    const PaletteId cyc_pal =
-        r->skill_deny_t[SKILL_CYCLONE] > 0.0f
-            ? PAL_SHU
-            : (cyc_ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
+    const PaletteId cyc_pal = r->skill_deny_t[SKILL_CYCLONE] > 0.0f
+                                  ? PAL_SHU
+                                  : (cyc_ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
     ink_teardrop(r, (Vector2){cyc_x, pip_y}, (Vector2){0.0f, -1.0f},
                  6.0f * cs * (0.45f + 0.55f * cyc_fill), 5.5f * cs * (0.45f + 0.55f * cyc_fill),
                  pal_color_alpha(cyc_pal, 0.92f));
@@ -381,21 +379,19 @@ static void draw_cursor_ring_and_pips(RenderState *r, const GameState *g, const 
                 ready ? 1.0f
                       : (recharging ? ink_clampf(1.0f - g->player.gale_cd / gale_total, 0.0f, 1.0f)
                                     : 0.0f);
-            const PaletteId gpal =
-                r->skill_deny_t[SKILL_GALE] > 0.0f
-                    ? PAL_SHU
-                    : (ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
-            ink_teardrop(r, (Vector2){c.x + gx_offs[k] + gale_shake, pip_y},
-                         (Vector2){0.0f, -1.0f}, 5.8f * cs * (0.45f + 0.55f * fill),
-                         5.2f * cs * (0.45f + 0.55f * fill), pal_color_alpha(gpal, 0.92f));
+            const PaletteId gpal = r->skill_deny_t[SKILL_GALE] > 0.0f
+                                       ? PAL_SHU
+                                       : (ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
+            ink_teardrop(r, (Vector2){c.x + gx_offs[k] + gale_shake, pip_y}, (Vector2){0.0f, -1.0f},
+                         5.8f * cs * (0.45f + 0.55f * fill), 5.2f * cs * (0.45f + 0.55f * fill),
+                         pal_color_alpha(gpal, 0.92f));
         }
     } else {
         const bool gale_ready = g->player.gale_cd <= 0.001f;
         const float gale_fill = ink_clampf(1.0f - g->player.gale_cd / gale_total, 0.0f, 1.0f);
-        const PaletteId gpal =
-            r->skill_deny_t[SKILL_GALE] > 0.0f
-                ? PAL_SHU
-                : (gale_ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
+        const PaletteId gpal = r->skill_deny_t[SKILL_GALE] > 0.0f
+                                   ? PAL_SHU
+                                   : (gale_ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
         ink_teardrop(r, (Vector2){c.x + 11.0f * cs + gale_shake, pip_y}, (Vector2){0.0f, -1.0f},
                      6.0f * cs * (0.45f + 0.55f * gale_fill),
                      5.5f * cs * (0.45f + 0.55f * gale_fill), pal_color_alpha(gpal, 0.92f));
