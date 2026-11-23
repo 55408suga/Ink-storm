@@ -551,6 +551,7 @@ static void test_geometry_cache_invalidation_on_solid_changes(void)
 
     /* 1. Add a vertical wall and step once to populate cached geometry. */
     fluid_set_solid_rect(f, 640, 0, 16, 720, true);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
     for (int y = 1; y < FLUID_H - 1; ++y) {
         for (int x = 1; x <= 79; ++x) {
             f->dye[0][cell(x, y)] = 2.0f;
@@ -558,29 +559,35 @@ static void test_geometry_cache_invalidation_on_solid_changes(void)
     }
     set_uniform_velocity(125.0f, 0.0f);
     fluid_step(f, 0.05f);
+    TEST_ASSERT_EQUAL_UINT8(1, f->geometry_valid);
     for (int y = 1; y < FLUID_H - 1; ++y) {
         TEST_ASSERT_TRUE(f->dye[0][cell(82, y)] == 0.0f);
     }
 
     /* 2. Remove the wall via fluid_set_solid_rect(..., false) and verify immediate passage. */
     fluid_set_solid_rect(f, 640, 0, 16, 720, false);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
     for (int t = 0; t < 3; ++t) {
         set_uniform_velocity(125.0f, 0.0f);
         fluid_step(f, 0.05f);
     }
+    TEST_ASSERT_EQUAL_UINT8(1, f->geometry_valid);
     TEST_ASSERT_TRUE(f->dye[0][cell(82, 45)] > 0.1f);
 
     /* 3. Add a circular solid obstacle and verify interior remains blocked after step. */
     fluid_set_solid_circle(f, 804, 364, 24, true);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
     for (int t = 0; t < 3; ++t) {
         set_uniform_velocity(125.0f, 0.0f);
         fluid_step(f, 0.05f);
     }
+    TEST_ASSERT_EQUAL_UINT8(1, f->geometry_valid);
     assert_walls_are_empty();
     TEST_ASSERT_TRUE(fluid_is_solid(f, 804, 364));
 
     /* 4. Clear solids via fluid_clear_solids and verify dye crosses the former obstacle center. */
     fluid_clear_solids(f);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
     for (int y = 40; y <= 50; ++y) {
         for (int x = 90; x <= 97; ++x) {
             f->dye[0][cell(x, y)] = 2.0f;
@@ -590,8 +597,53 @@ static void test_geometry_cache_invalidation_on_solid_changes(void)
         set_uniform_velocity(125.0f, 0.0f);
         fluid_step(f, 0.05f);
     }
+    TEST_ASSERT_EQUAL_UINT8(1, f->geometry_valid);
     TEST_ASSERT_FALSE(fluid_is_solid(f, 804, 364));
     TEST_ASSERT_TRUE(f->dye[0][cell(100, 45)] > 0.1f);
+
+    /* 5. Pressure-enabled (project_iters = 12) + short-backtrace differential check:
+     * compare dynamically mutated solid caches against freshly rebuilt caches bit-for-bit. */
+    replay = calloc(1, sizeof *replay);
+    TEST_ASSERT_NOT_NULL(replay);
+
+    fluid_init(f, NULL);
+    fluid_set_solid_rect(f, 520, 280, 32, 160, true);
+    fluid_splat(f, 480, 360, 4.0f, 18.0f, 4.0f, (float[]){1.2f, 0.4f, 0.0f, 0.0f});
+    fluid_step(f, k_dt);
+    TEST_ASSERT_EQUAL_UINT8(1, f->geometry_valid);
+
+    /* Mutate solids dynamically: remove rect, add circle, then reset fluid fields only. */
+    fluid_set_solid_rect(f, 520, 280, 32, 160, false);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
+    fluid_set_solid_circle(f, 640, 360, 24, true);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
+    fluid_reset(f);
+
+    /* Fresh instance with the exact same final obstacle and never-mutated cache. */
+    fluid_init(replay, NULL);
+    fluid_set_solid_circle(replay, 640, 360, 24, true);
+
+    for (int t = 0; t < 10; ++t) {
+        /* Short backtrace (speed <= 20 cells/s -> dt*speed <= 0.34 <= 2) exercises !near_wall. */
+        fluid_splat(f, 592, 360, 4.0f, 18.0f, 3.0f, (float[]){0.9f, 0.3f, 0.2f, 0.0f});
+        fluid_splat(replay, 592, 360, 4.0f, 18.0f, 3.0f, (float[]){0.9f, 0.3f, 0.2f, 0.0f});
+        fluid_step(f, k_dt);
+        fluid_step(replay, k_dt);
+        TEST_ASSERT_EQUAL_HEX64(fluid_hash(replay), fluid_hash(f));
+    }
+
+    /* Now clear solids on mutated instance and compare against fresh obstacle-free state. */
+    fluid_clear_solids(f);
+    TEST_ASSERT_EQUAL_UINT8(0, f->geometry_valid);
+    fluid_reset(f);
+    fluid_init(replay, NULL);
+    for (int t = 0; t < 10; ++t) {
+        fluid_splat(f, 608, 360, 4.0f, 18.0f, -2.0f, (float[]){0.8f, 0.0f, 0.5f, 0.0f});
+        fluid_splat(replay, 608, 360, 4.0f, 18.0f, -2.0f, (float[]){0.8f, 0.0f, 0.5f, 0.0f});
+        fluid_step(f, k_dt);
+        fluid_step(replay, k_dt);
+        TEST_ASSERT_EQUAL_HEX64(fluid_hash(replay), fluid_hash(f));
+    }
 }
 
 static void test_extreme_flt_max_config_stays_finite(void)

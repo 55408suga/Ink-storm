@@ -67,7 +67,7 @@
 | `--no-save` | セーブファイルの読み込み・書き込みを完全に抑止 | 無効 |
 | `--save-path <path>` | セーブファイルパスを明示指定（空・`--` 開始・`PATH_MAX` 以上は不可） | 指定先を使用 |
 | `--demo` | 固定シード・自動入力によるデモプレイを起動（`--smoke-frames N` / `--snap <dir>` / `--no-post` 併用可、`F1` X 線切替・`Esc` 終了） | 無効 |
-| `--snap <dir>` | 指定ディレクトリへ要所 PNG 6 枚（`snap_01.png`〜`snap_06.png`）をオフスクリーン描画で自動保存して終了。単独指定は `--demo --snap <dir>` として動作し、`--showcase --snap <dir>` で見本帳 6 枚を保存する（既存ファイルや書き出し失敗時は終了コード 1） | 無効 |
+| `--snap <dir>` | 指定ディレクトリへ要所 PNG 6 枚（`snap_01.png`〜`snap_06.png`）をオフスクリーン描画で自動保存して終了。単独指定は `--demo --snap <dir>` として動作し、`--showcase --snap <dir>` で見本帳 6 枚を保存する（`<dir>` が既存ファイル〈非ディレクトリ〉または書き出し失敗時は終了コード 1） | 無効 |
 
 - **排他・重複・エラー時の終了コード契約**:
   - 排他組み合わせ：`--headless-smoke` と `--smoke-frames` / `--showcase` / `--demo` / `--snap` / `--save-path`、`--save-path` と `--no-save` / `--smoke-frames` / `--showcase` / `--demo` / `--snap`、`--showcase` と `--demo`、`--snap` と `--smoke-frames`。
