@@ -801,8 +801,7 @@ static void elements_stage5_projectiles(GameState *g)
         const float storm = sanitize_sample(dye[2]);
 
         const bool can_ignite_proj = !(proj->kind == PROJ_HOMING_OFUDA && !proj->deflected);
-        if (can_ignite_proj && !proj->burning && fire > 0.36f &&
-            (proj->deflected || ink > 0.16f)) {
+        if (can_ignite_proj && !proj->burning && fire > 0.36f && (proj->deflected || ink > 0.16f)) {
             proj->burning = true;
             proj->pierce = g->internal.mods.burning_proj_pierce;
             vel->vx *= 1.25f;

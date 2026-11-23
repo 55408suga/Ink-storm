@@ -307,8 +307,8 @@ bool rewards_repair_shrine(GameState *g)
 
 bool rewards_pick_endless_crystal(GameState *g)
 {
-    if (g == NULL || g->phase != RUN_PHASE_REWARD ||
-        g->run.reward.kind != REWARD_KIND_FALLBACK || g->run.reward.crystal_reward <= 0) {
+    if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.reward.kind != REWARD_KIND_FALLBACK ||
+        g->run.reward.crystal_reward <= 0) {
         return false;
     }
     const int32_t amt = g->run.reward.crystal_reward;

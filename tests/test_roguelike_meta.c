@@ -414,12 +414,9 @@ static void test_serialized_save_matches_architecture_example(void)
         const char *text;
         uint8_t expected;
     } cursor_cases[] = {
-        {"version=1\nopt_cursor_scale=-10", 100},
-        {"version=1\nopt_cursor_scale=112", 100},
-        {"version=1\nopt_cursor_scale=113", 125},
-        {"version=1\nopt_cursor_scale=137", 125},
-        {"version=1\nopt_cursor_scale=138", 150},
-        {"version=1\nopt_cursor_scale=250", 150},
+        {"version=1\nopt_cursor_scale=-10", 100}, {"version=1\nopt_cursor_scale=112", 100},
+        {"version=1\nopt_cursor_scale=113", 125}, {"version=1\nopt_cursor_scale=137", 125},
+        {"version=1\nopt_cursor_scale=138", 150}, {"version=1\nopt_cursor_scale=250", 150},
     };
     for (size_t i = 0; i < sizeof cursor_cases / sizeof cursor_cases[0]; ++i) {
         MetaState m;
@@ -461,16 +458,16 @@ static void test_save_clamps_and_normalizes_each_field(void)
                         "runs_played=99999999999\nclears=-1\nseen_hints_mask=0x123456789abcdef0\n"
                         "opt_master_vol=150\nopt_bgm_vol=-1\nopt_se_vol=101\nopt_shake_scale=74\n"
                         "opt_post_shader=0\nopt_hints=-4\n";
-    const MetaState expected = {.version = 1,
-                                .ink_crystals = META_MAX_CRYSTALS,
-                                .upgrade_lv = {3, 0, 2, 3},
-                                .unlocked_relic_mask = 0x3b,
-                                .best_score = META_MAX_SCORE,
-                                .best_act = META_MAX_BEST_ACT,
-                                .runs_played = META_MAX_COUNTERS,
-                                .seen_hints_mask = UINT32_C(0x9abcdef0),
-                                .settings = {100, 0, 100, 50, false, true, UI_LANG_AUTO, false,
-                                             100}};
+    const MetaState expected = {
+        .version = 1,
+        .ink_crystals = META_MAX_CRYSTALS,
+        .upgrade_lv = {3, 0, 2, 3},
+        .unlocked_relic_mask = 0x3b,
+        .best_score = META_MAX_SCORE,
+        .best_act = META_MAX_BEST_ACT,
+        .runs_played = META_MAX_COUNTERS,
+        .seen_hints_mask = UINT32_C(0x9abcdef0),
+        .settings = {100, 0, 100, 50, false, true, UI_LANG_AUTO, false, 100}};
     MetaState meta;
     TEST_ASSERT_TRUE(meta_deserialize(&meta, text));
     assert_meta(&expected, &meta);

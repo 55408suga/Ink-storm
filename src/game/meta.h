@@ -24,12 +24,7 @@ typedef enum {
     META_UPG_COUNT
 } MetaUpgradeKind;
 
-typedef enum {
-    UI_LANG_AUTO = 0,
-    UI_LANG_JA,
-    UI_LANG_EN,
-    UI_LANG_COUNT
-} UiLangMode;
+typedef enum { UI_LANG_AUTO = 0, UI_LANG_JA, UI_LANG_EN, UI_LANG_COUNT } UiLangMode;
 
 typedef struct {
     uint8_t master_vol;

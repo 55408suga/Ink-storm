@@ -218,8 +218,8 @@ size_t meta_serialize(const MetaState *meta, char *buf, size_t buf_size)
             meta->seen_hints_mask, (unsigned)meta->settings.master_vol,
             (unsigned)meta->settings.bgm_vol, (unsigned)meta->settings.se_vol,
             (unsigned)meta->settings.shake_scale, meta->settings.post_shader_on,
-            meta->settings.hints_on, (unsigned)meta->settings.ui_lang,
-            meta->settings.reduce_flash, (unsigned)meta->settings.cursor_scale);
+            meta->settings.hints_on, (unsigned)meta->settings.ui_lang, meta->settings.reduce_flash,
+            (unsigned)meta->settings.cursor_scale);
         if (length >= 0) {
             return (size_t)length;
         }
