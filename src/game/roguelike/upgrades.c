@@ -322,8 +322,8 @@ static void maelstrom_bind_on_tick(const TickHookArgs *a)
             if (tr == NULL || vel == NULL || en == NULL || tr->dissolving) {
                 continue;
             }
-            const bool eligible =
-                vel->mass_tier == MASS_LIGHT || (a->lv >= 2 && vel->mass_tier == MASS_MEDIUM);
+            const MassTier eff_tier = game_effective_mass_tier(g, vel->mass_tier);
+            const bool eligible = eff_tier == MASS_LIGHT || (a->lv >= 2 && eff_tier == MASS_MEDIUM);
             if (!eligible) {
                 continue;
             }
@@ -532,6 +532,59 @@ static void barrier_on_tick(const TickHookArgs *a)
     }
 }
 
+static void lingering_embers_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_damp[3] = {0.945f, 0.955f, 0.965f};
+    if (lv >= 1 && lv <= 3) {
+        mods->fire_damp_override = k_damp[lv - 1];
+    }
+}
+
+static void storm_brush_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->chain_storm_interval = 2;
+    if (lv >= 3) {
+        mods->surge_stroke_storm = true;
+    }
+}
+
+static void storm_brush_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 2 && lv <= 3) {
+        mods->chain_storm_mul *= 1.5f;
+    }
+}
+
+static void double_gale_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_cd[3] = {0.85f, 0.70f, 0.70f};
+    if (lv < 1 || lv > 3) {
+        return;
+    }
+    mods->gale_cd = k_cd[lv - 1];
+    if (lv >= 3) {
+        mods->gale_max_charges = 2;
+    }
+}
+
+static void inkstone_blessing_apply_add(RunModifiers *mods, uint8_t lv)
+{
+    if (lv >= 3) {
+        mods->ink_regen_no_delay = true;
+    }
+}
+
+static void inkstone_blessing_apply_mul(RunModifiers *mods, uint8_t lv)
+{
+    static const float k_muls[3] = {1.20f, 1.40f, 1.60f};
+    if (lv >= 1 && lv <= 3) {
+        mods->ink_regen_mul *= k_muls[lv - 1];
+    }
+}
+
 static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
     [UPG_EMBER_TIP] =
         {
@@ -714,24 +767,30 @@ static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
             .id = UPG_LINGERING_EMBERS,
             .axis = AXIS_BLAZE,
             .max_level = 3,
+            .apply_mods_add = lingering_embers_apply_add,
         },
     [UPG_STORM_BRUSH] =
         {
             .id = UPG_STORM_BRUSH,
             .axis = AXIS_THUNDER,
             .max_level = 3,
+            .apply_mods_add = storm_brush_apply_add,
+            .apply_mods_mul = storm_brush_apply_mul,
         },
     [UPG_DOUBLE_GALE] =
         {
             .id = UPG_DOUBLE_GALE,
             .axis = AXIS_GALE,
             .max_level = 3,
+            .apply_mods_add = double_gale_apply_add,
         },
     [UPG_INKSTONE_BLESSING] =
         {
             .id = UPG_INKSTONE_BLESSING,
             .axis = AXIS_INKWAY,
             .max_level = 3,
+            .apply_mods_add = inkstone_blessing_apply_add,
+            .apply_mods_mul = inkstone_blessing_apply_mul,
         },
 };
 
@@ -850,12 +909,10 @@ void roguelike_recompute_modifiers(GameState *g)
     relics_apply_modifiers_mul(g, &mods);
 
     g->internal.mods = mods;
-    g->player.ink_max = 100.0f + mods.ink_max_add;
-    if (g->player.ink_max < 30.0f) {
-        g->player.ink_max = 30.0f;
-    }
+    g->player.ink_max = fmaxf(30.0f, 100.0f + mods.ink_max_add);
     if (g->player.ink > g->player.ink_max) {
         g->player.ink = g->player.ink_max;
+        g->player.dry = g->player.ink < 20.0f;
     }
     g->player.cyclone_cd_total = mods.cyclone_cd;
     g->player.gale_cd_total = mods.gale_cd;

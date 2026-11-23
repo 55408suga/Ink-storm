@@ -1,7 +1,9 @@
+#include "combat/damage.h"
 #include "core.h"
 #include "elements/elements.h"
 #include "fluid.h"
 #include "game.h"
+#include "roguelike/relics.h"
 #include "roguelike/upgrades.h"
 #include "unity.h"
 
@@ -706,6 +708,271 @@ static void test_thunderburst_fuse_upgrade(void)
     game_destroy(g);
 }
 
+static int count_orbs(const GameState *g)
+{
+    int n = 0;
+    const uint32_t hw = g->ecs.high_water;
+    for (uint32_t i = 0; i < hw; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_INK_ORB)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+static void test_relic_seal_of_trinity(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    float *ink = fluid_channel_mut(&g->fluid, 0);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+
+    /* Without Seal of Trinity (thresh 0.30): 8 cells at 0.25 must not trigger Cataclysm. */
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(40 + k, 40)] = 0.25f;
+        fire[cell_idx(40 + k, 40)] = 0.25f;
+        storm[cell_idx(40 + k, 40)] = 0.25f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
+
+    /* With Seal of Trinity (thresh 0.22, CD 1.2s): triggers immediately. */
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_SEAL_OF_TRINITY));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.22f, g->internal.mods.cataclysm_thresh);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.2f, g->internal.mods.cataclysm_cd_base);
+
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(40 + k, 40)] = 0.25f;
+        fire[cell_idx(40 + k, 40)] = 0.25f;
+        storm[cell_idx(40 + k, 40)] = 0.25f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT32(1, g->run.cataclysms);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.2f, g->internal.cataclysm_cd);
+
+    /* 71 ticks (< 1.2s) must not re-fire; 72nd tick (== 1.2s) re-fires. */
+    for (int t = 0; t < 71; ++t) {
+        fluid_reset(&g->fluid);
+        for (int k = 0; k < 8; ++k) {
+            ink[cell_idx(80 + k, 40)] = 0.25f;
+            fire[cell_idx(80 + k, 40)] = 0.25f;
+            storm[cell_idx(80 + k, 40)] = 0.25f;
+        }
+        g->event_count = 0;
+        elements_step(g);
+        TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CATACLYSM));
+    }
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(80 + k, 40)] = 0.25f;
+        fire[cell_idx(80 + k, 40)] = 0.25f;
+        storm[cell_idx(80 + k, 40)] = 0.25f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT32(2, g->run.cataclysms);
+
+    game_destroy(g);
+}
+
+static void test_relic_inkstorm_secret(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_INKSTORM_SECRET));
+    TEST_ASSERT_EQUAL_INT32(3, g->internal.mods.surge_min_chain);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->internal.mods.surge_reaction_dmg_mul);
+
+    /* Tradeoff: chain 2 does NOT start surge; chain 3 starts surge. */
+    const EntityId a1 = game_debug_spawn_enemy(g, ENEMY_ARCHER, 300.0f, 300.0f);
+    const EntityId a2 = game_debug_spawn_enemy(g, ENEMY_ARCHER, 360.0f, 300.0f);
+    const EntityId a3 = game_debug_spawn_enemy(g, ENEMY_ARCHER, 420.0f, 300.0f);
+    (void)combat_apply_damage(g, a1, 50, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.chain);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->player.surge_t);
+    (void)combat_apply_damage(g, a2, 50, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(2, g->run.chain);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->player.surge_t);
+    (void)combat_apply_damage(g, a3, 50, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(3, g->run.chain);
+    TEST_ASSERT_TRUE(g->player.surge_t > 0.0f);
+
+    float *ink = fluid_channel_mut(&g->fluid, 0);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+
+    /* 1. Blazing burn DoT during surge: 10 -> 15. */
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    const EntityId e_burn =
+        game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cell_center_px(70), cell_center_px(30));
+    fluid_reset(&g->fluid);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            fire[cell_idx(70 + dx, 30 + dy)] = 0.45f;
+        }
+    }
+    g->player.surge_t = 3.0f;
+    for (int t = 0; t < 22; ++t) {
+        elements_step(g);
+    }
+    TEST_ASSERT_EQUAL_INT32(75, game_health(g, e_burn)->hp);
+
+    /* 2. Tempest Lightning initial strike during surge: 10 -> 15 (no ink mark). */
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    const EntityId e_zap =
+        game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cell_center_px(40), cell_center_px(40) + 100.0f);
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 10; ++k) {
+        storm[cell_idx(40 + k, 40)] = 0.50f;
+    }
+    game_status_mut(g, e_zap)->charge_t = 2.0f;
+    g->internal.storm_zap_cd = 0.0f;
+    g->player.surge_t = 3.0f;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT32(75, game_health(g, e_zap)->hp);
+
+    /* 3. Thunderburst during surge: 30 -> 45. */
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    const float tb_cx = 43.0f * FLUID_CELL_PX;
+    const float tb_cy = cell_center_px(40);
+    const EntityId e_tb = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, tb_cx + 40.0f, tb_cy);
+    fluid_reset(&g->fluid);
+    for (int b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        g->internal.thunderburst_block_cd[b] = 0.0f;
+    }
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    g->player.surge_t = 3.0f;
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT32(45, game_health(g, e_tb)->hp);
+
+    /* 4. Cataclysm body AoE during surge: 80 -> 120 (4 closer decoys take the 4 wide bolts). */
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    const float cat_cx = 348.0f;
+    const float cat_cy = 324.0f;
+    for (int d = 1; d <= 4; ++d) {
+        const EntityId decoy =
+            game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cat_cx + (float)d * 10.0f, cat_cy);
+        game_health_mut(g, decoy)->hp = 300;
+    }
+    const EntityId e_cat = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cat_cx + 100.0f, cat_cy);
+    game_health_mut(g, e_cat)->hp = 200;
+    fluid_reset(&g->fluid);
+    for (int k = 0; k < 8; ++k) {
+        ink[cell_idx(40 + k, 40)] = 0.45f;
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    g->internal.cataclysm_cd = 0.0f;
+    g->player.surge_t = 3.0f;
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CATACLYSM));
+    TEST_ASSERT_EQUAL_INT32(80, game_health(g, e_cat)->hp);
+
+    /* 5. Normal deflected arrow (without DMG_REACTION) is NOT multiplied by 1.5 during surge. */
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    const EntityId e_arrow = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 500.0f, 300.0f);
+    g->player.surge_t = 3.0f;
+    g->player.dry = false;
+    const int32_t dealt =
+        combat_apply_damage(g, e_arrow, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(20, dealt);
+
+    game_destroy(g);
+}
+
+static void test_relic_thunderfire_gem(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_THUNDERFIRE_GEM));
+    TEST_ASSERT_TRUE(g->internal.mods.thunderfire_gem);
+
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+
+    /* Two Thunderburst blocks in the same tick drop at most 1 orb and start 1.5s CD. */
+    for (int blk = 0; blk < 2; ++blk) {
+        const int bx = (2 + blk * 3) * 8;
+        const int by = 2 * 8;
+        for (int k = 0; k < 6; ++k) {
+            fire[cell_idx(bx + k, by)] = 0.45f;
+            storm[cell_idx(bx + k, by)] = 0.45f;
+        }
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(2, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT(1, count_orbs(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->internal.thunderfire_gem_cd);
+
+    /* 89 ticks (< 1.5s): re-triggering Thunderburst must NOT spawn another orb. */
+    for (int t = 0; t < 89; ++t) {
+        upgrades_fire_on_tick(g, INK_FIXED_DT);
+    }
+    TEST_ASSERT_TRUE(g->internal.thunderfire_gem_cd > 0.0f);
+    fluid_reset(&g->fluid);
+    for (int b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        g->internal.thunderburst_block_cd[b] = 0.0f;
+    }
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(16 + k, 16)] = 0.45f;
+        storm[cell_idx(16 + k, 16)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT(1, count_orbs(g));
+
+    /* 90th tick (== 1.5s): CD reaches 0 and next Thunderburst drops 1 orb again. */
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.thunderfire_gem_cd);
+    fluid_reset(&g->fluid);
+    for (int b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
+        g->internal.thunderburst_block_cd[b] = 0.0f;
+    }
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(16 + k, 16)] = 0.45f;
+        storm[cell_idx(16 + k, 16)] = 0.45f;
+    }
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT(2, count_orbs(g));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -721,5 +988,8 @@ int main(void)
     RUN_TEST(test_thunderburst_trigger_impulse_decay_cd_and_cap);
     RUN_TEST(test_cataclysm_trigger_excludes_thunderburst_and_cd);
     RUN_TEST(test_thunderburst_fuse_upgrade);
+    RUN_TEST(test_relic_seal_of_trinity);
+    RUN_TEST(test_relic_inkstorm_secret);
+    RUN_TEST(test_relic_thunderfire_gem);
     return UNITY_END();
 }

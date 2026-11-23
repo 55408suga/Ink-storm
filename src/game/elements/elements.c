@@ -29,7 +29,8 @@ static void clamp_proj_max_speed(VelocityComp *vel, float max_sp)
     }
 }
 
-static float mass_explosion_multiplier(const VelocityComp *vel, const EnemyComp *en)
+static float mass_explosion_multiplier(const GameState *g, const VelocityComp *vel,
+                                       const EnemyComp *en)
 {
     if (en != NULL && en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1) {
         return 0.55f;
@@ -37,7 +38,7 @@ static float mass_explosion_multiplier(const VelocityComp *vel, const EnemyComp 
     if (vel == NULL) {
         return 0.0f;
     }
-    switch (vel->mass_tier) {
+    switch (game_effective_mass_tier(g, vel->mass_tier)) {
     case MASS_LIGHT:
         return 1.0f;
     case MASS_MEDIUM:
@@ -156,6 +157,8 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     }
 
     const uint8_t *solid = g->fluid.solid;
+    const float thresh =
+        g->internal.mods.cataclysm_thresh > 0.0f ? g->internal.mods.cataclysm_thresh : 0.30f;
     int32_t counts[GAME_THUNDERBURST_BLOCKS] = {0};
     float sum_val[GAME_THUNDERBURST_BLOCKS] = {0};
     float sum_x[GAME_THUNDERBURST_BLOCKS] = {0};
@@ -176,7 +179,7 @@ static int32_t elements_stage2_cataclysm(GameState *g)
             if (!isfinite(ink) || !isfinite(fire) || !isfinite(storm)) {
                 continue;
             }
-            if (ink > 0.30f && fire > 0.30f && storm > 0.30f) {
+            if (ink > thresh && fire > thresh && storm > thresh) {
                 const int b = by * GAME_THUNDERBURST_BLOCKS_X + (x / 8);
                 ++counts[b];
                 sum_val[b] += ink + fire + storm;
@@ -234,7 +237,7 @@ static int32_t elements_stage2_cataclysm(GameState *g)
         const float ny = d < 1e-4f ? 0.0f : (dy / d);
         VelocityComp *vel = game_velocity_mut(g, id);
         StatusComp *st = game_status_mut(g, id);
-        const float kmul = mass_explosion_multiplier(vel, en);
+        const float kmul = mass_explosion_multiplier(g, vel, en);
         if (kmul > 0.0f && vel != NULL && st != NULL) {
             const float imp = 620.0f * kmul;
             vel->vx += nx * imp;
@@ -355,7 +358,8 @@ static int32_t elements_stage2_cataclysm(GameState *g)
         }
     }
 
-    g->internal.cataclysm_cd = 2.0f;
+    g->internal.cataclysm_cd =
+        g->internal.mods.cataclysm_cd_base > 0.0f ? g->internal.mods.cataclysm_cd_base : 2.0f;
     if (g->hitstop_t < 0.06f) {
         g->hitstop_t = 0.06f;
     }
@@ -483,7 +487,7 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
             const float ny = d < 1e-4f ? 0.0f : (dy / d);
             VelocityComp *vel = game_velocity_mut(g, id);
             StatusComp *st = game_status_mut(g, id);
-            const float kmul = mass_explosion_multiplier(vel, en);
+            const float kmul = mass_explosion_multiplier(g, vel, en);
             if (kmul > 0.0f && vel != NULL && st != NULL) {
                 const float imp = 520.0f * kmul;
                 vel->vx += nx * imp;
