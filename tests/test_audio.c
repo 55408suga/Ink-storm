@@ -45,10 +45,10 @@ static void test_audio_initial_state(void)
 static void test_audio_se_events_audible(void)
 {
     static const GameEventType se_events[] = {
-        EV_KILL,         EV_DEFLECT,    EV_SLAM,           EV_IGNITE,        EV_STORM_ZAP,
-        EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,       EV_GALE,
-        EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,    EV_BOSS_PHASE,
-        EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL,
+        EV_KILL,         EV_DEFLECT,    EV_SLAM,           EV_IGNITE,          EV_STORM_ZAP,
+        EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,         EV_GALE,
+        EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,      EV_BOSS_PHASE,
+        EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL,   EV_BOSS_PART_BREAK,
     };
 
     GameState *g = game_create(NULL);
@@ -187,6 +187,8 @@ static void test_audio_bgm_tracks(void)
         {RUN_PHASE_PLAYING, GAME_BOSS_WAVE_INDEX, BGM_BOSS},
         {RUN_PHASE_WAVE_AFTERMATH, GAME_BOSS_WAVE_INDEX, BGM_BOSS},
         {RUN_PHASE_VICTORY, GAME_BOSS_WAVE_INDEX, BGM_VICTORY},
+        {RUN_PHASE_REWARD, GAME_BOSS_WAVE_INDEX, BGM_BATTLE}, /* Endless continuation */
+        {RUN_PHASE_ACT_TRANSITION, 0, BGM_BATTLE},
         {RUN_PHASE_SHRINE_BREAK, 1, BGM_NONE},
         {RUN_PHASE_GAME_OVER, 1, BGM_NONE},
     };
@@ -194,9 +196,30 @@ static void test_audio_bgm_tracks(void)
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
         g->phase = cases[i].phase;
         g->run.wave_index = cases[i].wave;
+        if (i == 7) {
+            g->run.endless_loop = 1;
+        }
         audio_consume_events(a, g);
         TEST_ASSERT_EQUAL_INT(cases[i].expected, audio_bgm_track(a));
     }
+
+    /* Verify rendering across BGM_VICTORY -> BGM_BATTLE endless transition stays finite */
+    audio_init(a, UINT64_C(8));
+    int16_t buf[AUDIO_SAMPLES_PER_TICK * 4];
+    g->phase = RUN_PHASE_VICTORY;
+    g->run.endless_loop = 0;
+    audio_consume_events(a, g);
+    audio_render(a, buf, AUDIO_SAMPLES_PER_TICK);
+    TEST_ASSERT_EQUAL_INT(BGM_VICTORY, audio_bgm_track(a));
+    TEST_ASSERT_EQUAL_INT(BGM_VICTORY, a->active_bgm);
+
+    g->phase = RUN_PHASE_REWARD;
+    g->run.endless_loop = 1;
+    audio_consume_events(a, g);
+    audio_render(a, buf, AUDIO_SAMPLES_PER_TICK * 4);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, audio_bgm_track(a));
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, a->active_bgm);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
 
     free(a);
     game_destroy(g);

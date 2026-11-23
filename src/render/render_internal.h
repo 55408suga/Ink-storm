@@ -65,7 +65,7 @@ void render_draw_number_fixed(const RenderState *r, const char *digits, Vector2 
 void render_draw_entities(RenderState *r, const GameState *g, int act_index);
 
 /* VFX (vfx.c) */
-void render_vfx_draw_world(RenderState *r, const GameState *g);
+void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui);
 void render_vfx_draw_ui(RenderState *r, const GameState *g);
 Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
 

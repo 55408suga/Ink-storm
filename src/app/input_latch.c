@@ -54,6 +54,9 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
     if (raw->repair_pressed) {
         l->repair_pending = true;
     }
+    if (raw->crystal_pressed) {
+        l->crystal_pending = true;
+    }
     if (raw->reroll_pressed) {
         l->reroll_pending = true;
     }
@@ -96,6 +99,9 @@ GameCommand input_latch_take_command(InputLatch *l, RunPhase phase)
         } else if (l->repair_pending) {
             cmd.type = CMD_REPAIR_SHRINE;
             cmd.arg = 0;
+        } else if (l->crystal_pending) {
+            cmd.type = CMD_PICK_ENDLESS_CRYSTAL;
+            cmd.arg = 0;
         } else if (l->reroll_pending) {
             cmd.type = CMD_REROLL_REWARD;
             cmd.arg = 0;
@@ -103,6 +109,7 @@ GameCommand input_latch_take_command(InputLatch *l, RunPhase phase)
     }
     l->pick_pending = -1;
     l->repair_pending = false;
+    l->crystal_pending = false;
     l->reroll_pending = false;
     return cmd;
 }

@@ -333,6 +333,19 @@ void render_consume_events(RenderState *r, const GameState *g)
             add_shake(r, 7.0f, 0.30f);
             break;
         }
+        case EV_BOSS_PART_BREAK: {
+            const PaletteId pal = (ev->value == 0)
+                                      ? PAL_SHU
+                                      : ((ev->value == 1) ? PAL_AO : PAL_GOFUN);
+            const PaletteId hot = (ev->value == 0)
+                                      ? PAL_SHU_HOT
+                                      : ((ev->value == 1) ? PAL_AO_HOT : PAL_SUMI_LIGHT);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 14, 240.0f, 10.5f, 0.55f, pal, true);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 190.0f, 7.5f, 0.42f, hot, false);
+            push_stroke(r, 9, ev->x, ev->y, (float)ev->value, 0.0f, 52.0f, 0.48f);
+            add_shake(r, 5.0f, 0.20f);
+            break;
+        }
         case EV_WAVE_CLEAR:
             push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f, 128.0f, 54.0f, SEAL_HAKUBUN,
                       1.10f);
@@ -600,7 +613,7 @@ Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui)
     };
 }
 
-void render_vfx_draw_world(RenderState *r, const GameState *g)
+void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
 {
     if (r == NULL || g == NULL) {
         return;
@@ -803,6 +816,38 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
                                       .dry = 0.20f,
                                       .seed = s->seed + 2u},
                        (InkTone){.color = PAL_AO, .alpha = a * 0.85f}, 1.0f);
+        } else if (s->kind == 9) {
+            /* Ryu Dragon Orb shatter: elemental ink splatter + broken enso */
+            const int part = (int)lroundf(s->dx);
+            const PaletteId pal = (part == 0) ? PAL_SHU : ((part == 1) ? PAL_AO : PAL_GOFUN);
+            const PaletteId rim = (part == 0) ? PAL_SHU_HOT
+                                              : ((part == 1) ? PAL_AO_HOT : PAL_SUMI_DARK);
+            const float rad = s->radius * (0.45f + 0.85f * u);
+            const float gap_a = (float)(s->seed % 360u) * 0.01745f;
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 4.95f,
+                           (BrushProfile){.w_max = 8.5f,
+                                          .w_min_ratio = 0.20f,
+                                          .entry = 0.14f,
+                                          .exit = 0.38f,
+                                          .dry = 0.48f,
+                                          .seed = s->seed},
+                           (InkTone){.color = pal, .alpha = a});
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad * 0.84f, gap_a + 0.25f, gap_a + 4.60f,
+                           (BrushProfile){.w_max = 3.4f,
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.12f,
+                                          .exit = 0.35f,
+                                          .dry = 0.30f,
+                                          .seed = s->seed + 7u},
+                           (InkTone){.color = rim, .alpha = a * 0.90f});
+            uint64_t srng = (uint64_t)s->seed ^ UINT64_C(0x504152544252454b);
+            if (srng == 0u) {
+                srng = 1u;
+            }
+            const float sp_ang = gap_a + 2.2f;
+            ink_splatter(r, (Vector2){s->x, s->y}, (Vector2){cosf(sp_ang), sinf(sp_ang)},
+                         0.85f * (1.0f - 0.35f * u), (InkTone){.color = pal, .alpha = a * 0.82f},
+                         &srng);
         }
     }
 
@@ -893,7 +938,8 @@ void render_vfx_draw_world(RenderState *r, const GameState *g)
         render_set_blend(r, BLEND_ALPHA);
     }
 
-    if (r->flash_t > 0.0f) {
+    const bool suppress_flash = (ui != NULL && ui->reduce_flash);
+    if (r->flash_t > 0.0f && !suppress_flash) {
         const Vector2 screen[4] = {{0.0f, 0.0f},
                                    {(float)INK_SCREEN_W, 0.0f},
                                    {(float)INK_SCREEN_W, (float)INK_SCREEN_H},

@@ -1,6 +1,7 @@
 #include "palette.h"
 
 #include "core.h"
+#include "game.h"
 
 static const Color k_palette[PAL_COUNT] = {
     [PAL_SUMI_SCORCH] = {0x1a, 0x17, 0x14, 0xff}, [PAL_SUMI_DARK] = {0x2b, 0x27, 0x23, 0xff},
@@ -65,10 +66,11 @@ Color pal_white(void) { return (Color){255, 255, 255, 255}; }
 
 PaletteId pal_paper_for_act(int act_index)
 {
-    if (act_index == 1) {
+    const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
+    if (stage_act == 1) {
         return PAL_PAPER_ACT2;
     }
-    if (act_index >= 2) {
+    if (stage_act == 2) {
         return PAL_PAPER_ACT3;
     }
     return PAL_PAPER_ACT1;

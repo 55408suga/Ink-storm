@@ -253,6 +253,58 @@ static void bake_act3_background(RenderState *r)
     }
 }
 
+static void bake_endless_sunago(RenderState *r, int loop_n, int act_index)
+{
+    int flecks = 20 * loop_n;
+    if (flecks > 120) {
+        flecks = 120;
+    }
+    uint64_t rng = UINT64_C(0x53554e41474f0001) ^
+                   ((uint64_t)(uint32_t)act_index * UINT64_C(0x9e3779b97f4a7c15));
+
+    for (int i = 0; i < flecks; ++i) {
+        const uint32_t edge = (uint32_t)(ink_rng_next(&rng) % 4u);
+        float fx = 0.0f;
+        float fy = 0.0f;
+        if (edge == 0u) {
+            fx = 12.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_W - 24.0f);
+            fy = 10.0f + ink_rng_f01(&rng) * 102.0f;
+        } else if (edge == 1u) {
+            fx = 12.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_W - 24.0f);
+            fy = (float)INK_SCREEN_H - 112.0f + ink_rng_f01(&rng) * 102.0f;
+        } else if (edge == 2u) {
+            fx = 10.0f + ink_rng_f01(&rng) * 102.0f;
+            fy = 116.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_H - 232.0f);
+        } else {
+            fx = (float)INK_SCREEN_W - 112.0f + ink_rng_f01(&rng) * 102.0f;
+            fy = 116.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_H - 232.0f);
+        }
+
+        const float rx = 2.4f + ink_rng_f01(&rng) * 3.4f;
+        const float ry = 2.0f + ink_rng_f01(&rng) * 2.8f;
+        const float ang = ink_rng_f01(&rng) * k_paper_two_pi;
+        const float ca = cosf(ang);
+        const float sa = sinf(ang);
+        const float skew = 0.72f + ink_rng_f01(&rng) * 0.45f;
+        const Vector2 local[4] = {
+            {-rx, -ry * 0.65f},
+            {rx * skew, -ry},
+            {rx, ry * 0.85f},
+            {-rx * 0.75f, ry * skew},
+        };
+        Vector2 poly[4];
+        for (int v = 0; v < 4; ++v) {
+            poly[v] = (Vector2){
+                fx + local[v].x * ca - local[v].y * sa,
+                fy + local[v].x * sa + local[v].y * ca,
+            };
+        }
+        const PaletteId pal = (ink_rng_next(&rng) & 1u) != 0u ? PAL_KIN : PAL_KIN_HOT;
+        const float alpha = 0.22f + ink_rng_f01(&rng) * 0.12f;
+        ink_fill_poly(r, poly, 4, pal_color_alpha(pal, alpha));
+    }
+}
+
 static void bake_act_background(RenderState *r, int act_index)
 {
     if (r->bg_cache.id == 0) {
@@ -261,12 +313,18 @@ static void bake_act_background(RenderState *r, int act_index)
     BeginTextureMode(r->bg_cache);
     ClearBackground(pal_blank());
 
-    if (act_index == 1) {
+    const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
+    if (stage_act == 1) {
         bake_act2_background(r);
-    } else if (act_index >= 2) {
+    } else if (stage_act == 2) {
         bake_act3_background(r);
     } else {
         bake_act1_background(r);
+    }
+
+    const int loop_n = act_index >= 0 ? (act_index / GAME_MAIN_ACT_COUNT) : 0;
+    if (loop_n >= 1) {
+        bake_endless_sunago(r, loop_n, act_index);
     }
 
     EndTextureMode();
@@ -423,7 +481,8 @@ void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index
     }
     render_set_blend(r, BLEND_ALPHA);
 
-    if (act_index == 1) {
+    const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
+    if (stage_act == 1) {
         /* Act 2: 2 Torii gates + 4 rock pillars */
         draw_torii(r, 384.0f, 3010u);
         draw_torii(r, 896.0f, 3020u);
@@ -431,7 +490,7 @@ void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index
         draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3102u);
         draw_rock_pillar(r, (Vector2){340.0f, 530.0f}, 24.0f, 3103u);
         draw_rock_pillar(r, (Vector2){940.0f, 530.0f}, 24.0f, 3104u);
-    } else if (act_index >= 2) {
+    } else if (stage_act == 2) {
         /* Act 3: upper 2 rock pillars */
         draw_rock_pillar(r, (Vector2){340.0f, 190.0f}, 24.0f, 3201u);
         draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3202u);
@@ -453,7 +512,7 @@ void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index
             drawn_pillars++;
         }
     }
-    if (act_index >= 2 && drawn_pillars == 0) {
+    if (stage_act == 2 && drawn_pillars == 0) {
         static const Vector2 k_default_pillars[3] = {
             {640.0f, 130.0f}, {441.0f, 475.0f}, {839.0f, 475.0f}};
         for (int i = 0; i < 3; ++i) {
@@ -471,7 +530,8 @@ void render_paper_draw_weather(RenderState *r, const GameState *g, int act_index
     render_set_blend(r, BLEND_ALPHA);
 
     /* Act 3 diagonal clear-ink rain lines drifting at 60 px/s */
-    if (act_index >= 2) {
+    const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
+    if (stage_act == 2) {
         const float drift = fmodf(r->vfx_time * 60.0f, 160.0f);
         const InkTone rain_tone = {.color = PAL_SUMI_CLEAR, .alpha = 0.30f};
         for (int i = 0; i < 16; ++i) {

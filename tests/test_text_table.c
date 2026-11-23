@@ -30,11 +30,16 @@ static void test_text_table_entries_valid(void)
 
 static void test_text_table_content_mappings(void)
 {
-    /* All 10 enemies & 3 boss epithets */
+    /* All 12 enemies & 3 boss epithets */
+    TEST_ASSERT_EQUAL_INT(12, ENEMY_DEF_COUNT);
     for (int id = 0; id < (int)ENEMY_DEF_COUNT; ++id) {
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_enemy_name((EnemyDefId)id));
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_enemy_intro((EnemyDefId)id));
     }
+    TEST_ASSERT_EQUAL_INT(TEXT_ENEMY_OFUDA_FOX_NAME, text_enemy_name(ENEMY_OFUDA_FOX));
+    TEST_ASSERT_EQUAL_INT(TEXT_ENEMY_OFUDA_FOX_INTRO, text_enemy_intro(ENEMY_OFUDA_FOX));
+    TEST_ASSERT_EQUAL_INT(TEXT_ENEMY_BOSS_RYU_ORB_NAME, text_enemy_name(ENEMY_BOSS_RYU_ORB));
+    TEST_ASSERT_EQUAL_INT(TEXT_ENEMY_BOSS_RYU_ORB_INTRO, text_enemy_intro(ENEMY_BOSS_RYU_ORB));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_enemy_name(ENEMY_DEF_COUNT));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_enemy_intro(ENEMY_DEF_COUNT));
     TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_boss_epithet(ENEMY_BOSS_TENGU));
@@ -43,7 +48,8 @@ static void test_text_table_content_mappings(void)
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_epithet(ENEMY_ARCHER));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_epithet(ENEMY_DEF_COUNT));
 
-    /* All 24 upgrades x Lv1..3 */
+    /* All 28 upgrades x Lv1..3 (verify distinct IDs for P2 upgrades 24..27) */
+    TEST_ASSERT_EQUAL_INT(28, UPG_COUNT);
     for (int id = 0; id < (int)UPG_COUNT; ++id) {
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_upgrade_name((UpgradeId)id));
         for (int lv = 1; lv <= 3; ++lv) {
@@ -52,6 +58,11 @@ static void test_text_table_content_mappings(void)
         TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_upgrade_effect((UpgradeId)id, 0));
         TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_upgrade_effect((UpgradeId)id, 4));
     }
+    TEST_ASSERT_EQUAL_INT(TEXT_UPG_LINGERING_EMBERS_NAME, text_upgrade_name(UPG_LINGERING_EMBERS));
+    TEST_ASSERT_EQUAL_INT(TEXT_UPG_STORM_BRUSH_LV3, text_upgrade_effect(UPG_STORM_BRUSH, 3));
+    TEST_ASSERT_EQUAL_INT(TEXT_UPG_DOUBLE_GALE_LV3, text_upgrade_effect(UPG_DOUBLE_GALE, 3));
+    TEST_ASSERT_EQUAL_INT(TEXT_UPG_INKSTONE_BLESSING_LV3,
+                          text_upgrade_effect(UPG_INKSTONE_BLESSING, 3));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_upgrade_name(UPG_COUNT));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_upgrade_effect(UPG_COUNT, 1));
 
@@ -71,19 +82,45 @@ static void test_text_table_content_mappings(void)
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_short(-1));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_short(3));
 
-    /* All 9 initial relics (name & effect; tradeoffs on the 4 with drawbacks) */
+    /* All 15 relics (name & effect; tradeoffs on the 7 with drawbacks: 4 initial + 3 unlocked) */
+    TEST_ASSERT_EQUAL_INT(15, RELIC_COUNT);
+    int tradeoff_count = 0;
     for (int rid = 0; rid < (int)RELIC_COUNT; ++rid) {
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_name((RelicId)rid));
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_effect((RelicId)rid));
+        if (text_relic_tradeoff((RelicId)rid) != TEXT_NONE) {
+            ++tradeoff_count;
+        }
     }
+    TEST_ASSERT_EQUAL_INT(7, tradeoff_count);
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_name(RELIC_COUNT));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_effect(RELIC_COUNT));
     TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_VERMILION_INKSTONE));
     TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_TENGU_FAN));
     TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_TWIN_BRUSH));
     TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_PACT_OF_FIRE));
+    TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_INKSTORM_SECRET));
+    TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_ENDLESS_BRUSH));
+    TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_relic_tradeoff(RELIC_NIGHT_PARADE_SCROLL));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_THUNDER_DRUM));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_SEAL_OF_TRINITY));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_THUNDERFIRE_GEM));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_ONI_TILE));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_COUNT));
+
+    /* Expanded settings, notices, endless & fallback strings */
+    static const TextId p2_ui_ids[] = {
+        TEXT_SETTINGS_LANG,           TEXT_SETTINGS_LANG_AUTO,     TEXT_SETTINGS_LANG_JA,
+        TEXT_SETTINGS_LANG_EN,        TEXT_SETTINGS_REDUCE_FLASH,  TEXT_SETTINGS_CURSOR_SCALE,
+        TEXT_SETTINGS_RESET_HINTS,    TEXT_SETTINGS_RESET_DEFAULTS, TEXT_SETTINGS_NOTICE_HINTS,
+        TEXT_SETTINGS_NOTICE_DEFAULTS, TEXT_REWARD_CRYSTAL_TITLE,  TEXT_REWARD_REPAIR_EXCESS,
+        TEXT_RESULT_ENDLESS,          TEXT_RESULT_CRYSTAL_ENDLESS, TEXT_RESULT_CRYSTAL_BONUS,
+        TEXT_ENDLESS_ACT_PREFIX,
+    };
+    for (size_t i = 0; i < sizeof p2_ui_ids / sizeof p2_ui_ids[0]; ++i) {
+        TEST_ASSERT_TRUE(text_get(p2_ui_ids[i], true)[0] != '\0');
+        TEST_ASSERT_TRUE(text_get(p2_ui_ids[i], false)[0] != '\0');
+    }
 
     /* Bokuan 4 permanent upgrades & 6 relic unlocks */
     for (int k = 0; k < (int)META_UPG_COUNT; ++k) {
