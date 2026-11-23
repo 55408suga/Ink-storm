@@ -210,7 +210,7 @@ Phase 5-Int（PR #23、Intel Core Ultra 9 185H / WSLg Linux / GCC 13.3.0）の R
      - `FluidState` に固定長値フィールドとして内部キャッシュ配列と `geometry_dirty` フラグを持たせ、変更時のみ再構築する（ヒープポインタを持たないため `tests/bench_fluid.c` の `memcpy(snapshot, f, sizeof *f)` とも完全互換、メモリ増分約 72 KB は総予算 1.3〜1.5 MB の範囲内、`fluid_hash` / `fluid_reset` / `fluid_validate_finite` 契約は不変）。`solid` 動的切替後にキャッシュが確実に再構築される回帰テストを `tests/test_fluid.c` へ追加する。
    - **候補 B：通常値域での不要な `double` 変換・分岐削減（`src/fluid/solver.c`）**:
      - 現行の `interpolate()`・`confine()`・`project()` は `FLT_MAX` 付近のオーバーフロー防止のために毎セル `double` 変換と `limit_magnitude(..., FLT_MAX)` を通している。
-     - 通常のゲーム設定（例：`f->cfg.max_vel <= 1e30f` かつ `f->cfg.max_dye <= 1e30f`、既定は `125.0f` / `2.5f`）では `float` 積和でオーバーフローし得ないため、`fluid_sample()` と極端な設定値（`> 1e30f`）のみ既存 `double` 経路を残し、通常シミュレーション時の `advect_velocity` / `advect_scalars` / `confine` / `project` を軽量 `float` 経路へ分離する（`test_fluid.c` の `FLT_MAX` 境界テストを含む全テストが 100% 通ること）。
+     - 通常のゲーム設定（例：`f->cfg.max_vel <= 1e15f` かつ `f->cfg.max_dye <= 1e15f`、既定は `125.0f` / `2.5f`）では `confine()` 内の二乗和を含めても `float` でオーバーフローし得ない（`(1e15)^2 = 1e30 << FLT_MAX`）ため、`fluid_sample()` と極端な設定値（`> 1e15f`）のみ既存 `double` 経路を残し、通常シミュレーション時の `advect_velocity` / `advect_scalars` / `confine` / `project` を軽量 `float` 経路へ分離する（`test_fluid.c` の `FLT_MAX` 境界テストを含む全テストが 100% 通ること）。
    - **候補 C：ループ不変条件の巻き上げ・`restrict`・内側非 `near_wall` 高速パス**:
      - `vel_damp`・`max_vel`・`dye_damp[ch]` をローカル変数へ巻き上げ、`advect_scalars` の 3 チャンネルを同一 `Stencil` で連続処理する際の `restrict` 修飾等で GCC `-O2` の自動ベクトル化・コード生成を改善する。
 3. **改善判断基準と記録**:

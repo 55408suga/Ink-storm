@@ -173,9 +173,10 @@ rm -rf "$tmp_dist"
            -vf 'scale=640:-1,tile=3x2:padding=6:margin=6' -frames:v 1 "build/snaps/$d/contact_sheet.png"
    done
 
-   # アセット丸ごと欠損起動確認（実行ファイル単体コピー + --no-save）
+   # アセット丸ごと欠損起動確認（実行ファイル単体コピー + --no-save、--snap で ASCII 視認性検証画像を保存）
    tmp_noassets=$(mktemp -d)
    cp ./build/release/inkstorm "$tmp_noassets/inkstorm"
+   nix develop -c "$tmp_noassets/inkstorm" --no-save --demo --snap "$(pwd)/build/snaps/final_noassets"
    nix develop -c "$tmp_noassets/inkstorm" --no-save --demo --smoke-frames 30
    rm -rf "$tmp_noassets"
    ```
