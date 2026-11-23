@@ -97,8 +97,7 @@ void boss_tengu_step(GameState *g, EntityId id)
         boss->gale_dx = dir_x;
         boss->gale_dy = dir_y;
 
-        const float cd_mul =
-            (boss->phase_idx >= 1 ? 0.8f : 1.0f) * enemy_endless_boss_cd_mul(g);
+        const float cd_mul = (boss->phase_idx >= 1 ? 0.8f : 1.0f) * enemy_endless_boss_cd_mul(g);
         if (next_pat == 0) {
             /* Pattern A: Crimson Gale Sweep + Twin Fireballs. */
             boss->gale_t = 0.85f;

@@ -88,8 +88,8 @@ static void advance_until_phase(GameState *a, GameState *b, RunPhase target, int
     TEST_ASSERT_EQUAL_INT(target, b->phase);
 }
 
-static void run_act_deterministically(GameState *a, GameState *b, int32_t act_idx,
-                                      bool endless_act, RunTelemetry *tel)
+static void run_act_deterministically(GameState *a, GameState *b, int32_t act_idx, bool endless_act,
+                                      RunTelemetry *tel)
 {
     /* Act 1 transition runs 120 ticks from game_init; subsequent acts run 1 tick inside the reward
      * command plus 119 subsequent ticks (120 ticks total). */
@@ -173,10 +173,9 @@ static void run_act_deterministically(GameState *a, GameState *b, int32_t act_id
     if (endless_act || act_idx + 1 < GAME_MAIN_ACT_COUNT) {
         /* Boss defeat -> Shrine HP +3 -> Relic / Fallback -> next Act transition. */
         advance_until_phase(a, b, RUN_PHASE_REWARD, 120, tel);
-        const GameCommand boss_reward =
-            (a->run.reward.kind == REWARD_KIND_RELIC)
-                ? (GameCommand){.type = CMD_PICK_REWARD, .arg = 0}
-                : game_autoplay_command(a);
+        const GameCommand boss_reward = (a->run.reward.kind == REWARD_KIND_RELIC)
+                                            ? (GameCommand){.type = CMD_PICK_REWARD, .arg = 0}
+                                            : game_autoplay_command(a);
         step_pair_and_assert(a, b, &boss_reward, tel);
         TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, a->phase);
     } else {

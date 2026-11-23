@@ -806,11 +806,17 @@ static void test_boss_nue_and_boss_ryu(void)
     ecs_flush_destroy(&g->ecs);
     TEST_ASSERT_EQUAL_INT32(shrine_hp0 - 1, g->shrines[0].hp);
 
-    /* Destroy Orb 0 (Fire) -> EV_BOSS_PART_BREAK(value=0), mask=0x1, attack CD scales x0.85. */
+    /* Destroy active Orb 0 (Fire) late in its telegraph -> EV_BOSS_PART_BREAK(value=0), mask=0x1,
+     * replacement orb gets full >= 0.65s warning (fire_cd reset >= 0.75s), then CD scales x0.85. */
+    g->ryu_body.active_orb_slot = 0;
+    ren->fire_cd = 0.05f;
     g->event_count = 0;
     (void)combat_apply_damage(g, orbs[0], 500, DMG_PHYSICAL, 0.0f, 0.0f);
     ecs_flush_destroy(&g->ecs);
     TEST_ASSERT_EQUAL_UINT8(0x1u, g->ryu_body.orb_broken_mask);
+    TEST_ASSERT_EQUAL_INT32(1, g->ryu_body.active_orb_slot);
+    TEST_ASSERT_TRUE(ren->fire_cd >= 0.75f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, game_boss(g, orbs[1])->telegraph);
     bool saw_break0 = false;
     for (int32_t e = 0; e < g->event_count; ++e) {
         if (g->events[e].type == EV_BOSS_PART_BREAK && g->events[e].value == 0) {
@@ -818,6 +824,10 @@ static void test_boss_nue_and_boss_ryu(void)
         }
     }
     TEST_ASSERT_TRUE(saw_break0);
+    /* Next tick must not immediately fire from replacement orb; it counts down full warning. */
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_EQUAL_INT32(1, g->ryu_body.active_orb_slot);
+    TEST_ASSERT_TRUE(ren->fire_cd > 0.65f);
     ren->fire_cd = 0.01f;
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f, ren->fire_cd);

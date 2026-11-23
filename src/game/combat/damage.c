@@ -156,13 +156,23 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
         } else if (g->ryu_body.active_orb_slot == part_id) {
             g->ryu_body.active_orb_slot = -1;
             for (int32_t off = 1; off <= GAME_RYU_ORB_COUNT; ++off) {
-                const int32_t slot =
-                    ((part_id >= 0 ? part_id : 0) + off) % GAME_RYU_ORB_COUNT;
+                const int32_t slot = ((part_id >= 0 ? part_id : 0) + off) % GAME_RYU_ORB_COUNT;
                 if ((g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) == 0u &&
                     ecs_is_alive(&g->ecs, g->ryu_body.orb_ids[slot])) {
                     g->ryu_body.active_orb_slot = slot;
+                    BossComp *next_oboss = game_boss_mut(g, g->ryu_body.orb_ids[slot]);
+                    if (next_oboss != NULL) {
+                        next_oboss->telegraph = 0.0f;
+                    }
                     break;
                 }
+            }
+            /* Ensure the replacement orb always gets its full 0.65s warning (+0.10s lead-in). */
+            const EntityId head =
+                parent_id.index != ECS_INVALID_INDEX ? parent_id : g->ryu_body.head_id;
+            EnemyComp *head_en = (head.index != ECS_INVALID_INDEX) ? game_enemy_mut(g, head) : NULL;
+            if (head_en != NULL && head_en->fire_cd < 0.75f) {
+                head_en->fire_cd = 0.75f;
             }
         }
     }

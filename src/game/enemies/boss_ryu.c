@@ -16,8 +16,7 @@ static int32_t ryu_popcount3(uint8_t mask)
 
 static int32_t ryu_next_alive_orb(const GameState *g, int32_t start_slot)
 {
-    const int32_t base =
-        (start_slot >= 0 && start_slot < GAME_RYU_ORB_COUNT) ? start_slot : 0;
+    const int32_t base = (start_slot >= 0 && start_slot < GAME_RYU_ORB_COUNT) ? start_slot : 0;
     for (int32_t off = 0; off < GAME_RYU_ORB_COUNT; ++off) {
         const int32_t slot = (base + off) % GAME_RYU_ORB_COUNT;
         if ((g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) != 0u) {
@@ -50,8 +49,7 @@ static void ryu_sample_arc_pos(const RyuBodyState *body, float head_x, float hea
     const int32_t count =
         body->trail_count > GAME_RYU_TRAIL_CAP ? GAME_RYU_TRAIL_CAP : body->trail_count;
     for (int32_t k = 0; k < count; ++k) {
-        const int32_t idx =
-            (body->trail_head - k + GAME_RYU_TRAIL_CAP) % GAME_RYU_TRAIL_CAP;
+        const int32_t idx = (body->trail_head - k + GAME_RYU_TRAIL_CAP) % GAME_RYU_TRAIL_CAP;
         const GameVec2 cur = body->trail[idx];
         const float dx = cur.x - prev.x;
         const float dy = cur.y - prev.y;
@@ -96,8 +94,8 @@ static void spawn_lightning_strike_gimmick(GameState *g, float x, float y)
     }
 }
 
-static void enter_awakening_phase(GameState *g, EntityId id, const TransformComp *tr,
-                                  HealthComp *hp, BossComp *boss)
+static void enter_awakening_phase(GameState *g, const TransformComp *tr, HealthComp *hp,
+                                  BossComp *boss)
 {
     boss->phase_idx = 1;
     hp->invuln_t = 1.5f;
@@ -108,7 +106,6 @@ static void enter_awakening_phase(GameState *g, EntityId id, const TransformComp
     g->ryu_body.active_orb_slot = -1;
     static const float k_phase_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
     fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 50.0f, k_phase_dye);
-    (void)id;
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_BOSS_PHASE,
                                  .x = tr->x,
@@ -259,7 +256,7 @@ void boss_ryu_step(GameState *g, EntityId id)
 
     /* Safety phase sync in case orbs were cleared or HP was adjusted externally. */
     if (boss->phase_idx == 0 && (g->ryu_body.orb_broken_mask & 0x7u) == 0x7u) {
-        enter_awakening_phase(g, id, tr, hp, boss);
+        enter_awakening_phase(g, tr, hp, boss);
     } else if (boss->phase_idx == 1 && hp->hp > 0 && hp->hp * 5 <= hp->max_hp * 2) {
         enter_ascension_phase(g, tr, hp, boss);
     }
@@ -386,8 +383,7 @@ void boss_ryu_step(GameState *g, EntityId id)
         boss->telegraph = 0.0f;
         for (int32_t s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
             const EntityId oid = g->ryu_body.orb_ids[s];
-            BossComp *oboss =
-                (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
+            BossComp *oboss = (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
             if (oboss != NULL) {
                 oboss->telegraph = 0.0f;
             }
@@ -416,8 +412,7 @@ void boss_ryu_step(GameState *g, EntityId id)
                 continue;
             }
             const EntityId oid = g->ryu_body.orb_ids[s];
-            BossComp *oboss =
-                (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
+            BossComp *oboss = (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
             if (oboss != NULL) {
                 oboss->telegraph = 0.0f;
             }
