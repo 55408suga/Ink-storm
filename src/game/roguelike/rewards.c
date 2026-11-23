@@ -279,13 +279,36 @@ bool rewards_reroll(GameState *g)
     return true;
 }
 
+static void add_bonus_crystals(GameState *g, int64_t gain)
+{
+    if (gain <= 0) {
+        return;
+    }
+    const int64_t cur = g->run.bonus_crystals > 0 ? (int64_t)g->run.bonus_crystals : 0;
+    const int64_t next =
+        gain > (int64_t)META_MAX_CRYSTALS - cur ? (int64_t)META_MAX_CRYSTALS : cur + gain;
+    g->run.bonus_crystals = (int32_t)next;
+}
+
 bool rewards_repair_shrine(GameState *g)
 {
     if (g == NULL || g->phase != RUN_PHASE_REWARD || !g->run.reward.repair_available) {
         return false;
     }
-    if (g->shrine_count > 0 && g->shrines[0].hp < g->shrines[0].max_hp) {
-        ++g->shrines[0].hp;
+    const int32_t amount = g->run.reward.repair_amount > 0 ? g->run.reward.repair_amount : 1;
+    if (g->shrine_count > 0) {
+        ShrineState *sh = &g->shrines[0];
+        int32_t missing = sh->max_hp - sh->hp;
+        if (missing < 0) {
+            missing = 0;
+        }
+        const int32_t healed = amount < missing ? amount : missing;
+        const int32_t overflow = amount - healed;
+        sh->hp += healed;
+        if (g->internal.wave_clear_is_boss && g->run.reward.kind == REWARD_KIND_FALLBACK &&
+            overflow > 0) {
+            add_bonus_crystals(g, (int64_t)overflow * 15);
+        }
     }
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_REWARD_PICK,
@@ -311,12 +334,11 @@ bool rewards_pick_endless_crystal(GameState *g)
         g->run.reward.crystal_reward <= 0) {
         return false;
     }
-    const int32_t amt = g->run.reward.crystal_reward;
-    const int64_t next = (int64_t)g->run.bonus_crystals + amt;
-    g->run.bonus_crystals = next > META_MAX_CRYSTALS ? META_MAX_CRYSTALS : (int32_t)next;
+    const int32_t gain = g->run.reward.crystal_reward;
+    add_bonus_crystals(g, (int64_t)gain);
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_REWARD_PICK,
-                                 .value = amt,
+                                 .value = gain,
                                  .flags = EVF_REWARD_CRYSTAL,
                              });
     if (g->internal.wave_clear_is_boss) {

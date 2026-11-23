@@ -176,6 +176,58 @@ static void wind_return_on_tick(const TickHookArgs *a)
     }
 }
 
+static void seal_of_trinity_apply_add(RunModifiers *mods)
+{
+    mods->cataclysm_thresh = 0.22f;
+    mods->cataclysm_cd_base = 1.2f;
+}
+
+static void inkstorm_secret_apply_add(RunModifiers *mods)
+{
+    if (mods->surge_min_chain < 3) {
+        mods->surge_min_chain = 3;
+    }
+}
+
+static void inkstorm_secret_apply_mul(RunModifiers *mods) { mods->surge_reaction_dmg_mul *= 1.5f; }
+
+static void thunderfire_gem_apply_add(RunModifiers *mods) { mods->thunderfire_gem = true; }
+
+static void thunderfire_gem_on_tick(const TickHookArgs *a)
+{
+    GameState *g = a->g;
+    if (g->internal.thunderfire_gem_cd > 0.0f) {
+        g->internal.thunderfire_gem_cd -= a->dt;
+        if (g->internal.thunderfire_gem_cd <= 1e-4f) {
+            g->internal.thunderfire_gem_cd = 0.0f;
+        }
+    }
+}
+
+static void thunderfire_gem_on_reaction(const ReactionHookArgs *a)
+{
+    GameState *g = a->g;
+    if (a->kind == REACT_THUNDERBURST && g->internal.thunderfire_gem_cd <= 0.0f) {
+        (void)combat_spawn_orb(g, a->x, a->y);
+        g->internal.thunderfire_gem_cd = 1.5f;
+    }
+}
+
+static void oni_tile_apply_add(RunModifiers *mods) { mods->oni_tile = true; }
+
+static void endless_brush_apply_add(RunModifiers *mods) { mods->ink_max_add -= 40.0f; }
+
+static void endless_brush_apply_mul(RunModifiers *mods) { mods->ink_regen_mul *= 2.5f; }
+
+static void night_parade_scroll_apply_add(RunModifiers *mods)
+{
+    mods->night_parade_scroll = true;
+    mods->bonus_kill_orbs += 1;
+    mods->max_alive_add += 2;
+}
+
+static void night_parade_scroll_apply_mul(RunModifiers *mods) { mods->spawn_interval_mul *= 0.75f; }
+
 static const RelicDef k_relic_defs[RELIC_COUNT] = {
     [RELIC_VERMILION_INKSTONE] =
         {
@@ -228,12 +280,41 @@ static const RelicDef k_relic_defs[RELIC_COUNT] = {
             .apply_mods_add = wind_return_apply_add,
             .on_tick = wind_return_on_tick,
         },
-    [RELIC_SEAL_OF_TRINITY] = {.id = RELIC_SEAL_OF_TRINITY},
-    [RELIC_INKSTORM_SECRET] = {.id = RELIC_INKSTORM_SECRET},
-    [RELIC_THUNDERFIRE_GEM] = {.id = RELIC_THUNDERFIRE_GEM},
-    [RELIC_ONI_TILE] = {.id = RELIC_ONI_TILE},
-    [RELIC_ENDLESS_BRUSH] = {.id = RELIC_ENDLESS_BRUSH},
-    [RELIC_NIGHT_PARADE_SCROLL] = {.id = RELIC_NIGHT_PARADE_SCROLL},
+    [RELIC_SEAL_OF_TRINITY] =
+        {
+            .id = RELIC_SEAL_OF_TRINITY,
+            .apply_mods_add = seal_of_trinity_apply_add,
+        },
+    [RELIC_INKSTORM_SECRET] =
+        {
+            .id = RELIC_INKSTORM_SECRET,
+            .apply_mods_add = inkstorm_secret_apply_add,
+            .apply_mods_mul = inkstorm_secret_apply_mul,
+        },
+    [RELIC_THUNDERFIRE_GEM] =
+        {
+            .id = RELIC_THUNDERFIRE_GEM,
+            .apply_mods_add = thunderfire_gem_apply_add,
+            .on_reaction = thunderfire_gem_on_reaction,
+            .on_tick = thunderfire_gem_on_tick,
+        },
+    [RELIC_ONI_TILE] =
+        {
+            .id = RELIC_ONI_TILE,
+            .apply_mods_add = oni_tile_apply_add,
+        },
+    [RELIC_ENDLESS_BRUSH] =
+        {
+            .id = RELIC_ENDLESS_BRUSH,
+            .apply_mods_add = endless_brush_apply_add,
+            .apply_mods_mul = endless_brush_apply_mul,
+        },
+    [RELIC_NIGHT_PARADE_SCROLL] =
+        {
+            .id = RELIC_NIGHT_PARADE_SCROLL,
+            .apply_mods_add = night_parade_scroll_apply_add,
+            .apply_mods_mul = night_parade_scroll_apply_mul,
+        },
 };
 
 static int32_t clamped_relic_count(const GameState *g)

@@ -20,7 +20,8 @@ static void decay_timer(float *t)
 static void regen_ink_idle(GameState *g)
 {
     g->player.idle_t += INK_FIXED_DT;
-    const float base_rate = g->player.idle_t > 0.32f ? 26.0f : 15.0f;
+    const float base_rate =
+        (g->internal.mods.ink_regen_no_delay || g->player.idle_t > 0.32f) ? 26.0f : 15.0f;
     const float rate = base_rate * g->internal.mods.ink_regen_mul;
     g->player.ink = ink_clampf(g->player.ink + rate * INK_FIXED_DT, 0.0f, g->player.ink_max);
     g->player.dry = g->player.ink < 20.0f;
@@ -273,7 +274,7 @@ static void cast_gale(GameState *g)
     const RunModifiers *mods = &g->internal.mods;
     const float base_cost = 16.0f + mods->gale_cost_add;
     const float cost = g->player.surge_t > 0.0f ? base_cost * 0.5f : base_cost;
-    if (g->player.gale_cd > 0.0f || g->player.ink < cost) {
+    if (g->player.gale_charges <= 0 || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
                                      .x = g->player.cursor_x,
@@ -286,9 +287,9 @@ static void cast_gale(GameState *g)
 
     g->player.ink -= cost;
     g->player.dry = g->player.ink < 20.0f;
-    g->player.gale_cd = mods->gale_cd;
-    if (g->player.gale_charges > 0) {
-        --g->player.gale_charges;
+    --g->player.gale_charges;
+    if (g->player.gale_cd <= 0.0f) {
+        g->player.gale_cd = mods->gale_cd;
     }
 
     float gx = g->player.aim_x;
@@ -323,12 +324,23 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
     const RunModifiers *mods = &g->internal.mods;
 
     decay_timer(&g->player.cyclone_cd);
-    decay_timer(&g->player.gale_cd);
     if (g->player.gale_max_charges <= 0) {
         g->player.gale_max_charges = mods->gale_max_charges > 0 ? mods->gale_max_charges : 1;
     }
-    if (g->player.gale_cd <= 0.0f && g->player.gale_charges < g->player.gale_max_charges) {
-        g->player.gale_charges = g->player.gale_max_charges;
+    if (g->player.gale_charges < g->player.gale_max_charges) {
+        if (g->player.gale_cd > 0.0f) {
+            g->player.gale_cd -= INK_FIXED_DT;
+        }
+        if (g->player.gale_cd <= 1e-4f) {
+            ++g->player.gale_charges;
+            if (g->player.gale_charges < g->player.gale_max_charges) {
+                g->player.gale_cd = mods->gale_cd;
+            } else {
+                g->player.gale_cd = 0.0f;
+            }
+        }
+    } else if (g->player.gale_cd > 0.0f) {
+        decay_timer(&g->player.gale_cd);
     }
     decay_timer(&g->player.surge_t);
     if (g->run.chain_t > 0.0f) {
@@ -410,7 +422,11 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                     ink_clampf((float)(mdy * 0.58 * (double)force_scale), -46.0f, 46.0f);
                 const float ink_amt = ink_clampf(0.26f + mdist * 0.011f, 0.26f, 0.65f) /
                                       (float)steps * 2.35f * ink_scale;
-                const float dye[FLUID_MAX_CHANNELS] = {ink_amt, 0.0f, 0.0f, 0.0f};
+                const float storm_amt =
+                    (mods->surge_stroke_storm && g->player.surge_t > 0.0f && !dry)
+                        ? (ink_clampf(0.18f + mdist * 0.008f, 0.18f, 0.45f) / (float)steps * 2.1f)
+                        : 0.0f;
+                const float dye[FLUID_MAX_CHANNELS] = {ink_amt, 0.0f, storm_amt, 0.0f};
                 const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
                 const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
 
