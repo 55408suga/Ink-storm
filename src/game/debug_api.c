@@ -22,10 +22,11 @@ EntityId game_debug_spawn_orb(GameState *g, float x, float y) { return combat_sp
 
 void game_debug_start_act(GameState *g, int32_t act_index)
 {
-    if (g == NULL || act_index < 0 || act_index >= GAME_MAIN_ACT_COUNT) {
+    if (g == NULL || act_index < 0 || act_index >= META_MAX_BEST_ACT) {
         return;
     }
     g->run.act_index = act_index;
+    g->run.endless_loop = act_index / GAME_MAIN_ACT_COUNT;
     g->run.wave_index = 0;
     g->internal.act_prepared = false;
     waves_prepare_act(g);
@@ -42,6 +43,20 @@ void game_debug_force_wave_clear(GameState *g)
     }
     if (g->run.wave_index == GAME_BOSS_WAVE_INDEX) {
         if (g->run.boss_id.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, g->run.boss_id)) {
+            if (g->ryu_body.head_id.index == g->run.boss_id.index &&
+                g->ryu_body.head_id.gen == g->run.boss_id.gen) {
+                for (int32_t k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
+                    const EntityId orb = g->ryu_body.orb_ids[k];
+                    if (orb.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, orb)) {
+                        ecs_destroy(&g->ecs, orb);
+                    }
+                }
+                g->ryu_body.orb_broken_mask = 0x7u;
+                BossComp *boss = game_boss_mut(g, g->run.boss_id);
+                if (boss != NULL && boss->phase_idx == 0) {
+                    boss->phase_idx = 1;
+                }
+            }
             HealthComp *hp = game_health_mut(g, g->run.boss_id);
             if (hp != NULL) {
                 hp->invuln_t = 0.0f;

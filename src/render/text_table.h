@@ -324,6 +324,7 @@ typedef enum {
     TEXT_SEAL_SANGEN,
     TEXT_SEAL_INKSTORM,
     TEXT_SHOWCASE_HEADER,
+    TEXT_P2_STUB,
     TEXT_COUNT
 } TextId;
 

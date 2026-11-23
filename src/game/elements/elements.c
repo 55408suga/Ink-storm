@@ -216,12 +216,12 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     const uint32_t hw = g->ecs.high_water;
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index == ECS_INVALID_INDEX) {
+        if (id.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, id)) {
             continue;
         }
         const TransformComp *tr = game_transform(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr == NULL || en == NULL || tr->dissolving) {
+        if (tr == NULL || en == NULL) {
             continue;
         }
         const float dx = tr->x - cx_px;
@@ -244,8 +244,8 @@ static int32_t elements_stage2_cataclysm(GameState *g)
             }
         }
         const uint32_t elite_flags = en->elite_flags;
-        (void)combat_apply_damage(g, id, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, nx * 620.0f,
-                                  ny * 620.0f);
+        (void)combat_apply_damage(g, id, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM | DMG_REACTION,
+                                  nx * 620.0f, ny * 620.0f);
         if (ecs_is_alive(&g->ecs, id) && (elite_flags & ELITE_INK_REPEL) == 0) {
             StatusComp *st_after = game_status_mut(g, id);
             if (st_after != NULL) {
@@ -266,12 +266,12 @@ static int32_t elements_stage2_cataclysm(GameState *g)
 
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id)) {
+        if (id.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, id)) {
             continue;
         }
         const TransformComp *tr = game_transform(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr == NULL || en == NULL || tr->dissolving) {
+        if (tr == NULL || en == NULL) {
             continue;
         }
         const float dx = tr->x - cx_px;
@@ -296,7 +296,7 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     }
 
     for (int32_t k = 0; k < top_n; ++k) {
-        if (!ecs_is_alive(&g->ecs, top[k].id)) {
+        if (!game_enemy_is_targetable(g, top[k].id)) {
             continue;
         }
         (void)game_push_event(g, (GameEvent){
@@ -308,7 +308,8 @@ static int32_t elements_stage2_cataclysm(GameState *g)
                                      .value = 0,
                                      .flags = 0,
                                  });
-        (void)combat_apply_damage(g, top[k].id, 30, DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
+        (void)combat_apply_damage(g, top[k].id, 30, DMG_STORM | DMG_CATACLYSM | DMG_REACTION, 0.0f,
+                                  0.0f);
     }
 
     const float dye_rad_px = 12.0f * FLUID_CELL_PX;
@@ -464,12 +465,12 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
 
         for (uint32_t i = 0; i < hw; ++i) {
             const EntityId id = ecs_entity_at(&g->ecs, i);
-            if (id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, id)) {
+            if (id.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, id)) {
                 continue;
             }
             const TransformComp *tr = game_transform(g, id);
             const EnemyComp *en = game_enemy(g, id);
-            if (tr == NULL || en == NULL || tr->dissolving) {
+            if (tr == NULL || en == NULL) {
                 continue;
             }
             const float dx = tr->x - cx_px;
@@ -491,7 +492,8 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
                     st->knockback_t = 1.0f;
                 }
             }
-            (void)combat_apply_damage(g, id, 30, DMG_FIRE | DMG_STORM, nx * 520.0f, ny * 520.0f);
+            (void)combat_apply_damage(g, id, 30, DMG_FIRE | DMG_STORM | DMG_REACTION, nx * 520.0f,
+                                      ny * 520.0f);
         }
 
         int gx0 = (int)floorf((cx_px - dye_rad_px) / FLUID_CELL_PX);
@@ -581,6 +583,10 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         }
         decay_cd(&hp->invuln_t);
 
+        if (!game_enemy_is_targetable(g, id)) {
+            continue;
+        }
+
         float fu = 0.0f;
         float fv = 0.0f;
         float dye[FLUID_MAX_CHANNELS] = {0};
@@ -599,11 +605,13 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         }
         if (fire > 0.42f) {
             st->burn_acc += INK_FIXED_DT;
-            const float interval = game_is_boss_enemy(en->def_id) ? 0.55f : 0.36f;
+            const float interval =
+                (game_is_boss_enemy(en->def_id) || game_is_boss_part(en->def_id)) ? 0.55f : 0.36f;
             if (st->burn_acc + 1e-4f >= interval) {
                 st->burn_acc = 0.0f;
-                (void)combat_apply_damage_f(g, id, g->internal.mods.burn_base_dmg, DMG_FIRE,
-                                            fu * FLUID_CELL_PX * 0.2f, fv * FLUID_CELL_PX * 0.2f);
+                (void)combat_apply_damage_f(g, id, g->internal.mods.burn_base_dmg,
+                                            DMG_FIRE | DMG_REACTION, fu * FLUID_CELL_PX * 0.2f,
+                                            fv * FLUID_CELL_PX * 0.2f);
             }
         } else if (st->burn_acc > 0.0f) {
             st->burn_acc -= INK_FIXED_DT * 0.5f;
@@ -625,14 +633,13 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
 
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index == ECS_INVALID_INDEX) {
+        if (id.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, id)) {
             continue;
         }
         const TransformComp *tr = game_transform(g, id);
         const StatusComp *st = game_status(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr == NULL || st == NULL || en == NULL || tr->dissolving ||
-            (en->elite_flags & ELITE_STORMPROOF) != 0) {
+        if (tr == NULL || st == NULL || en == NULL || (en->elite_flags & ELITE_STORMPROOF) != 0) {
             continue;
         }
 
@@ -704,7 +711,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                                      .value = 0,
                                      .flags = 0,
                                  });
-        (void)combat_apply_damage_f(g, id, dmg, DMG_STORM, 0.0f, 0.0f);
+        (void)combat_apply_damage_f(g, id, dmg, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
 
         int32_t max_hops = 2 + g->internal.mods.chain_hops_add;
         if (max_hops > 15) {
@@ -727,13 +734,13 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                     continue;
                 }
                 const EntityId cand = ecs_entity_at(&g->ecs, j);
-                if (cand.index == ECS_INVALID_INDEX) {
+                if (cand.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, cand)) {
                     continue;
                 }
                 const TransformComp *ctr = game_transform(g, cand);
                 const StatusComp *cst = game_status(g, cand);
                 const EnemyComp *cen = game_enemy(g, cand);
-                if (ctr == NULL || cst == NULL || cen == NULL || ctr->dissolving ||
+                if (ctr == NULL || cst == NULL || cen == NULL ||
                     (cen->elite_flags & ELITE_STORMPROOF) != 0) {
                     continue;
                 }
@@ -763,7 +770,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                                          .value = hop,
                                          .flags = 0,
                                      });
-            (void)combat_apply_damage_f(g, next_id, dmg, DMG_STORM, 0.0f, 0.0f);
+            (void)combat_apply_damage_f(g, next_id, dmg, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
             cur_x = next_x;
             cur_y = next_y;
         }
@@ -793,7 +800,9 @@ static void elements_stage5_projectiles(GameState *g)
         const float fire = sanitize_sample(dye[1]);
         const float storm = sanitize_sample(dye[2]);
 
-        if (!proj->burning && fire > 0.36f && (proj->deflected || ink > 0.16f)) {
+        const bool can_ignite_proj = !(proj->kind == PROJ_HOMING_OFUDA && !proj->deflected);
+        if (can_ignite_proj && !proj->burning && fire > 0.36f &&
+            (proj->deflected || ink > 0.16f)) {
             proj->burning = true;
             proj->pierce = g->internal.mods.burning_proj_pierce;
             vel->vx *= 1.25f;

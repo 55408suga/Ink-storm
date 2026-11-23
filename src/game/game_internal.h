@@ -67,6 +67,22 @@ typedef struct {
     bool ink_dyed_shrine;
     bool rosary_swirl;
     bool wind_return;
+
+    /* Phase 5 additions (all defaults match P1 behavior identically) */
+    int32_t chain_storm_interval;
+    float chain_storm_mul;
+    bool surge_stroke_storm;
+    int32_t gale_max_charges;
+    float cataclysm_thresh;
+    float cataclysm_cd_base;
+    float surge_reaction_dmg_mul;
+    int32_t surge_min_chain;
+    bool thunderfire_gem;
+    bool oni_tile;
+    bool night_parade_scroll;
+    int32_t bonus_kill_orbs;
+    float spawn_interval_mul;
+    int32_t max_alive_add;
 } RunModifiers;
 
 typedef struct {
@@ -114,6 +130,9 @@ typedef struct {
     float nue_trail_y[2][2];
     float nue_trail_t[2];
     float ryu_coil_t;
+
+    /* Phase 5-A fields */
+    float thunderfire_gem_cd;
 } GameInternal;
 
 #endif

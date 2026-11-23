@@ -50,6 +50,7 @@ typedef enum {
     EV_ENEMY_INTRO,
     EV_REWARD_REROLL,
     EV_SKILL_DENIED,
+    EV_BOSS_PART_BREAK,
     EV_TYPE_COUNT
 } GameEventType;
 
@@ -59,6 +60,7 @@ typedef enum {
 #define EVF_RUN_ABORTED (UINT32_C(1) << 11)
 #define EVF_REWARD_REPAIR (UINT32_C(1) << 12)
 #define EVF_REWARD_RELIC (UINT32_C(1) << 13)
+#define EVF_REWARD_CRYSTAL (UINT32_C(1) << 14)
 
 typedef struct {
     GameEventType type;

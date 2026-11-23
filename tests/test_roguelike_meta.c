@@ -17,7 +17,10 @@ void setUp(void) {}
 
 void tearDown(void) {}
 
-static const MetaState defaults = {.version = 1, .settings = {80, 70, 85, 100, true, true}};
+static const MetaState defaults = {
+    .version = 1,
+    .settings = {80, 70, 85, 100, true, true, UI_LANG_AUTO, false, 100},
+};
 
 static const MetaState saved = {
     .version = 1,
@@ -29,7 +32,7 @@ static const MetaState saved = {
     .runs_played = 9,
     .clears = 2,
     .seen_hints_mask = UINT32_C(0xdeadcafe),
-    .settings = {11, 22, 33, 50, false, false},
+    .settings = {11, 22, 33, 50, false, false, UI_LANG_EN, true, 125},
 };
 
 static void assert_settings(SettingsState expected, SettingsState actual)
@@ -40,6 +43,9 @@ static void assert_settings(SettingsState expected, SettingsState actual)
     TEST_ASSERT_EQUAL_UINT8(expected.shake_scale, actual.shake_scale);
     TEST_ASSERT_EQUAL(expected.post_shader_on, actual.post_shader_on);
     TEST_ASSERT_EQUAL(expected.hints_on, actual.hints_on);
+    TEST_ASSERT_EQUAL_UINT8(expected.ui_lang, actual.ui_lang);
+    TEST_ASSERT_EQUAL(expected.reduce_flash, actual.reduce_flash);
+    TEST_ASSERT_EQUAL_UINT8(expected.cursor_scale, actual.cursor_scale);
 }
 
 static void assert_meta(const MetaState *expected, const MetaState *actual)
@@ -345,7 +351,7 @@ static void test_serialized_save_matches_architecture_example(void)
                                .runs_played = 5,
                                .clears = 1,
                                .seen_hints_mask = 15,
-                               .settings = {80, 70, 85, 100, true, true}};
+                               .settings = {80, 70, 85, 100, true, true, UI_LANG_AUTO, false, 100}};
     const char golden[] = "version=1\n"
                           "ink_crystals=120\n"
                           "upg_shrine_hp=1\n"
@@ -363,7 +369,10 @@ static void test_serialized_save_matches_architecture_example(void)
                           "opt_se_vol=85\n"
                           "opt_shake_scale=100\n"
                           "opt_post_shader=1\n"
-                          "opt_hints=1\n";
+                          "opt_hints=1\n"
+                          "opt_lang=0\n"
+                          "opt_reduce_flash=0\n"
+                          "opt_cursor_scale=100\n";
     char buf[META_SERIALIZE_CAP];
     const size_t length = sizeof golden - 1;
     TEST_ASSERT_EQUAL_size_t(length, meta_serialize(&example, buf, sizeof buf));
@@ -376,6 +385,48 @@ static void test_serialized_save_matches_architecture_example(void)
     TEST_ASSERT_EQUAL_size_t(length, meta_serialize(&example, truncated, sizeof truncated));
     TEST_ASSERT_EQUAL_CHAR_ARRAY(golden, truncated, sizeof truncated - 1);
     TEST_ASSERT_EQUAL_CHAR('\0', truncated[sizeof truncated - 1]);
+
+    /* P1 save backward compatibility: omitting the 3 new opt_* keys restores P2 defaults. */
+    const char p1_save[] = "version=1\n"
+                           "ink_crystals=120\n"
+                           "upg_shrine_hp=1\n"
+                           "upg_ink_max=2\n"
+                           "upg_rerolls=1\n"
+                           "upg_ink_regen=0\n"
+                           "unlocked_relic_mask=0x0000000000000003\n"
+                           "best_score=14850\n"
+                           "best_act=3\n"
+                           "runs_played=5\n"
+                           "clears=1\n"
+                           "seen_hints_mask=0x0000000f\n"
+                           "opt_master_vol=80\n"
+                           "opt_bgm_vol=70\n"
+                           "opt_se_vol=85\n"
+                           "opt_shake_scale=100\n"
+                           "opt_post_shader=1\n"
+                           "opt_hints=1\n";
+    MetaState restored = saved;
+    TEST_ASSERT_TRUE(meta_deserialize(&restored, p1_save));
+    assert_meta(&example, &restored);
+
+    /* opt_cursor_scale threshold normalization (<113 -> 100, 113..137 -> 125, >=138 -> 150). */
+    const struct {
+        const char *text;
+        uint8_t expected;
+    } cursor_cases[] = {
+        {"version=1\nopt_cursor_scale=-10", 100},
+        {"version=1\nopt_cursor_scale=112", 100},
+        {"version=1\nopt_cursor_scale=113", 125},
+        {"version=1\nopt_cursor_scale=137", 125},
+        {"version=1\nopt_cursor_scale=138", 150},
+        {"version=1\nopt_cursor_scale=250", 150},
+    };
+    for (size_t i = 0; i < sizeof cursor_cases / sizeof cursor_cases[0]; ++i) {
+        MetaState m;
+        TEST_ASSERT_TRUE_MESSAGE(meta_deserialize(&m, cursor_cases[i].text), cursor_cases[i].text);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(cursor_cases[i].expected, m.settings.cursor_scale,
+                                        cursor_cases[i].text);
+    }
 }
 
 static void test_all_persisted_fields_round_trip(void)
@@ -418,7 +469,8 @@ static void test_save_clamps_and_normalizes_each_field(void)
                                 .best_act = META_MAX_BEST_ACT,
                                 .runs_played = META_MAX_COUNTERS,
                                 .seen_hints_mask = UINT32_C(0x9abcdef0),
-                                .settings = {100, 0, 100, 50, false, true}};
+                                .settings = {100, 0, 100, 50, false, true, UI_LANG_AUTO, false,
+                                             100}};
     MetaState meta;
     TEST_ASSERT_TRUE(meta_deserialize(&meta, text));
     assert_meta(&expected, &meta);
@@ -1401,10 +1453,11 @@ static void test_hook_acquisition_order_and_relic_rewards(void)
         game_destroy(a);
     }
 
-    /* 2. Relic 3-choice offer, reroll, pick -> ACT_TRANSITION, 8-owned -> 1 choice, 9-owned ->
+    /* 2. Relic 3-choice offer, reroll, pick -> ACT_TRANSITION, 14-owned -> 1 choice, 15-owned ->
      * FALLBACK + repair -> ACT_TRANSITION. */
     {
-        const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(777));
+        RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(777));
+        cfg.unlocked_relic_mask = (UINT64_C(1) << META_RELIC_UNLOCK_COUNT) - 1u;
         GameState *g = game_create(&cfg);
         game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
         g->internal.wave_clear_is_boss = true;

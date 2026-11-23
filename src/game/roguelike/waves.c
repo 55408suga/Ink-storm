@@ -518,6 +518,14 @@ static EntityId spawn_wave_enemy(GameState *g, EnemyDefId def_id, int32_t edge_h
     return id;
 }
 
+static float effective_spawn_interval(const GameState *g, float base_interval)
+{
+    const float mul =
+        g->internal.mods.spawn_interval_mul > 0.0f ? g->internal.mods.spawn_interval_mul : 1.0f;
+    const float eff = base_interval * mul;
+    return eff < 0.35f ? 0.35f : eff;
+}
+
 int32_t waves_count_alive_escorts(const GameState *g)
 {
     if (g == NULL) {
@@ -532,7 +540,8 @@ int32_t waves_count_alive_escorts(const GameState *g)
         }
         const TransformComp *tr = game_transform(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr != NULL && en != NULL && !tr->dissolving && !game_is_boss_enemy(en->def_id)) {
+        if (tr != NULL && en != NULL && !tr->dissolving && !game_is_boss_enemy(en->def_id) &&
+            !game_is_boss_part(en->def_id)) {
             ++escorts;
         }
     }
@@ -624,7 +633,7 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->pending_impulse_count = 0;
     g->phase = RUN_PHASE_PLAYING;
     g->phase_t = 0.0f;
-    g->internal.spawn_cd = wdef->spawn_interval;
+    g->internal.spawn_cd = effective_spawn_interval(g, wdef->spawn_interval);
     g->internal.boss_vortex_t = 0.0f;
     g->internal.wave_elites_spawned = 0;
     g->internal.last_elite_flags = 0u;
@@ -655,7 +664,7 @@ void waves_step_spawns(GameState *g)
     if (g->internal.spawn_cd > 1e-4f) {
         return;
     }
-    g->internal.spawn_cd = wdef->spawn_interval;
+    g->internal.spawn_cd = effective_spawn_interval(g, wdef->spawn_interval);
 
     const bool is_boss_wave = g->run.wave_index == GAME_BOSS_WAVE_INDEX;
     int32_t alive_count = 0;
@@ -679,11 +688,12 @@ void waves_step_spawns(GameState *g)
         if (en->is_elite) {
             ++alive_elites;
         }
-        if (!is_boss_wave || !game_is_boss_enemy(en->def_id)) {
+        if (!game_is_boss_part(en->def_id) && (!is_boss_wave || !game_is_boss_enemy(en->def_id))) {
             ++alive_count;
         }
     }
-    if (alive_count >= wdef->max_alive) {
+    const int32_t max_alive = wdef->max_alive + g->internal.mods.max_alive_add;
+    if (alive_count >= max_alive) {
         return;
     }
 

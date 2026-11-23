@@ -171,6 +171,8 @@ static uint64_t hash_run(const GameState *g)
     h = ink_hash_f32(h, p->cyclone_cd_total);
     h = ink_hash_f32(h, p->gale_cd);
     h = ink_hash_f32(h, p->gale_cd_total);
+    h = hash_i32(h, p->gale_charges);
+    h = hash_i32(h, p->gale_max_charges);
     h = ink_hash_f32(h, p->surge_t);
     h = ink_hash_f32(h, p->cursor_x);
     h = ink_hash_f32(h, p->cursor_y);
@@ -197,6 +199,9 @@ static uint64_t hash_run(const GameState *g)
     h = hash_i32(h, r->wave_kills);
     h = hash_i32(h, r->wave_quota);
     h = hash_i32(h, r->acts_cleared);
+    h = hash_i32(h, r->endless_loop);
+    h = hash_i32(h, r->endless_acts_cleared);
+    h = hash_i32(h, r->bonus_crystals);
     h = hash_i32(h, r->kills);
     h = hash_i32(h, r->score);
     h = hash_i32(h, r->chain);
@@ -215,6 +220,8 @@ static uint64_t hash_run(const GameState *g)
         h = hash_u8(h, r->reward.choice_next_level[i]);
     }
     h = hash_bool(h, r->reward.repair_available);
+    h = hash_i32(h, r->reward.repair_amount);
+    h = hash_i32(h, r->reward.crystal_reward);
     h = ink_hash_u32(h, r->reward.serial);
 
     h = hash_i32(h, r->upgrade_count);
@@ -233,6 +240,25 @@ static uint64_t hash_run(const GameState *g)
     h = ink_hash_u32(h, r->boss_id.index);
     h = ink_hash_u32(h, r->boss_id.gen);
     h = hash_bool(h, r->run_settled);
+
+    const RyuBodyState *rb = &g->ryu_body;
+    h = ink_hash_u32(h, rb->head_id.index);
+    h = ink_hash_u32(h, rb->head_id.gen);
+    for (int i = 0; i < GAME_RYU_ORB_COUNT; ++i) {
+        h = ink_hash_u32(h, rb->orb_ids[i].index);
+        h = ink_hash_u32(h, rb->orb_ids[i].gen);
+    }
+    h = hash_u8(h, rb->orb_broken_mask);
+    h = hash_i32(h, rb->active_orb_slot);
+    h = hash_i32(h, rb->trail_head);
+    h = hash_i32(h, rb->trail_count);
+    const int32_t tc = rb->trail_count > GAME_RYU_TRAIL_CAP
+                           ? GAME_RYU_TRAIL_CAP
+                           : (rb->trail_count < 0 ? 0 : rb->trail_count);
+    for (int32_t i = 0; i < tc; ++i) {
+        h = ink_hash_f32(h, rb->trail[i].x);
+        h = ink_hash_f32(h, rb->trail[i].y);
+    }
     return h;
 }
 
@@ -325,6 +351,20 @@ static uint64_t hash_internal(const GameInternal *in)
     h = hash_bool(h, m->ink_dyed_shrine);
     h = hash_bool(h, m->rosary_swirl);
     h = hash_bool(h, m->wind_return);
+    h = hash_i32(h, m->chain_storm_interval);
+    h = ink_hash_f32(h, m->chain_storm_mul);
+    h = hash_bool(h, m->surge_stroke_storm);
+    h = hash_i32(h, m->gale_max_charges);
+    h = ink_hash_f32(h, m->cataclysm_thresh);
+    h = ink_hash_f32(h, m->cataclysm_cd_base);
+    h = ink_hash_f32(h, m->surge_reaction_dmg_mul);
+    h = hash_i32(h, m->surge_min_chain);
+    h = hash_bool(h, m->thunderfire_gem);
+    h = hash_bool(h, m->oni_tile);
+    h = hash_bool(h, m->night_parade_scroll);
+    h = hash_i32(h, m->bonus_kill_orbs);
+    h = ink_hash_f32(h, m->spawn_interval_mul);
+    h = hash_i32(h, m->max_alive_add);
 
     for (int i = 0; i < GAME_MAX_ACTIVE_CYCLONES; ++i) {
         const ActiveCyclone *c = &in->cyclones[i];
@@ -385,6 +425,7 @@ static uint64_t hash_internal(const GameInternal *in)
         h = ink_hash_f32(h, in->nue_trail_t[i]);
     }
     h = ink_hash_f32(h, in->ryu_coil_t);
+    h = ink_hash_f32(h, in->thunderfire_gem_cd);
     return h;
 }
 

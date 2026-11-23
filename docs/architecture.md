@@ -82,7 +82,7 @@
   2. `GAME_HASH_FLUID`: `fluid_hash(&g->fluid)`
   3. `GAME_HASH_ECS`: `gen` / `comp_mask` / `alive` / `pending_destroy` の `0..high_water-1`、`free_list[0..free_count)`、各カウンタ
   4. `GAME_HASH_COMPONENTS`: 生存エンティティの、マスクを持つ Component のみ（index 昇順・宣言順）
-  5. `GAME_HASH_RUN`: `player`, `shrines`, `shrine_count`, `run`
+  5. `GAME_HASH_RUN`: `player`, `shrines`, `shrine_count`, `run`, `ryu_body`
   6. `GAME_HASH_EVENTS`: `event_count`, `events[0..event_count)`, `dropped_events`, `pending_impulse_count`, `pending_impulses[0..pending_impulse_count)`
   7. `GAME_HASH_INTERNAL`: `GameInternal`（定義順）
 
@@ -169,7 +169,7 @@ typedef enum {
 | `game_debug_spawn_enemy(g, def, x, y)` | `EnemyDef` の生成関数で通常のスポーンと同じ Component・初期値を付与（位置の抽選のみ省略）。ボスなら `run.boss_id` も設定する |
 | `game_debug_spawn_projectile(g, kind, x, y, vx, vy)` | 通常の発射と同じ初期化で敵弾を生成する |
 | `game_debug_spawn_orb(g, x, y)` | 墨玉のドロップと同じ初期化で生成する |
-| `game_debug_start_act(g, act_index)` | 指定幕（`0..GAME_MAIN_ACT_COUNT-1`）へ切り替え、旧幕の残存 ECS エンティティを破棄した上で `waves_prepare_act(g)` を実行し `RUN_PHASE_ACT_TRANSITION` へ移す（範囲外は no-op） |
+| `game_debug_start_act(g, act_index)` | 指定幕（`0..META_MAX_BEST_ACT-1`）へ切り替え、`endless_loop = act_index / GAME_MAIN_ACT_COUNT` を同期し、旧幕の残存 ECS エンティティを破棄した上で `waves_prepare_act(g)` を実行し `RUN_PHASE_ACT_TRANSITION` へ移す（範囲外は no-op） |
 | `game_debug_start_wave(g, wave_index)` | 現在の幕のウェーブ `wave_index` を通常のウェーブ開始と同じ処理で開始する（範囲外は no-op） |
 | `game_debug_force_wave_clear(g)` | `PLAYING` のみ有効。通常ウェーブはノルマ到達扱い、ボスウェーブは通常のダメージ経路でボスへ致死ダメージを与える（遷移は次ティックの段 8） |
 | `game_autoplay_input(g)` / `game_autoplay_command(g)` | 状態のみから決まる決定的な自動入力を返す（`g` を変更せず `g->rng` も消費しない） |
@@ -327,11 +327,12 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 - `FluidState fluid`（格子配列）
 - `EcsWorld ecs`・`GameComponents comps`
 - `RunConfig config`・`uint64_t rng`・`uint64_t ticks`・`RunPhase phase`・`float phase_t`・`float hitstop_t`
-- `PlayerState player`（墨・かすれ筆・筆先・CD・墨昇華）
+- `PlayerState player`（墨・かすれ筆・筆先・CD・`gale_charges`/`gale_max_charges`・墨昇華）
 - `ShrineState shrines[GAME_MAX_SHRINES]`・`int32_t shrine_count`（基本 1 基使用、複数化余白）
-- `RunProgress run`（幕・ウェーブ・ノルマ・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`・所持アップグレード・所持大遺物 `relics[]` / `relic_count`・`boss_id`・`run_settled`）
+- `RunProgress run`（幕・ウェーブ・ノルマ・`endless_loop`/`endless_acts_cleared`/`bonus_crystals`・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`（`repair_amount`/`crystal_reward` 含む）・所持アップグレード・所持大遺物 `relics[]` / `relic_count`・`boss_id`・`run_settled`）
 - `GameEvent events[GAME_MAX_EVENTS]`・`int32_t event_count`・`uint32_t dropped_events`
 - `PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`・`int32_t pending_impulse_count`
+- `RyuBodyState ryu_body`（多部位一筆龍の公開読み取り状態：`head_id`, `orb_ids[3]`, `orb_broken_mask`, `active_orb_slot`, 頭部軌跡リングバッファ `trail[GAME_RYU_TRAIL_CAP]` / `trail_head` / `trail_count`。`ink_render` が `internal` に触れずに胴の軌跡と龍玉破壊区間を描画するための公開契約）
 - `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離等を隔離し、描画・音・app は読まない）
 - 描画専用 VFX プール（`RenderState` 内）
 
@@ -362,8 +363,8 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 各コンテンツは `src/game/` 配下の専用ファイルへ `const` 指示付き初期化子配列として定義する。定義テーブルは表示文字列 ID（`text_id`）を持たず、`ink_render` が内容 ID（`EnemyDefId`, `UpgradeId`, `UpgradeAxis` 等）から文字列表を引く。
 - **`BrushStyleDef`**: `id`, 初期 `RunModifiers` 差分、推奨軸、固有フック
 - **`EnemyDef`**: `id`, `base_hp`, `radius`, `mass_tier`, `fluid_coupling`, `score`, `orb_count`, `ai_step_fn`, `spawn_fn`
-- **`UpgradeDef`**: `id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック（P1 本編は 24 種：各軸 5 種＋共通 4 種。残り 4 種は P2 で追加）
-- **`RelicDef`**: `id`, `unlock_bit`（`0`=初期解放、`1ULL<<k`=墨庵解放）, `apply_mods_fn`, 7 フック（P1 本編の `RelicId` は初期解放 9 種 `RELIC_COUNT = 9`。墨庵解放 6 種は P1 で購入・セーブ可能とし、ラン中効果は P2 で追加）
+- **`UpgradeDef`**: `id`, `axis`, `max_level`（3）, `weight`, `apply_mods_fn`, 7 フック（全 28 種 `UPG_COUNT = 28`：各軸 6 種 × 4 軸 ＋ 共通 4 種）
+- **`RelicDef`**: `id`, `apply_mods_fn`, 7 フック（全 15 種 `RELIC_COUNT = 15`：初期解放 9 種 ＋ 墨庵解放 6 種。解放枠 `0..5` は `game_relic_unlock_slot` / `game_is_relic_unlocked` で `RunConfig.unlocked_relic_mask` と照合する）
 - **`ActDef`**: `act_index`, `wave_count`（3）, `boss_def_id`, `setup_stage_fn`, ウェーブ敵重みテーブル
 
 ---
@@ -401,15 +402,17 @@ typedef enum {
     EV_ENEMY_INTRO,     /* value = EnemyDefId（初登場ウェーブ開始時） */
     EV_REWARD_REROLL,   /* value = 残りリロール回数 */
     EV_SKILL_DENIED,    /* value = SkillId（墨不足または CD 中） */
+    EV_BOSS_PART_BREAK, /* value = part_id（0=炎玉, 1=雷玉, 2=風玉） */
     EV_TYPE_COUNT
 } GameEventType;
 
-#define EVF_SLAM_WALL     (UINT32_C(1) << 8)
-#define EVF_SLAM_ENEMY    (UINT32_C(1) << 9)
-#define EVF_ORB_AUTO      (UINT32_C(1) << 10)
-#define EVF_RUN_ABORTED   (UINT32_C(1) << 11)
-#define EVF_REWARD_REPAIR (UINT32_C(1) << 12)
-#define EVF_REWARD_RELIC  (UINT32_C(1) << 13)
+#define EVF_SLAM_WALL      (UINT32_C(1) << 8)
+#define EVF_SLAM_ENEMY     (UINT32_C(1) << 9)
+#define EVF_ORB_AUTO       (UINT32_C(1) << 10)
+#define EVF_RUN_ABORTED    (UINT32_C(1) << 11)
+#define EVF_REWARD_REPAIR  (UINT32_C(1) << 12)
+#define EVF_REWARD_RELIC   (UINT32_C(1) << 13)
+#define EVF_REWARD_CRYSTAL (UINT32_C(1) << 14)
 
 typedef struct {
     GameEventType type;
@@ -433,9 +436,10 @@ typedef struct {
 | `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（16） | `EVF_ORB_AUTO`（自動回収時） |
 | `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
 | `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
-| `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号 | 0 |
+| `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号（多部位一筆龍：`2`=点睛、`3`=昇龍） | 0 |
+| `EV_BOSS_PART_BREAK` | 破壊された龍玉の座標 (px) | `0, 0` | `part_id`（`0`=炎玉, `1`=雷玉, `2`=風玉） | 致命打の `DMG_*` |
 | `EV_WAVE_CLEAR` / `EV_ACT_CLEAR` | 社の位置 / ボスの位置 | — | `wave_index` / `act_index` | 0 |
-| `EV_REWARD_PICK` | — | — | 強化札は `UpgradeId`、大遺物は `RelicId`、社修繕は -1 | 強化札=0、大遺物=`EVF_REWARD_RELIC`、修繕=`EVF_REWARD_REPAIR` |
+| `EV_REWARD_PICK` | — | — | 強化札は `UpgradeId`、大遺物は `RelicId`、社修繕は -1、墨晶代替は獲得墨晶数（`10`/`30`） | 強化札=0、大遺物=`EVF_REWARD_RELIC`、修繕=`EVF_REWARD_REPAIR`、墨晶代替=`EVF_REWARD_CRYSTAL` |
 | `EV_HINT_TRIGGER` | 関連座標（なければ社の座標） | `0, 0` | `HintId`（`0..HINT_COUNT-1`） | 0 |
 | `EV_WIND_TELEGRAPH` | 風上の辺の中央座標（px） | 風向きの単位ベクトル `(dx, dy)` | 風向き番号（`0`:左→右、`1`:右→左、`2`:上→下、`3`:下→上） | 0 |
 | `EV_GAME_OVER` / `EV_VICTORY` | 社の位置 / — | — | 0 / `act_index` | `EVF_RUN_ABORTED` / 0 |
@@ -481,6 +485,7 @@ typedef struct {
 #define META_MAX_SCORE      999999999
 #define META_MAX_COUNTERS   9999999
 #define ENDLESS_MAX_LOOP_N  100
+#define META_SERIALIZE_CAP  640
 
 typedef enum {
     META_UPG_SHRINE_HP = 0,     /* 最大3段階: 社最大HP +1/段 */
@@ -490,6 +495,13 @@ typedef enum {
     META_UPG_COUNT
 } MetaUpgradeKind;
 
+typedef enum {
+    UI_LANG_AUTO = 0,
+    UI_LANG_JA,
+    UI_LANG_EN,
+    UI_LANG_COUNT
+} UiLangMode;
+
 typedef struct {
     uint8_t master_vol;         /* 0..100, 既定 80 */
     uint8_t bgm_vol;            /* 0..100, 既定 70 */
@@ -497,6 +509,9 @@ typedef struct {
     uint8_t shake_scale;        /* 0 / 50 / 100, 既定 100 */
     bool post_shader_on;        /* 既定 true */
     bool hints_on;              /* 既定 true */
+    uint8_t ui_lang;            /* UiLangMode (0=AUTO, 1=JA, 2=EN), 既定 UI_LANG_AUTO (0) */
+    bool reduce_flash;          /* 画面全体の明滅抑止, 既定 false */
+    uint8_t cursor_scale;       /* 100 / 125 / 150, 既定 100 */
 } SettingsState;
 
 typedef struct {
@@ -539,8 +554,11 @@ typedef struct {
   opt_shake_scale=100
   opt_post_shader=1
   opt_hints=1
+  opt_lang=0
+  opt_reduce_flash=0
+  opt_cursor_scale=100
   ```
-- **破損耐性**: 未知のキーは無視、欠損キーは既定値、範囲外数値は安全な範囲へクランプ。パース不能または `version` 非互換時はクラッシュさせず既定 `MetaState` へフォールバック。
+- **破損耐性・後方互換**: 未知のキーは無視、欠損キー（例：P1 セーブで `opt_lang` / `opt_reduce_flash` / `opt_cursor_scale` を欠く `version=1` テキスト）は既定値（`0`, `false`, `100`）、範囲外数値は安全な範囲へクランプ（`opt_cursor_scale` は `100 / 125 / 150` へ正規化）。シリアライズ容量は `META_SERIALIZE_CAP = 640`。パース不能または `version` 非互換時はクラッシュさせず既定 `MetaState` へフォールバック。
 - **保存先解決順**:
   1. CLI 引数 `--save-path <path>`（明示指定時最優先）
   2. `$XDG_DATA_HOME/inkstorm/save.txt`

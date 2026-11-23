@@ -24,18 +24,18 @@
 
 | テストターゲット | 導入 Phase | 検証対象と必須境界ケース |
 | :--- | :---: | :--- |
-| `test_core_smoke`（既存） | Phase 1（P2 でヒープ化、P3 で契約追加） | SplitMix64 RNG、クランプ、FNV-1a ハッシュ補助、初期化・中断・Component アクセサ・イベント上限の契約 |
+| `test_core_smoke`（既存） | Phase 1（P2 でヒープ化、P3/P4/P5 で契約追加） | SplitMix64 RNG、クランプ、FNV-1a ハッシュ補助、初期化・中断・Component アクセサ・イベント上限・Phase 5 契約（28 札/15 遺物・解放マスク・`RyuBodyState`・`CMD_START_ENDLESS`） |
 | `test_cli_headless_smoke`（既存） | Phase 1（P3 で本番化） | `./inkstorm --headless-smoke` の正常終了。Phase 3 以降はスタブではなく本番 `game_step` を 60Hz で複数ティック通過させる |
 | `test_cli_usage_*`（3 件） | Phase 3 | `tools/expect_usage.sh` による CLI Usage エラーの実行ファイル配線・終了コード 1・`Usage: ` 行の検証（未知オプション・セーブ排他・ヘッドレス排他） |
 | `test_app_core` | Phase 3 | CLI オプション解析（全正常・全 Usage エラー・排他・重複・`PATH_MAX`・`INKSTORM_DEBUG_FAULTS`）、`FrameClock`（60Hz/144Hz/頭打ち/非有限入力）、`InputLatch` の規則 |
-| `test_text_table` | Phase 3 | 文字列表の全エントリの非空・英語 ASCII 限定（0x20〜0x7E）・内容 ID 対応関数と範囲外検査 |
+| `test_text_table` | Phase 3（P4/P5 拡張） | 文字列表の全エントリの非空・英語 ASCII 限定（0x20〜0x7E）・内容 ID 対応関数と範囲外検査（Phase 5 で 28 札・15 遺物・狐符/龍玉・拡充設定/エンドレス UI を含む） |
 | `test_fluid` | Phase 2 | 静止場・中心/端/四隅/強入力連続での NaN・Inf ゼロ＆クランプ、圧力投影後の発散低下、`solid` no-slip 境界と法線クエリ、**薄い柱（2 セル幅）の壁横断防止＆角（コーナー）回帰**、`fluid_add_radial_impulse` の速度クランプ、非有限/範囲外入力の安全拒否、同一入力の `fluid_hash` 完全一致 |
 | `test_ecs` | Phase 2 | `spawn`/`destroy` による世代インクリメント、無効/旧世代 `EntityId` 拒否、**満杯（512）時のスポーン失敗（`ECS_INVALID_INDEX`）**、**削除予約中エンティティへのアクセス拒否（`ecs_is_alive == false`）**、遅延削除フラッシュ後の再利用、昇順ビットマスク走査 |
-| `test_roguelike_meta` | Phase 2（メタ）→ Phase 3/4（報酬） | `MetaState` の購入残高チェック、`int32_t` 上限付近での**飽和加算（符号付きオーバーフローなし）**、**精算の二重適用防止（`run_settled`）**、`key=value` シリアライズ往復・未知キー無視・破損入力デフォルト復帰・設定/ヒント保存；Phase 3/4 で `RunModifiers` 再計算・7 フック取得順実行・3 択/リロール/修繕・**候補不足（3 件未満/0 件）時の代替選択**・無効コマンド no-op を追加 |
-| `test_app_save` | Phase 3 | 一時ディレクトリを用いた `src/app/save.c` の原子的保存テスト（正常読み書き、ディレクトリ自動生成、**書き込み/`rename` 失敗時に既存 `save.txt` が破損・消失しないこと**、`--no-save` の隔離） |
-| `test_elements` | Phase 3（紅蓮/雷墨）→ Phase 4（爆雷/三元） | 4 属性反応の発火条件・順序（**三元共鳴優先→成立ブロックを爆雷から除外**）、`fluid_sanitize_channels` 後の有限性・`solid=0` 保証、放射インパルスの次ティック適用、`GameEvent` 発行 |
-| `test_acts_enemies` | Phase 4 | 全 3 幕の地形 `solid`・山颪・霊柱・新敵 4 種・エリート変異 4 種・鵺・一筆龍簡易版、および 3 幕進行・大遺物報酬・次幕遷移（全 15 CTest に統合済み） |
-| `test_determinism_run` | Phase 3（P0 縦切り）→ Phase 4/5 拡張 | 同一ビルド・同一 `RunConfig`・同一ティック入力列（戦闘→3 択/修繕→ボス戦）を 2 インスタンスで実行し、`game_hash()` ビット完全一致を検証（**不一致時は最初に差が出たティックとフィールドを出力**）。あわせて墨消費・撃破・反応・ボス交戦の健全性、**128 件超イベントの安全ドロップ**、**1 フレーム複数ティック時のイベント全件消費**を検証 |
+| `test_roguelike_meta` | Phase 2（メタ）→ Phase 3/4/5（報酬・P2 拡張） | `MetaState` の購入残高チェック、`int32_t` 上限付近での**飽和加算（符号付きオーバーフローなし）**、**精算の二重適用防止（`run_settled`・エンドレス遅延精算）**、`key=value` シリアライズ往復・未知キー無視・破損入力デフォルト復帰・**拡充設定（`opt_lang`/`opt_reduce_flash`/`opt_cursor_scale`）の P1 セーブ後方互換と正規化**；Phase 3〜5 で `RunModifiers` 再計算・7 フック取得順実行・全 28 札/15 遺物（解放マスク制御）・3 択/リロール/修繕・**候補枯渇 2 択フォールバック（修繕＋墨晶変換）**・無効コマンド no-op を検証 |
+| `test_app_save` | Phase 3（P5 拡張） | 一時ディレクトリを用いた `src/app/save.c` の原子的保存テスト（正常読み書き・拡充設定 3 項目の往復、ディレクトリ自動生成、**書き込み/`rename` 失敗時に既存 `save.txt` が破損・消失しないこと**、`--no-save` の隔離） |
+| `test_elements` | Phase 3（紅蓮/雷墨）→ Phase 4/5（爆雷/三元・P2 拡張） | 4 属性反応の発火条件・順序（**三元共鳴優先→成立ブロックを爆雷から除外**）、`DMG_REACTION` 付与、`fluid_sanitize_channels` 後の有限性・`solid=0` 保証、放射インパルスの次ティック適用、`GameEvent` 発行 |
+| `test_acts_enemies` | Phase 4 → Phase 5 拡張 | 全 3 幕の地形 `solid`・山颪・霊柱・新敵・エリート変異 4 種・鵺・一筆龍（Phase 5 で**狐符＋護符結界＋追尾符**、**多部位一筆龍の 3 龍玉・頭部軌跡・3 フェーズ**、**エンドレス第 4 幕以降の周回スケール・地形/ボス循環**を検証） |
+| `test_determinism_run` | Phase 3（P0 縦切り）→ Phase 4/5 拡張 | 同一ビルド・同一 `RunConfig`・同一ティック入力列（戦闘→3 択/修繕→ボス戦→**エンドレス移行・多部位一筆龍**）を 2 インスタンスで実行し、`game_hash()` ビット完全一致を検証（**不一致時は最初に差が出たティックとフィールドを出力**）。あわせて墨消費・撃破・反応・ボス交戦の健全性、**128 件超イベントの安全ドロップ**、**1 フレーム複数ティック時のイベント全件消費**を検証 |
 | `test_audio` | Phase 3 | `GameEvent` 消費からのプロシージャル PCM 合成（NaN/オーバーフローなし）、BGM 状態遷移（ロビー/通常戦/ボス戦/勝利） |
 
 ---

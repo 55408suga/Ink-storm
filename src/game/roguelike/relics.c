@@ -228,6 +228,12 @@ static const RelicDef k_relic_defs[RELIC_COUNT] = {
             .apply_mods_add = wind_return_apply_add,
             .on_tick = wind_return_on_tick,
         },
+    [RELIC_SEAL_OF_TRINITY] = {.id = RELIC_SEAL_OF_TRINITY},
+    [RELIC_INKSTORM_SECRET] = {.id = RELIC_INKSTORM_SECRET},
+    [RELIC_THUNDERFIRE_GEM] = {.id = RELIC_THUNDERFIRE_GEM},
+    [RELIC_ONI_TILE] = {.id = RELIC_ONI_TILE},
+    [RELIC_ENDLESS_BRUSH] = {.id = RELIC_ENDLESS_BRUSH},
+    [RELIC_NIGHT_PARADE_SCROLL] = {.id = RELIC_NIGHT_PARADE_SCROLL},
 };
 
 static int32_t clamped_relic_count(const GameState *g)

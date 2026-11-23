@@ -11,5 +11,6 @@ void rewards_generate_relic_offer(GameState *g);
 bool rewards_pick_reward(GameState *g, int32_t choice_index);
 bool rewards_reroll(GameState *g);
 bool rewards_repair_shrine(GameState *g);
+bool rewards_pick_endless_crystal(GameState *g);
 
 #endif
