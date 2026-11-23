@@ -699,7 +699,7 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_TRUE(saw_nue_phase);
     game_destroy(g);
 
-    /* --- Act 3 Boss: Ippitsu-Ryu (Simplified P1) --- */
+    /* --- Act 3 Boss: Ippitsu-Ryu (Multi-Part 3-Phase ECS) --- */
     g = game_create(NULL);
     TEST_ASSERT_NOT_NULL(g);
     game_debug_start_act(g, 2);
@@ -709,21 +709,55 @@ static void test_boss_nue_and_boss_ryu(void)
 
     const EntityId ryu = g->run.boss_id;
     HealthComp *rhp = game_health_mut(g, ryu);
+    const TransformComp *rtr = game_transform(g, ryu);
     const BossComp *rboss = game_boss(g, ryu);
     EnemyComp *ren = game_enemy_mut(g, ryu);
-    TEST_ASSERT_EQUAL_INT32(1500, rhp->max_hp);
-    TEST_ASSERT_EQUAL_INT32(0, rboss->part_id);
-
-    /* Drop below 66% (<= 1000) -> Storm Orb (part_id == 1) & spawns lightning strikes. */
-    (void)combat_apply_damage(g, ryu, 520, DMG_PHYSICAL, 0.0f, 0.0f);
-    TEST_ASSERT_EQUAL_INT32(1, rboss->part_id);
+    TEST_ASSERT_EQUAL_INT32(900, rhp->max_hp);
     TEST_ASSERT_EQUAL_INT32(0, rboss->phase_idx);
+    TEST_ASSERT_EQUAL_UINT32(ryu.index, g->ryu_body.head_id.index);
+    TEST_ASSERT_EQUAL_UINT8(0u, g->ryu_body.orb_broken_mask);
+    TEST_ASSERT_EQUAL_INT32(0, g->ryu_body.active_orb_slot);
+    TEST_ASSERT_EQUAL_INT32(80, g->ryu_body.trail_count);
 
+    /* Phase 1: Head is untargetable and takes 0 damage; 3 Dragon Orbs placed at 0/450/900px. */
+    TEST_ASSERT_FALSE(game_enemy_is_targetable(g, ryu));
+    TEST_ASSERT_EQUAL_INT32(0, combat_apply_damage(g, ryu, 100, DMG_PHYSICAL, 0.0f, 0.0f));
+    TEST_ASSERT_EQUAL_INT32(900, rhp->hp);
+
+    static const float k_expected_arc[GAME_RYU_ORB_COUNT] = {0.0f, 450.0f, 900.0f};
+    EntityId orbs[GAME_RYU_ORB_COUNT];
+    for (int32_t s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        orbs[s] = g->ryu_body.orb_ids[s];
+        TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, orbs[s].index);
+        TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, orbs[s]));
+        TEST_ASSERT_TRUE(game_enemy_is_targetable(g, orbs[s]));
+        const EnemyComp *oen = game_enemy(g, orbs[s]);
+        const HealthComp *ohp = game_health(g, orbs[s]);
+        const BossComp *oboss = game_boss(g, orbs[s]);
+        const TransformComp *otr = game_transform(g, orbs[s]);
+        TEST_ASSERT_NOT_NULL(oen);
+        TEST_ASSERT_NOT_NULL(ohp);
+        TEST_ASSERT_NOT_NULL(oboss);
+        TEST_ASSERT_NOT_NULL(otr);
+        TEST_ASSERT_EQUAL_INT(ENEMY_BOSS_RYU_ORB, oen->def_id);
+        TEST_ASSERT_EQUAL_INT32(300, ohp->max_hp);
+        TEST_ASSERT_EQUAL_INT32(s, oboss->part_id);
+        TEST_ASSERT_EQUAL_UINT32(ryu.index, oboss->parent_id.index);
+        TEST_ASSERT_FLOAT_WITHIN(4.0f, k_expected_arc[s], hypotf(rtr->x - otr->x, rtr->y - otr->y));
+    }
+
+    /* Fire Orb (slot 0) attacks with 2.2s CD and rotates active_orb_slot to Storm Orb (slot 1). */
+    ren->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f, ren->fire_cd);
+    TEST_ASSERT_EQUAL_INT32(1, g->ryu_body.active_orb_slot);
+
+    /* Storm Orb (slot 1) spawns lightning strikes and does not self-trigger Cataclysm/Thunderburst.
+     */
     ren->fire_cd = 0.01f;
     for (int t = 0; t < 6; ++t) {
         game_step(g, NULL, NULL);
     }
-    /* Boss spawn swirl must not self-trigger Cataclysm or Thunderburst across multiple ticks. */
     TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
     TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
     int32_t strike_n = 0;
@@ -738,7 +772,8 @@ static void test_boss_nue_and_boss_ryu(void)
     }
     TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, strike_n);
 
-    /* Test Lightning Strike rod with ink > 0.3 vs no ink hitting shrine. */
+    /* Test Lightning Strike rod with ink > 0.3 vs no ink hitting shrine (must zap targetable orb).
+     */
     const float sx = g->shrines[0].x;
     const float sy = g->shrines[0].y;
     fluid_reset(&g->fluid);
@@ -756,6 +791,7 @@ static void test_boss_nue_and_boss_ryu(void)
     ecs_flush_destroy(&g->ecs);
     TEST_ASSERT_EQUAL_INT32(shrine_hp0, g->shrines[0].hp);
     TEST_ASSERT_GREATER_THAN_INT32(zaps0, g->run.storm_zaps);
+    TEST_ASSERT_EQUAL_INT32(900, rhp->hp); /* Head stayed unharmed */
 
     /* Without ink, lightning strike inside shrine damages shrine by 1. */
     fluid_reset(&g->fluid);
@@ -770,33 +806,332 @@ static void test_boss_nue_and_boss_ryu(void)
     ecs_flush_destroy(&g->ecs);
     TEST_ASSERT_EQUAL_INT32(shrine_hp0 - 1, g->shrines[0].hp);
 
-    /* Drop below 33% (<= 500) -> Awakening (EV_BOSS_PHASE, part_id==2, phase_idx==1) + Cataclysm
-     * x2. */
+    /* Destroy Orb 0 (Fire) -> EV_BOSS_PART_BREAK(value=0), mask=0x1, attack CD scales x0.85. */
     g->event_count = 0;
-    (void)combat_apply_damage(g, ryu, 520, DMG_PHYSICAL, 0.0f, 0.0f);
-    TEST_ASSERT_EQUAL_INT32(2, rboss->part_id);
-    TEST_ASSERT_EQUAL_INT32(1, rboss->phase_idx);
-    bool saw_ryu_phase = false;
+    (void)combat_apply_damage(g, orbs[0], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_EQUAL_UINT8(0x1u, g->ryu_body.orb_broken_mask);
+    bool saw_break0 = false;
     for (int32_t e = 0; e < g->event_count; ++e) {
-        if (g->events[e].type == EV_BOSS_PHASE && g->events[e].value == 2) {
-            saw_ryu_phase = true;
+        if (g->events[e].type == EV_BOSS_PART_BREAK && g->events[e].value == 0) {
+            saw_break0 = true;
         }
     }
-    TEST_ASSERT_TRUE(saw_ryu_phase);
+    TEST_ASSERT_TRUE(saw_break0);
+    ren->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f, ren->fire_cd);
 
-    /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst without player input. */
+    /* Destroy Orb 1 (Storm) -> EV_BOSS_PART_BREAK(value=1), mask=0x3, attack CD scales x0.85^2. */
+    g->event_count = 0;
+    (void)combat_apply_damage(g, orbs[1], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_EQUAL_UINT8(0x3u, g->ryu_body.orb_broken_mask);
+    bool saw_break1 = false;
+    for (int32_t e = 0; e < g->event_count; ++e) {
+        if (g->events[e].type == EV_BOSS_PART_BREAK && g->events[e].value == 1) {
+            saw_break1 = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_break1);
+    ren->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f * 0.85f, ren->fire_cd);
+
+    /* Destroy Orb 2 (Wind) -> Phase 2 Awakening (EV_BOSS_PHASE value=2, head targetable, wind 6s).
+     */
+    g->event_count = 0;
+    (void)combat_apply_damage(g, orbs[2], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_EQUAL_UINT8(0x7u, g->ryu_body.orb_broken_mask);
+    TEST_ASSERT_EQUAL_INT32(-1, g->ryu_body.active_orb_slot);
+    TEST_ASSERT_EQUAL_INT32(1, rboss->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, rhp->invuln_t);
+    TEST_ASSERT_TRUE(game_enemy_is_targetable(g, ryu));
+    bool saw_break2 = false;
+    bool saw_ryu_p2 = false;
+    for (int32_t e = 0; e < g->event_count; ++e) {
+        if (g->events[e].type == EV_BOSS_PART_BREAK && g->events[e].value == 2) {
+            saw_break2 = true;
+        }
+        if (g->events[e].type == EV_BOSS_PHASE && g->events[e].value == 2) {
+            saw_ryu_p2 = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_break2);
+    TEST_ASSERT_TRUE(saw_ryu_p2);
+
+    /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst; mountain wind clamps to
+     * 6s period (wind_timer <= 1.5s). */
+    g->internal.wind_timer = 7.0f;
+    g->internal.wind_telegraph_t = 0.0f;
+    g->internal.wind_active_t = 0.0f;
     for (int t = 0; t < 6; ++t) {
         game_step(g, NULL, NULL);
     }
     TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
     TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
+    TEST_ASSERT_TRUE(g->internal.wind_timer <= 1.5f);
 
-    /* Clear phase invuln and verify Cataclysm damage x2: 80 -> 160. */
+    /* Phase 2 Cataclysm damage is 1x (80, NOT 160). */
     rhp->invuln_t = 0.0f;
     game_status_mut(g, ryu)->ink_mark_t = 0.0f;
-    const int32_t cata_dmg =
+    const int32_t p2_cata =
         combat_apply_damage(g, ryu, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
-    TEST_ASSERT_EQUAL_INT32(160, cata_dmg);
+    TEST_ASSERT_EQUAL_INT32(80, p2_cata);
+
+    /* Drop Dragon Eye HP <= 40% (<= 360) -> Phase 3 Ascension (EV_BOSS_PHASE value=3). */
+    g->event_count = 0;
+    (void)combat_apply_damage(g, ryu, 460, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(360, rhp->hp);
+    TEST_ASSERT_EQUAL_INT32(2, rboss->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, rhp->invuln_t);
+    bool saw_ryu_p3 = false;
+    for (int32_t e = 0; e < g->event_count; ++e) {
+        if (g->events[e].type == EV_BOSS_PHASE && g->events[e].value == 3) {
+            saw_ryu_p3 = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_ryu_p3);
+
+    /* Phase 3 Cataclysm damage x2: 80 -> 160; attack CD x0.8 (1.76s). */
+    rhp->invuln_t = 0.0f;
+    game_status_mut(g, ryu)->ink_mark_t = 0.0f;
+    const int32_t p3_cata =
+        combat_apply_damage(g, ryu, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(160, p3_cata);
+
+    ren->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.8f, ren->fire_cd);
+
+    game_destroy(g);
+}
+
+static void test_ofuda_fox_barrier_homing_and_act3_roster(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    /* 1. Act 3 Wave 2 (3-2) initial roster includes 1 Ofuda Fox. */
+    game_debug_start_act(g, 2);
+    advance_act_transition(g);
+    game_debug_start_wave(g, 1);
+
+    int32_t fox_n = 0;
+    EntityId fox_id = {ECS_INVALID_INDEX, 0};
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index == ECS_INVALID_INDEX) {
+            continue;
+        }
+        const EnemyComp *en = game_enemy(g, id);
+        if (en != NULL && en->def_id == ENEMY_OFUDA_FOX) {
+            ++fox_n;
+            fox_id = id;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(1, fox_n);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, fox_id.index);
+
+    /* Elite exclusion: enemy_apply_elite must not turn Ofuda Fox into an elite. */
+    enemy_apply_elite(g, fox_id, ELITE_RIGID | ELITE_FIREPROOF);
+    TEST_ASSERT_FALSE(game_enemy(g, fox_id)->is_elite);
+
+    /* Concurrent cap 1: spawning many Act 3 reinforcements with 1 Fox alive never spawns a 2nd Fox.
+     */
+    g->internal.mods.max_alive_add = 20;
+    for (int t = 0; t < 40; ++t) {
+        g->internal.spawn_cd = 0.0f;
+        waves_step_spawns(g);
+    }
+    int32_t fox_after = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        const EnemyComp *en = (id.index != ECS_INVALID_INDEX) ? game_enemy(g, id) : NULL;
+        if (en != NULL && en->def_id == ENEMY_OFUDA_FOX) {
+            ++fox_after;
+            TEST_ASSERT_FALSE(en->is_elite);
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(1, fox_after);
+
+    /* 2. Ofuda Barrier: Fox grants 4.0s barrier (-50% dmg) to nearby ally within 360px. */
+    clear_enemies_and_projs(g);
+    fluid_reset(&g->fluid);
+    const EntityId fox = game_debug_spawn_enemy(g, ENEMY_OFUDA_FOX, 300.0f, 360.0f);
+    const EntityId ally = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 420.0f, 360.0f);
+    EnemyComp *fen = game_enemy_mut(g, fox);
+    TEST_ASSERT_NOT_NULL(fen);
+    fen->absorbed_ink = 0.01f;
+    fen->fire_cd = 5.0f;
+    game_step(g, NULL, NULL);
+
+    const StatusComp *ast = game_status(g, ally);
+    TEST_ASSERT_NOT_NULL(ast);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 4.0f, ast->barrier_t);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 6.0f, fen->absorbed_ink);
+
+    /* Shielded ally takes -50% damage (40 -> 20). */
+    game_status_mut(g, ally)->ink_mark_t = 0.0f;
+    const int32_t shielded_dmg = combat_apply_damage(g, ally, 40, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(20, shielded_dmg);
+
+    /* 3. Homing Ofuda: 140px/s floor exception, 90 deg/s homing steer, burns in fire > 0.30,
+     *    and deals 20 physical damage after deflection. */
+    clear_enemies_and_projs(g);
+    fluid_reset(&g->fluid);
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    /* Spawn 30 deg off-axis from shrine (cos 30 deg = 0.866 > 0.28 so it won't auto-deflect). */
+    const float init_ang = 0.5235988f;
+    const EntityId ofuda = game_debug_spawn_projectile(
+        g, PROJ_HOMING_OFUDA, sx - 260.0f, sy, cosf(init_ang) * 140.0f, sinf(init_ang) * 140.0f);
+    const VelocityComp *ovel = game_velocity(g, ofuda);
+    const ProjComp *oproj = game_proj(g, ofuda);
+    TEST_ASSERT_NOT_NULL(ovel);
+    TEST_ASSERT_NOT_NULL(oproj);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.6f, ovel->fluid_coupling);
+
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, ofuda));
+    TEST_ASSERT_FALSE(oproj->deflected);
+    const float speed_after = hypotf(ovel->vx, ovel->vy);
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 140.0f, speed_after); /* Must stay 140px/s, not 180px/s */
+    const float ang_after = atan2f(ovel->vy, ovel->vx);
+    TEST_ASSERT_TRUE(ang_after < init_ang - 0.01f); /* Steered back toward shrine (0 rad) */
+
+    /* Passing through fire > 0.30 burns up undeflected ofuda with 0 shrine dmg & no EV_DEFLECT. */
+    const TransformComp *otr = game_transform(g, ofuda);
+    const int32_t shrine_hp_before = g->shrines[0].hp;
+    const float fire_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.90f, 0.0f, 0.0f};
+    fluid_splat(&g->fluid, otr->x, otr->y, 4.0f, 0.0f, 0.0f, fire_dye);
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, ofuda));
+    TEST_ASSERT_EQUAL_INT32(shrine_hp_before, g->shrines[0].hp);
+    for (int32_t e = 0; e < g->event_count; ++e) {
+        TEST_ASSERT_NOT_EQUAL_INT(EV_DEFLECT, g->events[e].type);
+    }
+
+    /* Deflected Homing Ofuda deals 20 physical damage to an enemy. */
+    clear_enemies_and_projs(g);
+    const EntityId target = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 500.0f, 200.0f);
+    fluid_reset(&g->fluid);
+    game_status_mut(g, target)->ink_mark_t = 0.0f;
+    const int32_t target_hp0 = game_health(g, target)->hp;
+    const EntityId defl =
+        game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 485.0f, 200.0f, 220.0f, 0.0f);
+    game_proj_mut(g, defl)->deflected = true;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_EQUAL_INT32(target_hp0 - 20, game_health(g, target)->hp);
+
+    game_destroy(g);
+}
+
+static void test_endless_loop_scaling_all_six_items(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    /* Act 4 (act_index=3, loop n=1): cycles Act 1 terrain + Tengu. */
+    game_debug_start_act(g, 3);
+    advance_act_transition(g);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.endless_loop);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 340.0f, 190.0f)); /* Act 1 open field */
+    /* Quota: 6 + 2*1 = 8; spawn interval: 1.1 * 0.95 = 1.045. */
+    TEST_ASSERT_EQUAL_INT32(8, g->run.wave_quota);
+    TEST_ASSERT_FLOAT_WITHIN(0.005f, 1.1f * 0.95f, g->internal.spawn_cd);
+
+    /* Normal enemy HP x(1 + 0.25*1) = x1.25 -> Umbrella 30 -> 38; Elite x2.5 -> 94. */
+    clear_enemies_and_projs(g);
+    const EntityId u1 = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 250.0f, 200.0f);
+    TEST_ASSERT_EQUAL_INT32(38, game_health(g, u1)->max_hp);
+    enemy_apply_elite(g, u1, ELITE_FIREPROOF);
+    TEST_ASSERT_EQUAL_INT32(94, game_health(g, u1)->max_hp);
+
+    /* Act 4 Boss (Tengu): HP 400 * 1.35 = 540; attack CD x0.90. */
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+    TEST_ASSERT_EQUAL_INT32(540, game_health(g, g->run.boss_id)->max_hp);
+    game_enemy_mut(g, g->run.boss_id)->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.95f * 0.90f, game_enemy(g, g->run.boss_id)->fire_cd);
+
+    /* Act 5 (act_index=4, loop n=1): cycles Act 2 terrain (Torii + 4 rocks) + Nue (HP 945). */
+    game_debug_start_act(g, 4);
+    advance_act_transition(g);
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 384.0f, 328.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 340.0f, 530.0f));
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_NUE);
+    TEST_ASSERT_EQUAL_INT32(945, game_health(g, g->run.boss_id)->max_hp);
+
+    /* Act 6 (act_index=5, loop n=1): cycles Act 3 terrain (2 rocks + 3 Spirit Pillars + Mountain
+     * Wind) + Multi-Part Ryu (Head 1215, Orbs 405). */
+    game_debug_start_act(g, 5);
+    advance_act_transition(g);
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 340.0f, 190.0f));
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 340.0f, 530.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 640.0f, 130.0f));
+    /* Mountain wind runs on Act 6 (stage_act == 2). */
+    g->internal.wind_timer = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(g->internal.wind_telegraph_t > 0.0f);
+
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_RYU);
+    TEST_ASSERT_EQUAL_INT32(1215, game_health(g, g->run.boss_id)->max_hp);
+    for (int32_t s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        TEST_ASSERT_EQUAL_INT32(405, game_health(g, g->ryu_body.orb_ids[s])->max_hp);
+    }
+
+    /* Act 7 (act_index=6, loop n=2): Umbrella 45, Tengu 680, Quota 10, Interval 1.1 * 0.95^2. */
+    game_debug_start_act(g, 6);
+    advance_act_transition(g);
+    TEST_ASSERT_EQUAL_INT32(2, g->run.endless_loop);
+    TEST_ASSERT_EQUAL_INT32(10, g->run.wave_quota);
+    TEST_ASSERT_FLOAT_WITHIN(0.005f, 1.1f * 0.95f * 0.95f, g->internal.spawn_cd);
+    const EntityId u2 = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 250.0f, 200.0f);
+    TEST_ASSERT_EQUAL_INT32(45, game_health(g, u2)->max_hp);
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    TEST_ASSERT_EQUAL_INT32(680, game_health(g, g->run.boss_id)->max_hp);
+
+    /* High loop (act_index=32, n=10, stage_act=2): spawn interval floor 0.6s, boss CD floor x0.70
+     * with >= tele_dur + 0.10f guard, and elite rate capped at 30%. */
+    game_debug_start_act(g, 32);
+    advance_act_transition(g);
+    TEST_ASSERT_EQUAL_INT32(10, g->run.endless_loop);
+    TEST_ASSERT_FLOAT_WITHIN(0.005f, 0.6f, g->internal.spawn_cd);
+
+    /* Check elite spawns on Act 4 (stage_act=0, n=1 -> 4% > 0%, unlike Act 1's 0%) and cap at 30%.
+     */
+    game_debug_start_act(g, 3);
+    advance_act_transition(g);
+    int32_t act4_elites = 0;
+    for (int trial = 0; trial < 80; ++trial) {
+        clear_enemies_and_projs(g);
+        g->internal.wave_elites_spawned = 0;
+        g->internal.spawn_cd = 0.0f;
+        waves_step_spawns(g);
+        if (g->internal.wave_elites_spawned > 0) {
+            ++act4_elites;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT32(0, act4_elites);
+
+    /* Verify boss CD floor x0.70 and telegraph protection on Tengu at n=10 (act_index=30). */
+    game_debug_start_act(g, 30);
+    advance_act_transition(g);
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+    BossComp *tb = game_boss_mut(g, g->run.boss_id);
+    EnemyComp *ten = game_enemy_mut(g, g->run.boss_id);
+    tb->phase_idx = 1;
+    tb->pattern = 1; /* Fan Arrow (1.65 * 0.8 * 0.70 = 0.924 >= 0.70) */
+    ten->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.65f * 0.8f * 0.70f, ten->fire_cd);
+    TEST_ASSERT_TRUE(ten->fire_cd >= 0.70f);
 
     game_destroy(g);
 }
@@ -811,5 +1146,7 @@ int main(void)
     RUN_TEST(test_new_normal_enemies_and_projectiles);
     RUN_TEST(test_elite_mutations_and_summoned_exclusion);
     RUN_TEST(test_boss_nue_and_boss_ryu);
+    RUN_TEST(test_ofuda_fox_barrier_homing_and_act3_roster);
+    RUN_TEST(test_endless_loop_scaling_all_six_items);
     return UNITY_END();
 }

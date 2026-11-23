@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 #define MAX_INITIAL_ROSTER 8
 
@@ -242,9 +243,10 @@ static const ActDef
                                             [ENEMY_LANTERN_FIRE] = 12u,
                                             [ENEMY_LANTERN_STORM] = 12u,
                                             [ENEMY_UMBRELLA] = 16u,
-                                            [ENEMY_KAMAITACHI] = 20u,
+                                            [ENEMY_KAMAITACHI] = 12u,
                                             [ENEMY_STONE_ONI] = 10u,
                                             [ENEMY_INK_LEECH] = 10u,
+                                            [ENEMY_OFUDA_FOX] = 8u,
                                         },
                                 },
                             [1] =
@@ -256,19 +258,21 @@ static const ActDef
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
                                             {.def_id = ENEMY_UMBRELLA, .count = 1},
-                                            {.def_id = ENEMY_KAMAITACHI, .count = 2},
+                                            {.def_id = ENEMY_KAMAITACHI, .count = 1},
                                             {.def_id = ENEMY_STONE_ONI, .count = 1},
+                                            {.def_id = ENEMY_OFUDA_FOX, .count = 1},
                                         },
-                                    .initial_entries = 4,
+                                    .initial_entries = 5,
                                     .weights =
                                         {
                                             [ENEMY_ARCHER] = 20u,
                                             [ENEMY_LANTERN_FIRE] = 12u,
                                             [ENEMY_LANTERN_STORM] = 12u,
                                             [ENEMY_UMBRELLA] = 16u,
-                                            [ENEMY_KAMAITACHI] = 20u,
+                                            [ENEMY_KAMAITACHI] = 12u,
                                             [ENEMY_STONE_ONI] = 10u,
                                             [ENEMY_INK_LEECH] = 10u,
+                                            [ENEMY_OFUDA_FOX] = 8u,
                                         },
                                 },
                             [2] =
@@ -291,9 +295,10 @@ static const ActDef
                                             [ENEMY_LANTERN_FIRE] = 12u,
                                             [ENEMY_LANTERN_STORM] = 12u,
                                             [ENEMY_UMBRELLA] = 16u,
-                                            [ENEMY_KAMAITACHI] = 20u,
+                                            [ENEMY_KAMAITACHI] = 12u,
                                             [ENEMY_STONE_ONI] = 10u,
                                             [ENEMY_INK_LEECH] = 10u,
+                                            [ENEMY_OFUDA_FOX] = 8u,
                                         },
                                 },
                             [GAME_BOSS_WAVE_INDEX] =
@@ -312,24 +317,34 @@ static const ActDef
                                             [ENEMY_LANTERN_FIRE] = 12u,
                                             [ENEMY_LANTERN_STORM] = 12u,
                                             [ENEMY_UMBRELLA] = 16u,
-                                            [ENEMY_KAMAITACHI] = 20u,
+                                            [ENEMY_KAMAITACHI] = 12u,
                                             [ENEMY_STONE_ONI] = 10u,
                                             [ENEMY_INK_LEECH] = 10u,
+                                            [ENEMY_OFUDA_FOX] = 8u,
                                         },
                                 },
                         },
                 },
 };
 
+static int32_t stage_act_index(int32_t act_index)
+{
+    return act_index < 0 ? 0 : (act_index % GAME_MAIN_ACT_COUNT);
+}
+
 static const ActDef *current_act_def(const GameState *g)
 {
-    int32_t act = g->run.act_index;
-    if (act < 0) {
-        act = 0;
-    } else if (act >= GAME_MAIN_ACT_COUNT) {
-        act = GAME_MAIN_ACT_COUNT - 1;
+    return &k_act_defs[stage_act_index(g->run.act_index)];
+}
+
+static void clear_ryu_body(GameState *g)
+{
+    memset(&g->ryu_body, 0, sizeof g->ryu_body);
+    g->ryu_body.head_id = (EntityId){ECS_INVALID_INDEX, 0};
+    for (int32_t i = 0; i < GAME_RYU_ORB_COUNT; ++i) {
+        g->ryu_body.orb_ids[i] = (EntityId){ECS_INVALID_INDEX, 0};
     }
-    return &k_act_defs[act];
+    g->ryu_body.active_orb_slot = -1;
 }
 
 static uint8_t clamp_reroll_lv(const RunConfig *cfg)
@@ -350,10 +365,13 @@ static int32_t per_type_cap(int32_t act_index, EnemyDefId def_id)
         return 2;
     }
     if (def_id == ENEMY_STONE_ONI) {
-        return act_index >= 2 ? 2 : 1;
+        return stage_act_index(act_index) >= 2 ? 2 : 1;
     }
     if (def_id == ENEMY_INK_LEECH) {
         return 2;
+    }
+    if (def_id == ENEMY_OFUDA_FOX) {
+        return 1;
     }
     return 0;
 }
@@ -520,9 +538,12 @@ static EntityId spawn_wave_enemy(GameState *g, EnemyDefId def_id, int32_t edge_h
 
 static float effective_spawn_interval(const GameState *g, float base_interval)
 {
+    const int32_t loop_n = enemy_endless_loop_n(g);
+    const float scaled =
+        loop_n > 0 ? fmaxf(0.6f, base_interval * powf(0.95f, (float)loop_n)) : base_interval;
     const float mul =
         g->internal.mods.spawn_interval_mul > 0.0f ? g->internal.mods.spawn_interval_mul : 1.0f;
-    const float eff = base_interval * mul;
+    const float eff = scaled * mul;
     return eff < 0.35f ? 0.35f : eff;
 }
 
@@ -551,7 +572,11 @@ int32_t waves_count_alive_escorts(const GameState *g)
 EntityId waves_spawn_summoned_escort(GameState *g, EnemyDefId def_id, float x, float y)
 {
     const EntityId invalid = {ECS_INVALID_INDEX, 0};
-    if (g == NULL || game_is_boss_enemy(def_id) || waves_count_alive_escorts(g) >= 4) {
+    if (g == NULL || game_is_boss_enemy(def_id) || game_is_boss_part(def_id)) {
+        return invalid;
+    }
+    const int32_t max_escorts = 4 + g->internal.mods.max_alive_add;
+    if (waves_count_alive_escorts(g) >= max_escorts) {
         return invalid;
     }
     const EntityId id = enemy_spawn(g, def_id, x, y);
@@ -585,6 +610,7 @@ void waves_prepare_act(GameState *g)
     ecs_flush_destroy(&g->ecs);
 
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    clear_ryu_body(g);
     g->hitstop_t = 0.0f;
     g->pending_impulse_count = 0;
     g->internal.boss_vortex_t = 0.0f;
@@ -625,10 +651,13 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     }
     ecs_flush_destroy(&g->ecs);
 
+    const int32_t loop_n = enemy_endless_loop_n(g);
     g->run.wave_index = wave_index;
     g->run.wave_kills = 0;
-    g->run.wave_quota = wdef->quota;
+    g->run.wave_quota =
+        wave_index < GAME_BOSS_WAVE_INDEX ? (wdef->quota + 2 * loop_n) : wdef->quota;
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    clear_ryu_body(g);
     g->hitstop_t = 0.0f;
     g->pending_impulse_count = 0;
     g->phase = RUN_PHASE_PLAYING;
@@ -730,17 +759,23 @@ void waves_step_spawns(GameState *g)
         return;
     }
 
-    /* Elite mutation roll: normal waves only, Act 2 (8%, 1/2) & Act 3 (12%, 2/3). */
-    if (!is_boss_wave && g->run.act_index >= 1) {
-        const float prob = g->run.act_index == 1 ? 0.08f : 0.12f;
-        const int32_t max_concurrent = g->run.act_index == 1 ? 1 : 2;
-        const int32_t max_per_wave = g->run.act_index == 1 ? 2 : 3;
-        if (alive_elites < max_concurrent && g->internal.wave_elites_spawned < max_per_wave &&
-            ink_rng_f01(&g->rng) < prob) {
-            const uint32_t flags = roll_elite_flags(g, chosen);
-            enemy_apply_elite(g, spawned, flags);
-            ++g->internal.wave_elites_spawned;
-            g->internal.last_elite_flags = flags & ELITE_ALL_MASK;
+    /* Elite mutation roll: normal waves only, excluding Ofuda Fox; endless scales +4n% (cap 30%).
+     */
+    if (!is_boss_wave && chosen != ENEMY_OFUDA_FOX) {
+        const int32_t stage_act = stage_act_index(g->run.act_index);
+        const int32_t loop_n = enemy_endless_loop_n(g);
+        const float base_prob = stage_act == 0 ? 0.0f : (stage_act == 1 ? 0.08f : 0.12f);
+        const float prob = fminf(0.30f, base_prob + 0.04f * (float)loop_n);
+        if (prob > 0.0f) {
+            const int32_t max_concurrent = (stage_act == 2 || loop_n >= 2) ? 2 : 1;
+            const int32_t max_per_wave = (stage_act == 2 || loop_n >= 2) ? 3 : 2;
+            if (alive_elites < max_concurrent && g->internal.wave_elites_spawned < max_per_wave &&
+                ink_rng_f01(&g->rng) < prob) {
+                const uint32_t flags = roll_elite_flags(g, chosen);
+                enemy_apply_elite(g, spawned, flags);
+                ++g->internal.wave_elites_spawned;
+                g->internal.last_elite_flags = flags & ELITE_ALL_MASK;
+            }
         }
     }
 }

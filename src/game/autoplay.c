@@ -67,6 +67,7 @@ BrushInput game_autoplay_input(const GameState *g)
     float strike_y = cy;
 
     bool has_boss = false;
+    float best_boss_d2 = 1e18f;
     float boss_x = cx;
     float boss_y = 140.0f;
 
@@ -115,8 +116,10 @@ BrushInput game_autoplay_input(const GameState *g)
                     fb_y = tr->y;
                 }
             }
-            const float prio =
-                (p->kind == PROJ_FIREBALL || p->kind == PROJ_BOUNCE_ORB) ? 0.65f : 1.0f;
+            const float prio = (p->kind == PROJ_FIREBALL || p->kind == PROJ_BOUNCE_ORB ||
+                                p->kind == PROJ_HOMING_OFUDA)
+                                   ? 0.65f
+                                   : 1.0f;
             const float score = d2 * prio;
             if (d2 > 34.0f * 34.0f && d2 < 460.0f * 460.0f && score < best_p_score) {
                 best_p_score = score;
@@ -138,6 +141,9 @@ BrushInput game_autoplay_input(const GameState *g)
                 }
             }
         } else if (ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
+            if (!game_enemy_is_targetable(g, id)) {
+                continue;
+            }
             const EnemyComp *en = game_enemy(g, id);
             if (en == NULL) {
                 continue;
@@ -156,10 +162,18 @@ BrushInput game_autoplay_input(const GameState *g)
                     slam_y = tr->y;
                 }
             }
-            if (game_is_boss_enemy(en->def_id)) {
-                has_boss = true;
-                boss_x = tr->x;
-                boss_y = tr->y;
+            if (game_is_boss_enemy(en->def_id) || game_is_boss_part(en->def_id)) {
+                const bool on_screen = tr->x >= 60.0f && tr->x <= (float)INK_SCREEN_W - 60.0f &&
+                                       tr->y >= 60.0f && tr->y <= (float)INK_SCREEN_H - 60.0f;
+                const float dx = tr->x - cx;
+                const float dy = tr->y - cy;
+                const float d2 = (dx * dx + dy * dy) * (on_screen ? 1.0f : 16.0f);
+                if (d2 < best_boss_d2) {
+                    best_boss_d2 = d2;
+                    has_boss = true;
+                    boss_x = tr->x;
+                    boss_y = tr->y;
+                }
             }
         }
     }
@@ -193,7 +207,7 @@ BrushInput game_autoplay_input(const GameState *g)
             ty = slam_y;
         }
         want_paint = true;
-        if (hypotf(slam_x - bx, slam_y - by) < 165.0f && g->player.gale_cd <= 0.0f &&
+        if (hypotf(slam_x - bx, slam_y - by) < 165.0f && g->player.gale_charges > 0 &&
             g->player.ink >= gale_cost + 2.0f) {
             in.gale = true;
         }
@@ -233,7 +247,7 @@ BrushInput game_autoplay_input(const GameState *g)
         }
     }
 
-    if (!in.gale && !in.cyclone && g->player.gale_cd <= 0.0f &&
+    if (!in.gale && !in.cyclone && g->player.gale_charges > 0 &&
         g->player.ink >= gale_cost + 12.0f &&
         ((g->internal.blazing_active || has_boss) && (g->ticks % UINT64_C(130) == 35))) {
         in.gale = true;
@@ -261,6 +275,19 @@ BrushInput game_autoplay_input(const GameState *g)
 GameCommand game_autoplay_command(const GameState *g)
 {
     if (g == NULL || g->phase != RUN_PHASE_REWARD) {
+        return (GameCommand){.type = CMD_NONE, .arg = 0};
+    }
+    if (g->run.reward.kind == REWARD_KIND_FALLBACK) {
+        if (g->shrine_count > 0 && g->shrines[0].hp < g->shrines[0].max_hp &&
+            g->run.reward.repair_available) {
+            return (GameCommand){.type = CMD_REPAIR_SHRINE, .arg = 0};
+        }
+        if (g->run.reward.crystal_reward > 0) {
+            return (GameCommand){.type = CMD_PICK_ENDLESS_CRYSTAL, .arg = 0};
+        }
+        if (g->run.reward.repair_available) {
+            return (GameCommand){.type = CMD_REPAIR_SHRINE, .arg = 0};
+        }
         return (GameCommand){.type = CMD_NONE, .arg = 0};
     }
     if (g->shrine_count > 0 && g->shrines[0].hp <= 4 && g->run.reward.repair_available) {

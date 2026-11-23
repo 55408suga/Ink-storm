@@ -154,8 +154,8 @@ void boss_nue_step(GameState *g, EntityId id)
             vel->mass_tier = MASS_MEDIUM;
             vel->vx = 0.0f;
             vel->vy = 0.0f;
-            en->fire_cd = 1.5f;
             en->windup = 0.65f;
+            en->fire_cd = fmaxf(1.5f * enemy_endless_boss_cd_mul(g), en->windup + 0.10f);
             boss->telegraph = 0.0f;
             boss->telegraph_pattern = (boss->phase_idx >= 1 && (boss->pattern & 1) == 1) ? 3 : 1;
         } else {
@@ -194,10 +194,11 @@ void boss_nue_step(GameState *g, EntityId id)
                     }
                 }
 
-                /* Pattern C: Pack Call (up to 2 Kamaitachi, 12s CD, shared 4-escort cap). */
-                if (boss->pattern_timer <= 0.0f && waves_count_alive_escorts(g) < 4) {
-                    boss->pattern_timer = 12.0f;
-                    for (int s = 0; s < 2 && waves_count_alive_escorts(g) < 4; ++s) {
+                /* Pattern C: Pack Call (up to 2 Kamaitachi, 12s CD scaled, shared escort cap). */
+                const int32_t max_escorts = 4 + g->internal.mods.max_alive_add;
+                if (boss->pattern_timer <= 0.0f && waves_count_alive_escorts(g) < max_escorts) {
+                    boss->pattern_timer = 12.0f * enemy_endless_boss_cd_mul(g);
+                    for (int s = 0; s < 2 && waves_count_alive_escorts(g) < max_escorts; ++s) {
                         const float off_x = s == 0 ? -56.0f : 56.0f;
                         const float sx_p =
                             ink_clampf(tr->x + off_x, 84.0f, (float)INK_SCREEN_W - 84.0f);

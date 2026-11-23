@@ -61,8 +61,8 @@ static void setup_act_boss_bench(GameState *g, int32_t act_index)
         game_step(g, NULL, NULL);
     }
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
-    /* Keep shrine and boss alive throughout the measured window so all 600 ticks stay in PLAYING.
-     */
+    /* Keep shrine, boss, and any Ryu orbs alive throughout the measured window so all 600 ticks
+     * stay in PLAYING. */
     if (g->shrine_count > 0) {
         g->shrines[0].max_hp = 10000;
         g->shrines[0].hp = 10000;
@@ -74,6 +74,122 @@ static void setup_act_boss_bench(GameState *g, int32_t act_index)
             bhp->hp = 100000;
         }
     }
+    for (int32_t s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        const EntityId oid = g->ryu_body.orb_ids[s];
+        if (oid.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, oid)) {
+            HealthComp *ohp = game_health_mut(g, oid);
+            if (ohp != NULL) {
+                ohp->max_hp = 100000;
+                ohp->hp = 100000;
+            }
+        }
+    }
+}
+
+static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
+{
+    double game_means[TRIALS];
+    double game_p95s[TRIALS];
+    double fluid_means[TRIALS];
+    double fluid_p95s[TRIALS];
+    uint64_t ref_hash = 0;
+    bool valid = true;
+
+    for (int trial = 0; trial < TRIALS; ++trial) {
+        GameState *g = game_create(cfg);
+        if (g == NULL) {
+            return false;
+        }
+        /* Endless Act 6 (act_index=5, loop n=1): Multi-Part Ippitsu-Ryu (3 orbs + 128-pt trail)
+         * + Ofuda Fox + Homing Ofuda + Mountain Wind + Spirit Pillars. */
+        setup_act_boss_bench(g, 5);
+        const EntityId fox = game_debug_spawn_enemy(g, ENEMY_OFUDA_FOX, 980.0f, 360.0f);
+        HealthComp *fhp = game_health_mut(g, fox);
+        if (fhp != NULL) {
+            fhp->max_hp = 50000;
+            fhp->hp = 50000;
+        }
+        const EntityId escort = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 880.0f, 440.0f);
+        HealthComp *ehp = game_health_mut(g, escort);
+        if (ehp != NULL) {
+            ehp->max_hp = 50000;
+            ehp->hp = 50000;
+        }
+        (void)game_debug_spawn_projectile(g, PROJ_HOMING_OFUDA, 940.0f, 360.0f, -140.0f, 0.0f);
+
+        if (trial == 0) {
+            printf("endless_ryu_fox act=6 loop=1 orbs=%d trail_cap=%d warmup=%d measured=%d "
+                   "trials=%d unit=ms/tick\n",
+                   GAME_RYU_ORB_COUNT, GAME_RYU_TRAIL_CAP, WARMUP_TICKS, MEASURED_TICKS, TRIALS);
+        }
+
+        double game_samples[MEASURED_TICKS];
+        double fluid_samples[MEASURED_TICKS];
+        double game_total = 0.0;
+        double fluid_total = 0.0;
+        double alive_sum = 0.0;
+        double proj_sum = 0.0;
+        bool all_playing = true;
+
+        for (int tick = 0; tick < WARMUP_TICKS + MEASURED_TICKS; ++tick) {
+            const BrushInput in = game_autoplay_input(g);
+            struct timespec t0 = {0};
+            struct timespec t1 = {0};
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            game_step(g, &in, NULL);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            if (tick >= WARMUP_TICKS) {
+                const int idx = tick - WARMUP_TICKS;
+                game_samples[idx] = elapsed_ms(t0, t1);
+                fluid_samples[idx] = g->fluid.stats.solve_ms;
+                game_total += game_samples[idx];
+                fluid_total += fluid_samples[idx];
+                alive_sum += (double)ecs_alive_count(&g->ecs);
+                proj_sum += (double)count_projectiles(g);
+                if (g->phase != RUN_PHASE_PLAYING) {
+                    all_playing = false;
+                }
+            }
+        }
+
+        qsort(game_samples, MEASURED_TICKS, sizeof game_samples[0], compare_ms);
+        qsort(fluid_samples, MEASURED_TICKS, sizeof fluid_samples[0], compare_ms);
+
+        game_means[trial] = game_total / (double)MEASURED_TICKS;
+        game_p95s[trial] = percentile(game_samples, 95);
+        fluid_means[trial] = fluid_total / (double)MEASURED_TICKS;
+        fluid_p95s[trial] = percentile(fluid_samples, 95);
+
+        const uint64_t h = game_hash(g);
+        const bool finite = fluid_validate_finite(&g->fluid);
+        if (trial == 0) {
+            ref_hash = h;
+        }
+        if (!finite || !all_playing || h != ref_hash) {
+            valid = false;
+        }
+
+        printf("endless_trial=%d status=%s game_mean=%.6f game_p95=%.6f fluid_mean=%.6f "
+               "fluid_p95=%.6f avg_alive=%.2f avg_proj=%.2f hash=%016" PRIx64 " finite=%s\n",
+               trial + 1, all_playing ? "PLAYING" : "INVALID", game_means[trial], game_p95s[trial],
+               fluid_means[trial], fluid_p95s[trial], alive_sum / (double)MEASURED_TICKS,
+               proj_sum / (double)MEASURED_TICKS, h, finite ? "true" : "false");
+
+        game_destroy(g);
+    }
+
+    qsort(game_means, TRIALS, sizeof game_means[0], compare_ms);
+    qsort(game_p95s, TRIALS, sizeof game_p95s[0], compare_ms);
+    qsort(fluid_means, TRIALS, sizeof fluid_means[0], compare_ms);
+    qsort(fluid_p95s, TRIALS, sizeof fluid_p95s[0], compare_ms);
+
+    const double med_game_mean = game_means[TRIALS / 2];
+    const double med_game_p95 = game_p95s[TRIALS / 2];
+    printf("endless_ryu_fox median game_mean=%.6f game_p95=%.6f fluid_mean=%.6f fluid_p95=%.6f\n",
+           med_game_mean, med_game_p95, fluid_means[TRIALS / 2], fluid_p95s[TRIALS / 2]);
+    printf("endless_ryu_fox budget(<4.0ms mean & p95): %s\n",
+           (med_game_mean < 4.0 && med_game_p95 < 4.0) ? "PASS" : "FAIL");
+    return valid;
 }
 
 static void run_extra_stress_load(void)
@@ -253,6 +369,9 @@ int main(void)
     printf("budget(<4.0ms mean & p95): %s\n",
            (med_game_mean < 4.0 && med_game_p95 < 4.0) ? "PASS" : "FAIL");
 
+    if (!run_endless_ryu_fox_bench(&cfg)) {
+        valid = false;
+    }
     run_extra_stress_load();
     return valid ? EXIT_SUCCESS : EXIT_FAILURE;
 }
