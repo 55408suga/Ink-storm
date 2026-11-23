@@ -14,7 +14,7 @@
 #define META_MAX_BEST_ACT (3 + META_MAX_ENDLESS_ACTS)
 #define META_RELIC_UNLOCK_COUNT 6
 #define META_HINT_BITS 32
-#define META_SERIALIZE_CAP 512
+#define META_SERIALIZE_CAP 640
 
 typedef enum {
     META_UPG_SHRINE_HP = 0,
@@ -24,6 +24,8 @@ typedef enum {
     META_UPG_COUNT
 } MetaUpgradeKind;
 
+typedef enum { UI_LANG_AUTO = 0, UI_LANG_JA, UI_LANG_EN, UI_LANG_COUNT } UiLangMode;
+
 typedef struct {
     uint8_t master_vol;
     uint8_t bgm_vol;
@@ -31,6 +33,9 @@ typedef struct {
     uint8_t shake_scale;
     bool post_shader_on;
     bool hints_on;
+    uint8_t ui_lang;      /* UiLangMode (0=AUTO, 1=JA, 2=EN), default UI_LANG_AUTO (0) */
+    bool reduce_flash;    /* Suppress screen-wide flashing, default false */
+    uint8_t cursor_scale; /* 100 / 125 / 150, default 100 */
 } SettingsState;
 
 typedef struct {
@@ -72,6 +77,7 @@ typedef struct {
     int32_t score;
     bool cleared;
     bool crystal_bonus_x15;
+    int32_t bonus_crystals;
 } MetaRunResult;
 
 typedef struct {

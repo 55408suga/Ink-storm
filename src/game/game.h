@@ -47,6 +47,8 @@ typedef struct {
     float idle_t;
     float cyclone_cd, cyclone_cd_total;
     float gale_cd, gale_cd_total;
+    int32_t gale_charges;
+    int32_t gale_max_charges;
     float surge_t;
     float cursor_x, cursor_y;
     float aim_x, aim_y;
@@ -70,6 +72,8 @@ typedef struct {
     int32_t choice_ids[GAME_MAX_REWARD_CHOICES];
     uint8_t choice_next_level[GAME_MAX_REWARD_CHOICES];
     bool repair_available;
+    int32_t repair_amount;
+    int32_t crystal_reward;
     uint32_t serial;
 } RewardOffer;
 
@@ -78,6 +82,9 @@ typedef struct {
     int32_t wave_index;
     int32_t wave_kills, wave_quota;
     int32_t acts_cleared;
+    int32_t endless_loop;
+    int32_t endless_acts_cleared;
+    int32_t bonus_crystals;
     int32_t kills;
     int32_t score;
     int32_t chain, max_chain;
@@ -96,6 +103,19 @@ typedef struct {
 typedef struct {
     float x, y, rad_cells, peak_speed;
 } PendingImpulse;
+
+#define GAME_RYU_TRAIL_CAP 128
+#define GAME_RYU_ORB_COUNT 3
+
+typedef struct {
+    EntityId head_id;
+    EntityId orb_ids[GAME_RYU_ORB_COUNT];
+    uint8_t orb_broken_mask;
+    int32_t active_orb_slot;
+    GameVec2 trail[GAME_RYU_TRAIL_CAP];
+    int32_t trail_head;
+    int32_t trail_count;
+} RyuBodyState;
 
 typedef struct GameState GameState;
 
@@ -118,6 +138,7 @@ struct GameState {
     uint32_t dropped_events;
     PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE];
     int32_t pending_impulse_count;
+    RyuBodyState ryu_body;
     GameInternal internal;
 };
 
@@ -150,6 +171,11 @@ uint8_t game_upgrade_level(const GameState *g, UpgradeId id);
 bool game_is_recommended_axis(BrushStyleId style, UpgradeAxis axis);
 bool game_has_relic(const GameState *g, RelicId id);
 bool game_is_boss_enemy(EnemyDefId id);
+bool game_is_boss_part(EnemyDefId id);
+bool game_enemy_is_targetable(const GameState *g, EntityId id);
+int32_t game_relic_unlock_slot(RelicId id);
+bool game_is_relic_unlocked(const GameState *g, RelicId id);
+MassTier game_effective_mass_tier(const GameState *g, MassTier raw);
 
 EntityId game_spawn_entity(GameState *g, uint64_t comp_mask);
 bool game_add_components(GameState *g, EntityId id, uint64_t comp_mask);

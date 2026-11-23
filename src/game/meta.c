@@ -28,12 +28,17 @@ static int32_t clamp_count(int64_t value, int32_t maximum)
 
 SettingsState meta_settings_default(void)
 {
-    return (SettingsState){.master_vol = 80,
-                           .bgm_vol = 70,
-                           .se_vol = 85,
-                           .shake_scale = 100,
-                           .post_shader_on = true,
-                           .hints_on = true};
+    return (SettingsState){
+        .master_vol = 80,
+        .bgm_vol = 70,
+        .se_vol = 85,
+        .shake_scale = 100,
+        .post_shader_on = true,
+        .hints_on = true,
+        .ui_lang = (uint8_t)UI_LANG_AUTO,
+        .reduce_flash = false,
+        .cursor_scale = 100,
+    };
 }
 
 void meta_init_default(MetaState *meta)
@@ -99,12 +104,14 @@ MetaSettleBreakdown meta_calc_crystals(const MetaRunResult *res)
     static const int32_t act_rewards[] = {0, 30, 70, 120};
     const int64_t thunderbursts = clamp_count(res->thunderbursts, INT32_MAX);
     const int64_t cataclysms = clamp_count(res->cataclysms, INT32_MAX);
+    const int64_t endless_acts = clamp_count(res->endless_acts_cleared, META_MAX_ENDLESS_ACTS);
+    const int64_t bonus_crys = clamp_count(res->bonus_crystals, META_MAX_CRYSTALS);
     MetaSettleBreakdown reward = {
         .from_acts = act_rewards[clamp_count(res->acts_cleared, 3)],
         .from_kills = clamp_count((int64_t)res->kills / 5, INT32_MAX),
         .from_chain = clamp_count((int64_t)res->max_chain * 2, 30),
         .from_reactions = clamp_count(thunderbursts + cataclysms * 3, 20),
-        .from_endless = (int64_t)clamp_count(res->endless_acts_cleared, META_MAX_ENDLESS_ACTS) * 40,
+        .from_endless = clamp_count(endless_acts * 40 + bonus_crys, META_MAX_CRYSTALS),
     };
     const int64_t base = (int64_t)reward.from_acts + reward.from_kills + reward.from_chain +
                          reward.from_reactions + reward.from_endless;
@@ -199,7 +206,10 @@ size_t meta_serialize(const MetaState *meta, char *buf, size_t buf_size)
             "opt_se_vol=%u\n"
             "opt_shake_scale=%u\n"
             "opt_post_shader=%d\n"
-            "opt_hints=%d\n",
+            "opt_hints=%d\n"
+            "opt_lang=%u\n"
+            "opt_reduce_flash=%d\n"
+            "opt_cursor_scale=%u\n",
             meta->version, meta->ink_crystals, (unsigned)meta->upgrade_lv[META_UPG_SHRINE_HP],
             (unsigned)meta->upgrade_lv[META_UPG_INK_MAX],
             (unsigned)meta->upgrade_lv[META_UPG_REROLLS],
@@ -208,7 +218,8 @@ size_t meta_serialize(const MetaState *meta, char *buf, size_t buf_size)
             meta->seen_hints_mask, (unsigned)meta->settings.master_vol,
             (unsigned)meta->settings.bgm_vol, (unsigned)meta->settings.se_vol,
             (unsigned)meta->settings.shake_scale, meta->settings.post_shader_on,
-            meta->settings.hints_on);
+            meta->settings.hints_on, (unsigned)meta->settings.ui_lang, meta->settings.reduce_flash,
+            (unsigned)meta->settings.cursor_scale);
         if (length >= 0) {
             return (size_t)length;
         }
@@ -244,7 +255,7 @@ typedef struct {
         uint64_t *u64;
         bool *toggle;
     } dest;
-    enum { VERSION, COUNT, BYTE, RELIC_MASK, HINT_MASK, SHAKE, TOGGLE } kind;
+    enum { VERSION, COUNT, BYTE, RELIC_MASK, HINT_MASK, SHAKE, CURSOR_SCALE, TOGGLE } kind;
     int32_t maximum;
 } SaveField;
 
@@ -297,6 +308,9 @@ static bool read_save_field(const SaveField *field, TextSpan value)
         break;
     case SHAKE:
         *field->dest.byte = parsed < 25 ? 0 : (parsed < 75 ? 50 : 100);
+        break;
+    case CURSOR_SCALE:
+        *field->dest.byte = parsed < 113 ? 100 : (parsed < 138 ? 125 : 150);
         break;
     case TOGGLE:
         *field->dest.toggle = parsed != 0;
@@ -373,6 +387,9 @@ bool meta_deserialize(MetaState *meta, const char *text)
         {"opt_shake_scale", {.byte = &tmp.settings.shake_scale}, SHAKE, 0},
         {"opt_post_shader", {.toggle = &tmp.settings.post_shader_on}, TOGGLE, 0},
         {"opt_hints", {.toggle = &tmp.settings.hints_on}, TOGGLE, 0},
+        {"opt_lang", {.byte = &tmp.settings.ui_lang}, BYTE, UI_LANG_COUNT - 1},
+        {"opt_reduce_flash", {.toggle = &tmp.settings.reduce_flash}, TOGGLE, 0},
+        {"opt_cursor_scale", {.byte = &tmp.settings.cursor_scale}, CURSOR_SCALE, 0},
     };
     if (text != NULL) {
         while (*text != '\0') {

@@ -48,6 +48,8 @@ void rewards_generate_offer(GameState *g)
     if (base_count == 0) {
         offer->kind = REWARD_KIND_FALLBACK;
         offer->repair_available = true;
+        offer->repair_amount = 1;
+        offer->crystal_reward = 10;
         ++offer->serial;
         g->internal.first_reward_offered = true;
         return;
@@ -148,6 +150,8 @@ void rewards_generate_offer(GameState *g)
     }
 
     offer->repair_available = g->shrine_count > 0 && g->shrines[0].hp < g->shrines[0].max_hp;
+    offer->repair_amount = 1;
+    offer->crystal_reward = 0;
     ++offer->serial;
     g->internal.first_reward_offered = true;
 }
@@ -157,8 +161,11 @@ static void clear_reward_and_advance_act(GameState *g)
     g->run.reward.kind = REWARD_KIND_NONE;
     g->run.reward.choice_count = 0;
     g->run.reward.repair_available = false;
+    g->run.reward.repair_amount = 0;
+    g->run.reward.crystal_reward = 0;
     g->internal.wave_clear_is_boss = false;
     ++g->run.act_index;
+    g->run.endless_loop = g->run.act_index / GAME_MAIN_ACT_COUNT;
     g->run.wave_index = 0;
     g->internal.act_prepared = false;
     g->phase = RUN_PHASE_ACT_TRANSITION;
@@ -175,7 +182,7 @@ void rewards_generate_relic_offer(GameState *g)
     int32_t pool_count = 0;
     for (int32_t i = 0; i < (int32_t)RELIC_COUNT; ++i) {
         const RelicId id = (RelicId)i;
-        if (!game_has_relic(g, id)) {
+        if (game_is_relic_unlocked(g, id) && !game_has_relic(g, id)) {
             pool[pool_count++] = id;
         }
     }
@@ -187,12 +194,16 @@ void rewards_generate_relic_offer(GameState *g)
     if (pool_count == 0) {
         offer->kind = REWARD_KIND_FALLBACK;
         offer->repair_available = true;
+        offer->repair_amount = 3;
+        offer->crystal_reward = 30;
         ++offer->serial;
         return;
     }
 
     offer->kind = REWARD_KIND_RELIC;
     offer->repair_available = false;
+    offer->repair_amount = 0;
+    offer->crystal_reward = 0;
 
     for (int32_t slot = 0; slot < GAME_MAX_REWARD_CHOICES && pool_count > 0; ++slot) {
         const int32_t pick = (int32_t)(ink_rng_next(&g->rng) % (uint64_t)pool_count);
@@ -226,6 +237,8 @@ bool rewards_pick_reward(GameState *g, int32_t choice_index)
         g->run.reward.kind = REWARD_KIND_NONE;
         g->run.reward.choice_count = 0;
         g->run.reward.repair_available = false;
+        g->run.reward.repair_amount = 0;
+        g->run.reward.crystal_reward = 0;
         waves_start_wave(g, g->run.wave_index + 1);
         return true;
     }
@@ -285,6 +298,35 @@ bool rewards_repair_shrine(GameState *g)
         g->run.reward.kind = REWARD_KIND_NONE;
         g->run.reward.choice_count = 0;
         g->run.reward.repair_available = false;
+        g->run.reward.repair_amount = 0;
+        g->run.reward.crystal_reward = 0;
+        waves_start_wave(g, g->run.wave_index + 1);
+    }
+    return true;
+}
+
+bool rewards_pick_endless_crystal(GameState *g)
+{
+    if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.reward.kind != REWARD_KIND_FALLBACK ||
+        g->run.reward.crystal_reward <= 0) {
+        return false;
+    }
+    const int32_t amt = g->run.reward.crystal_reward;
+    const int64_t next = (int64_t)g->run.bonus_crystals + amt;
+    g->run.bonus_crystals = next > META_MAX_CRYSTALS ? META_MAX_CRYSTALS : (int32_t)next;
+    (void)game_push_event(g, (GameEvent){
+                                 .type = EV_REWARD_PICK,
+                                 .value = amt,
+                                 .flags = EVF_REWARD_CRYSTAL,
+                             });
+    if (g->internal.wave_clear_is_boss) {
+        clear_reward_and_advance_act(g);
+    } else {
+        g->run.reward.kind = REWARD_KIND_NONE;
+        g->run.reward.choice_count = 0;
+        g->run.reward.repair_available = false;
+        g->run.reward.repair_amount = 0;
+        g->run.reward.crystal_reward = 0;
         waves_start_wave(g, g->run.wave_index + 1);
     }
     return true;

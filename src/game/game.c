@@ -63,6 +63,25 @@ static void handle_command(GameState *g, const GameCommand *cmd)
     case CMD_REPAIR_SHRINE:
         (void)rewards_repair_shrine(g);
         break;
+    case CMD_PICK_ENDLESS_CRYSTAL:
+        (void)rewards_pick_endless_crystal(g);
+        break;
+    case CMD_START_ENDLESS:
+        if (g->phase == RUN_PHASE_VICTORY && !g->run.run_settled && g->run.endless_loop == 0) {
+            if (g->shrine_count > 0) {
+                ShrineState *sh = &g->shrines[0];
+                sh->hp += 3;
+                if (sh->hp > sh->max_hp) {
+                    sh->hp = sh->max_hp;
+                }
+            }
+            g->run.endless_loop = 1;
+            g->internal.wave_clear_is_boss = true;
+            rewards_generate_relic_offer(g);
+            g->phase = RUN_PHASE_REWARD;
+            g->phase_t = 0.0f;
+        }
+        break;
     case CMD_ABORT_RUN:
         if (g->phase != RUN_PHASE_VICTORY && g->phase != RUN_PHASE_GAME_OVER) {
             g->phase = RUN_PHASE_GAME_OVER;
@@ -79,8 +98,6 @@ static void handle_command(GameState *g, const GameCommand *cmd)
         }
         break;
     case CMD_NONE:
-    case CMD_PICK_ENDLESS_CRYSTAL:
-    case CMD_START_ENDLESS:
     default:
         break;
     }
@@ -113,7 +130,10 @@ static void step_aftermath(GameState *g)
     g->phase_t += INK_FIXED_DT;
     if (g->phase_t + 0.5f * INK_FIXED_DT >= 1.0f) {
         if (g->internal.wave_clear_is_boss) {
-            if (g->run.act_index + 1 >= g->run.act_count) {
+            const bool reached_main_victory =
+                (g->run.endless_loop == 0 && g->run.act_index + 1 >= g->run.act_count);
+            const bool reached_endless_cap = (g->run.act_index + 1 >= META_MAX_BEST_ACT);
+            if (reached_main_victory || reached_endless_cap) {
                 g->phase = RUN_PHASE_VICTORY;
                 g->phase_t = 0.0f;
                 (void)game_push_event(g, (GameEvent){
@@ -177,6 +197,23 @@ void game_init(GameState *g, const RunConfig *cfg)
     g->run.act_index = 0;
     g->run.act_count = GAME_MAIN_ACT_COUNT;
     g->run.boss_id = (EntityId){ECS_INVALID_INDEX, 0};
+    g->ryu_body.head_id = (EntityId){ECS_INVALID_INDEX, 0};
+    for (int i = 0; i < GAME_RYU_ORB_COUNT; ++i) {
+        g->ryu_body.orb_ids[i] = (EntityId){ECS_INVALID_INDEX, 0};
+    }
+    g->ryu_body.active_orb_slot = -1;
+
+    int32_t loop = g->config.endless_loop;
+    if (loop < 0) {
+        loop = 0;
+    } else if (loop > ENDLESS_MAX_LOOP_N) {
+        loop = ENDLESS_MAX_LOOP_N;
+    }
+    if (loop > 0) {
+        g->run.endless_loop = loop;
+        g->run.act_index = loop * GAME_MAIN_ACT_COUNT;
+        g->run.acts_cleared = GAME_MAIN_ACT_COUNT;
+    }
 
     const uint8_t hp_lv = clamp_meta_lv(&g->config, META_UPG_SHRINE_HP);
     g->shrine_count = 1;
@@ -196,6 +233,8 @@ void game_init(GameState *g, const RunConfig *cfg)
     g->player.cursor_x = g->shrines[0].x;
     g->player.cursor_y = g->shrines[0].y;
     roguelike_recompute_modifiers(g);
+    g->player.gale_max_charges = g->internal.mods.gale_max_charges;
+    g->player.gale_charges = g->player.gale_max_charges;
     g->player.ink = g->player.ink_max;
 }
 
@@ -298,9 +337,14 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
                                  });
     } else if (g->run.wave_index == GAME_BOSS_WAVE_INDEX &&
                g->run.boss_id.index == ECS_INVALID_INDEX) {
-        ++g->run.acts_cleared;
+        if (g->run.act_index < GAME_MAIN_ACT_COUNT) {
+            ++g->run.acts_cleared;
+        } else if (g->run.endless_acts_cleared < META_MAX_ENDLESS_ACTS) {
+            ++g->run.endless_acts_cleared;
+        }
         g->internal.wave_clear_is_boss = true;
-        if (g->run.act_index + 1 < g->run.act_count && g->shrine_count > 0) {
+        if ((g->run.act_index + 1 < g->run.act_count || g->run.endless_loop > 0) &&
+            g->shrine_count > 0) {
             ShrineState *sh = &g->shrines[0];
             sh->hp += 3;
             if (sh->hp > sh->max_hp) {

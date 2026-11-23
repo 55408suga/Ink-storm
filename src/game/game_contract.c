@@ -33,6 +33,10 @@ static const UpgradeMeta k_upgrade_meta[UPG_COUNT] = {
     [UPG_DEEP_INK] = {.axis = AXIS_COMMON, .max_level = 3},
     [UPG_DEEP_MARK] = {.axis = AXIS_COMMON, .max_level = 3},
     [UPG_BARRIER] = {.axis = AXIS_COMMON, .max_level = 3},
+    [UPG_LINGERING_EMBERS] = {.axis = AXIS_BLAZE, .max_level = 3},
+    [UPG_STORM_BRUSH] = {.axis = AXIS_THUNDER, .max_level = 3},
+    [UPG_DOUBLE_GALE] = {.axis = AXIS_GALE, .max_level = 3},
+    [UPG_INKSTONE_BLESSING] = {.axis = AXIS_INKWAY, .max_level = 3},
 };
 
 bool game_push_event(GameState *g, GameEvent ev)
@@ -57,7 +61,7 @@ MetaRunResult game_run_result(const GameState *g)
         return res;
     }
     res.acts_cleared = g->run.acts_cleared;
-    res.endless_acts_cleared = 0;
+    res.endless_acts_cleared = g->run.endless_acts_cleared;
     res.reached_act = g->run.act_index + 1;
     res.kills = g->run.kills;
     res.max_chain = g->run.max_chain;
@@ -65,7 +69,8 @@ MetaRunResult game_run_result(const GameState *g)
     res.cataclysms = g->run.cataclysms;
     res.score = g->run.score;
     res.cleared = g->run.acts_cleared >= GAME_MAIN_ACT_COUNT;
-    res.crystal_bonus_x15 = false;
+    res.crystal_bonus_x15 = game_has_relic(g, RELIC_NIGHT_PARADE_SCROLL);
+    res.bonus_crystals = g->run.bonus_crystals;
     return res;
 }
 
@@ -151,6 +156,56 @@ bool game_has_relic(const GameState *g, RelicId id)
 bool game_is_boss_enemy(EnemyDefId id)
 {
     return id == ENEMY_BOSS_TENGU || id == ENEMY_BOSS_NUE || id == ENEMY_BOSS_RYU;
+}
+
+bool game_is_boss_part(EnemyDefId id) { return id == ENEMY_BOSS_RYU_ORB; }
+
+bool game_enemy_is_targetable(const GameState *g, EntityId id)
+{
+    if (g == NULL || !ecs_is_alive(&g->ecs, id)) {
+        return false;
+    }
+    const TransformComp *tr = game_transform(g, id);
+    const EnemyComp *en = game_enemy(g, id);
+    if (tr == NULL || en == NULL || tr->dissolving) {
+        return false;
+    }
+    if (en->def_id == ENEMY_BOSS_RYU) {
+        const BossComp *b = game_boss(g, id);
+        if (b != NULL && b->phase_idx < 1 && g->ryu_body.head_id.index == id.index &&
+            g->ryu_body.head_id.gen == id.gen) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int32_t game_relic_unlock_slot(RelicId id)
+{
+    if (id >= RELIC_SEAL_OF_TRINITY && id < RELIC_COUNT) {
+        return (int32_t)(id - RELIC_SEAL_OF_TRINITY);
+    }
+    return -1;
+}
+
+bool game_is_relic_unlocked(const GameState *g, RelicId id)
+{
+    if ((unsigned)id >= (unsigned)RELIC_COUNT) {
+        return false;
+    }
+    const int32_t slot = game_relic_unlock_slot(id);
+    if (slot < 0) {
+        return true;
+    }
+    return g != NULL && (g->config.unlocked_relic_mask & (UINT64_C(1) << (unsigned)slot)) != 0;
+}
+
+MassTier game_effective_mass_tier(const GameState *g, MassTier raw)
+{
+    if (g != NULL && g->internal.mods.oni_tile && raw == MASS_HEAVY) {
+        return MASS_MEDIUM;
+    }
+    return raw;
 }
 
 static void zero_component_slots(GameState *g, uint32_t index, uint64_t mask)

@@ -709,6 +709,30 @@ static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
             .apply_mods_add = barrier_apply_add,
             .on_tick = barrier_on_tick,
         },
+    [UPG_LINGERING_EMBERS] =
+        {
+            .id = UPG_LINGERING_EMBERS,
+            .axis = AXIS_BLAZE,
+            .max_level = 3,
+        },
+    [UPG_STORM_BRUSH] =
+        {
+            .id = UPG_STORM_BRUSH,
+            .axis = AXIS_THUNDER,
+            .max_level = 3,
+        },
+    [UPG_DOUBLE_GALE] =
+        {
+            .id = UPG_DOUBLE_GALE,
+            .axis = AXIS_GALE,
+            .max_level = 3,
+        },
+    [UPG_INKSTONE_BLESSING] =
+        {
+            .id = UPG_INKSTONE_BLESSING,
+            .axis = AXIS_INKWAY,
+            .max_level = 3,
+        },
 };
 
 void roguelike_recompute_modifiers(GameState *g)
@@ -745,6 +769,20 @@ void roguelike_recompute_modifiers(GameState *g)
         .stroke_ember_mul = 1.0f,
         .ink_damp_override = 0.985f,
         .fire_damp_override = 0.935f,
+        .chain_storm_interval = 3,
+        .chain_storm_mul = 1.0f,
+        .surge_stroke_storm = false,
+        .gale_max_charges = 1,
+        .cataclysm_thresh = 0.30f,
+        .cataclysm_cd_base = 2.0f,
+        .surge_reaction_dmg_mul = 1.0f,
+        .surge_min_chain = 2,
+        .thunderfire_gem = false,
+        .oni_tile = false,
+        .night_parade_scroll = false,
+        .bonus_kill_orbs = 0,
+        .spawn_interval_mul = 1.0f,
+        .max_alive_add = 0,
     };
 
     int32_t owned_n = g->run.upgrade_count;
@@ -813,14 +851,23 @@ void roguelike_recompute_modifiers(GameState *g)
 
     g->internal.mods = mods;
     g->player.ink_max = 100.0f + mods.ink_max_add;
-    if (g->player.ink_max < 1.0f) {
-        g->player.ink_max = 1.0f;
+    if (g->player.ink_max < 30.0f) {
+        g->player.ink_max = 30.0f;
     }
     if (g->player.ink > g->player.ink_max) {
         g->player.ink = g->player.ink_max;
     }
     g->player.cyclone_cd_total = mods.cyclone_cd;
     g->player.gale_cd_total = mods.gale_cd;
+    const int32_t prev_max_charges = g->player.gale_max_charges;
+    const int32_t new_max_charges = mods.gale_max_charges > 0 ? mods.gale_max_charges : 1;
+    g->player.gale_max_charges = new_max_charges;
+    if (prev_max_charges > 0 && new_max_charges > prev_max_charges) {
+        g->player.gale_charges += new_max_charges - prev_max_charges;
+    }
+    if (g->player.gale_charges > new_max_charges) {
+        g->player.gale_charges = new_max_charges;
+    }
 
     if (g->shrine_count > 0) {
         const uint8_t hp_lv = clamp_meta_level(&g->config, META_UPG_SHRINE_HP);

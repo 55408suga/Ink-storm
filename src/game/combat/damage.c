@@ -92,6 +92,7 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     ecs_destroy(&g->ecs, victim);
 
     const bool is_boss = game_is_boss_enemy(def_id);
+    const bool is_boss_part = game_is_boss_part(def_id);
     if (is_boss) {
         g->internal.last_boss_x = vx;
         g->internal.last_boss_y = vy;
@@ -110,7 +111,7 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     if (g->run.kills < META_MAX_COUNTERS) {
         ++g->run.kills;
     }
-    if (!is_boss && (elite_flags & ENEMY_FLAG_SUMMONED) == 0u &&
+    if (!is_boss && !is_boss_part && (elite_flags & ENEMY_FLAG_SUMMONED) == 0u &&
         g->run.wave_index < GAME_BOSS_WAVE_INDEX) {
         ++g->run.wave_kills;
     }
@@ -132,12 +133,16 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
                                  .flags = dmg_flags,
                              });
 
+    const RunModifiers *mods = &g->internal.mods;
     if (g->run.chain >= 2) {
         const int32_t capped = g->run.chain > 4 ? 4 : g->run.chain;
         g->player.ink = ink_clampf(g->player.ink + 8.0f * (float)capped, 0.0f, g->player.ink_max);
         g->player.dry = g->player.ink < 20.0f;
+    }
+    const int32_t surge_min = mods->surge_min_chain > 0 ? mods->surge_min_chain : 2;
+    if (g->run.chain >= surge_min) {
         const bool was_surging = g->player.surge_t > 0.0f;
-        g->player.surge_t = g->internal.mods.surge_duration;
+        g->player.surge_t = mods->surge_duration;
         if (!was_surging) {
             (void)game_push_event(g, (GameEvent){
                                          .type = EV_SURGE_START,
@@ -147,10 +152,16 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
                                          .flags = 0,
                                      });
         }
-        if (g->run.chain % 3 == 0) {
-            static const float k_chain_dye[FLUID_MAX_CHANNELS] = {0.55f, 0.0f, 1.15f, 0.0f};
-            fluid_splat(&g->fluid, vx, vy, 6.2f, 0.0f, 0.0f, k_chain_dye);
-        }
+    }
+    const int32_t ci = mods->chain_storm_interval > 0 ? mods->chain_storm_interval : 3;
+    if (g->run.chain >= ci && (g->run.chain % ci) == 0) {
+        const float chain_dye[FLUID_MAX_CHANNELS] = {
+            0.55f,
+            0.0f,
+            1.15f * mods->chain_storm_mul,
+            0.0f,
+        };
+        fluid_splat(&g->fluid, vx, vy, 6.2f, 0.0f, 0.0f, chain_dye);
     }
 
     const float splat_fx = ink_clampf(kx * 0.06f, -30.0f, 30.0f);
@@ -172,7 +183,8 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
         fluid_splat(&g->fluid, vx, vy, splash_rad, splat_fx, splat_fy, death_dye);
     }
 
-    const int32_t orb_count = is_elite ? 5 : def->orb_count;
+    const int32_t orb_count =
+        (is_elite ? 5 : def->orb_count) + (is_boss_part ? 0 : mods->bonus_kill_orbs);
     for (int32_t k = 0; k < orb_count; ++k) {
         (void)combat_spawn_orb(g, vx, vy);
     }
@@ -183,20 +195,20 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
 int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uint32_t dmg_flags,
                               float kx, float ky)
 {
-    if (g == NULL || !ecs_is_alive(&g->ecs, target)) {
+    if (!game_enemy_is_targetable(g, target)) {
         return 0;
     }
     const TransformComp *tr = game_transform(g, target);
     HealthComp *hp = game_health_mut(g, target);
     const StatusComp *st = game_status(g, target);
     const EnemyComp *en = game_enemy(g, target);
-    if (tr == NULL || hp == NULL || st == NULL || en == NULL || tr->dissolving ||
-        hp->invuln_t > 0.0f) {
+    if (tr == NULL || hp == NULL || st == NULL || en == NULL || hp->invuln_t > 0.0f) {
         return 0;
     }
 
     const RunModifiers *mods = &g->internal.mods;
     const bool is_boss = game_is_boss_enemy(en->def_id);
+    const bool is_boss_like = is_boss || game_is_boss_part(en->def_id);
     float dmg = base_dmg;
     upgrades_fire_on_hit(g, target, &dmg, dmg_flags);
     if ((dmg_flags & DMG_FIRE) != 0u) {
@@ -208,12 +220,15 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
     if (g->player.dry && (dmg_flags & DMG_DEFLECTED) != 0u) {
         dmg *= mods->dry_deflect_dmg_mul;
     }
-
-    if (st->ink_mark_t > 0.0f) {
-        dmg *= is_boss ? (1.5f * (mods->ink_mark_mul * 0.5f)) : mods->ink_mark_mul;
+    if (g->player.surge_t > 0.0f && (dmg_flags & DMG_REACTION) != 0u) {
+        dmg *= mods->surge_reaction_dmg_mul;
     }
 
-    /* Elite & Boss resistances; dual-element (FIRE | STORM) uses the lower resistance. */
+    if (st->ink_mark_t > 0.0f) {
+        dmg *= is_boss_like ? (1.5f * (mods->ink_mark_mul * 0.5f)) : mods->ink_mark_mul;
+    }
+
+    /* Elite, Boss & Barrier resistances; dual-element (FIRE | STORM) uses the lower resistance. */
     if ((en->elite_flags & ELITE_RIGID) != 0u && (dmg_flags & DMG_SLAM) != 0u) {
         dmg *= 0.5f;
     }
@@ -221,13 +236,16 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
     const bool has_storm = (dmg_flags & DMG_STORM) != 0u;
     const float m_fire = (en->elite_flags & ELITE_FIREPROOF) != 0u ? 0.3f : 1.0f;
     const float m_storm =
-        (en->elite_flags & ELITE_STORMPROOF) != 0u ? 0.3f : (is_boss ? 0.5f : 1.0f);
+        (en->elite_flags & ELITE_STORMPROOF) != 0u ? 0.3f : (is_boss_like ? 0.5f : 1.0f);
     if (has_fire && has_storm) {
         dmg *= fmaxf(m_fire, m_storm);
     } else if (has_fire) {
         dmg *= m_fire;
     } else if (has_storm) {
         dmg *= m_storm;
+    }
+    if (st->barrier_t > 0.0f) {
+        dmg *= 0.5f;
     }
 
     if (en->def_id == ENEMY_BOSS_RYU && (dmg_flags & DMG_CATACLYSM) != 0u) {
@@ -349,14 +367,16 @@ void combat_damage_shrine(GameState *g, float source_x, float source_y, int32_t 
                              });
 }
 
-static float slam_damage_for_enemy(EnemyDefId def_id, MassTier tier, int32_t max_hp)
+static float slam_damage_for_enemy(const GameState *g, EnemyDefId def_id, MassTier eff_tier,
+                                   int32_t max_hp)
 {
     if (def_id == ENEMY_BOSS_NUE) {
         return 60.0f;
     }
-    switch (tier) {
-    case MASS_LIGHT:
+    if (eff_tier == MASS_LIGHT || (g->internal.mods.oni_tile && eff_tier == MASS_MEDIUM)) {
         return (float)(max_hp > 0 ? max_hp * 4 : 1000);
+    }
+    switch (eff_tier) {
     case MASS_MEDIUM:
         return 60.0f;
     case MASS_HEAVY:
@@ -395,6 +415,7 @@ void combat_physics_and_slams_step(GameState *g)
             ((vel->mass_tier == MASS_BOSS || is_nue) && !nue_slam_active)) {
             continue;
         }
+        const MassTier eff_tier = game_effective_mass_tier(g, vel->mass_tier);
 
         const float prev_x = tr->x;
         const float prev_y = tr->y;
@@ -430,9 +451,8 @@ void combat_physics_and_slams_step(GameState *g)
             }
 
             if (st->knockback_t > 0.0f && esp > 215.0f) {
-                const float slam_dmg =
-                    slam_damage_for_enemy(en->def_id, vel->mass_tier, hp->max_hp);
-                if (vel->mass_tier == MASS_HEAVY || nue_slam_active) {
+                const float slam_dmg = slam_damage_for_enemy(g, en->def_id, eff_tier, hp->max_hp);
+                if (eff_tier == MASS_HEAVY || nue_slam_active) {
                     if (st->stun_t < 1.0f) {
                         st->stun_t = 1.0f;
                     }
@@ -498,12 +518,12 @@ void combat_physics_and_slams_step(GameState *g)
                     continue;
                 }
                 const EntityId other = ecs_entity_at(&g->ecs, j);
-                if (other.index == ECS_INVALID_INDEX) {
+                if (other.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, other)) {
                     continue;
                 }
                 const TransformComp *otr = game_transform(g, other);
                 const EnemyComp *oen = game_enemy(g, other);
-                if (otr == NULL || oen == NULL || otr->dissolving) {
+                if (otr == NULL || oen == NULL) {
                     continue;
                 }
                 const float hit_rad = game_is_boss_enemy(oen->def_id) ? 54.0f : 34.0f;
@@ -514,10 +534,10 @@ void combat_physics_and_slams_step(GameState *g)
                     float dir_y = 0.0f;
                     normalize_vec2(dx, dy, &dir_x, &dir_y);
                     const float slam_dmg =
-                        slam_damage_for_enemy(en->def_id, vel->mass_tier, hp->max_hp);
+                        slam_damage_for_enemy(g, en->def_id, eff_tier, hp->max_hp);
                     const float svx = vel->vx;
                     const float svy = vel->vy;
-                    if (vel->mass_tier == MASS_HEAVY && st->stun_t < 1.0f) {
+                    if (eff_tier == MASS_HEAVY && st->stun_t < 1.0f) {
                         st->stun_t = 1.0f;
                     }
                     st->knockback_t = 0.0f;

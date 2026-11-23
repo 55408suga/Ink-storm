@@ -25,6 +25,7 @@ typedef enum {
 #define UI_HOVER_NONE (-1)
 #define UI_HOVER_REPAIR 3
 #define UI_HOVER_REROLL 4
+#define UI_HOVER_CRYSTAL 5
 
 typedef struct {
     UiScene scene;
@@ -50,6 +51,13 @@ typedef struct {
     HintId active_hint;
     float active_hint_t;
     MetaState meta_view;
+
+    /* Phase 5 additions: deferred Victory settlement, expanded settings, feedback */
+    bool settle_preview;
+    bool reduce_flash;
+    uint8_t cursor_scale;
+    float settings_notice_t;
+    int32_t settings_notice_kind;
 } UiView;
 
 #endif

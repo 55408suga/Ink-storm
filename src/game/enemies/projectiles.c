@@ -89,10 +89,12 @@ static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float o
             if (used) {
                 continue;
             }
+            if (!game_enemy_is_targetable(g, cand)) {
+                continue;
+            }
             const TransformComp *tr = game_transform(g, cand);
             const EnemyComp *en = game_enemy(g, cand);
-            if (tr == NULL || en == NULL || tr->dissolving ||
-                (en->elite_flags & ELITE_STORMPROOF) != 0) {
+            if (tr == NULL || en == NULL || (en->elite_flags & ELITE_STORMPROOF) != 0) {
                 continue;
             }
             const float dx = tr->x - ox;
@@ -215,12 +217,12 @@ void projectiles_step(GameState *g)
             EntityId best = {ECS_INVALID_INDEX, 0};
             for (uint32_t j = 0; j < hw; ++j) {
                 const EntityId eid = ecs_entity_at(&g->ecs, j);
-                if (eid.index == ECS_INVALID_INDEX) {
+                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
                     continue;
                 }
                 const TransformComp *etr = game_transform(g, eid);
                 const EnemyComp *een = game_enemy(g, eid);
-                if (etr == NULL || een == NULL || etr->dissolving) {
+                if (etr == NULL || een == NULL) {
                     continue;
                 }
                 const float ex = etr->x - tr->x;
@@ -229,7 +231,9 @@ void projectiles_step(GameState *g)
                 if (d2 >= 620.0f * 620.0f) {
                     continue;
                 }
-                const float sc = d2 * (game_is_boss_enemy(een->def_id) ? 0.65f : 1.0f);
+                const bool is_boss_target =
+                    game_is_boss_enemy(een->def_id) || game_is_boss_part(een->def_id);
+                const float sc = d2 * (is_boss_target ? 0.65f : 1.0f);
                 if (sc < best_score) {
                     best_score = sc;
                     best = eid;
@@ -354,15 +358,17 @@ void projectiles_step(GameState *g)
         if (proj->deflected) {
             for (uint32_t j = 0; j < hw; ++j) {
                 const EntityId eid = ecs_entity_at(&g->ecs, j);
-                if (eid.index == ECS_INVALID_INDEX) {
+                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
                     continue;
                 }
                 const TransformComp *etr = game_transform(g, eid);
                 const EnemyComp *een = game_enemy(g, eid);
-                if (etr == NULL || een == NULL || etr->dissolving) {
+                if (etr == NULL || een == NULL) {
                     continue;
                 }
-                const float hit_r = game_is_boss_enemy(een->def_id) ? 46.0f : 31.0f;
+                const float hit_r = game_is_boss_enemy(een->def_id)
+                                        ? 46.0f
+                                        : (game_is_boss_part(een->def_id) ? 36.0f : 31.0f);
                 const float ex = etr->x - tr->x;
                 const float ey = etr->y - tr->y;
                 if (ex * ex + ey * ey < hit_r * hit_r) {

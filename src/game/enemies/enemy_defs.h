@@ -53,4 +53,7 @@ void boss_nue_step(GameState *g, EntityId id);
 void boss_ryu_spawn(GameState *g, EntityId id);
 void boss_ryu_step(GameState *g, EntityId id);
 
+void ofuda_fox_spawn(GameState *g, EntityId id);
+void ofuda_fox_step(GameState *g, EntityId id);
+
 #endif

@@ -48,6 +48,9 @@ static void assert_meta_equal(const MetaState *expected, const MetaState *actual
     TEST_ASSERT_EQUAL_UINT8(expected->settings.shake_scale, actual->settings.shake_scale);
     TEST_ASSERT_EQUAL(expected->settings.post_shader_on, actual->settings.post_shader_on);
     TEST_ASSERT_EQUAL(expected->settings.hints_on, actual->settings.hints_on);
+    TEST_ASSERT_EQUAL_UINT8(expected->settings.ui_lang, actual->settings.ui_lang);
+    TEST_ASSERT_EQUAL(expected->settings.reduce_flash, actual->settings.reduce_flash);
+    TEST_ASSERT_EQUAL_UINT8(expected->settings.cursor_scale, actual->settings.cursor_scale);
 }
 
 static void test_save_resolve_path_priority(void)
@@ -114,6 +117,9 @@ static void test_save_roundtrip(void)
     src.settings.shake_scale = 50;
     src.settings.post_shader_on = false;
     src.settings.hints_on = false;
+    src.settings.ui_lang = (uint8_t)UI_LANG_EN;
+    src.settings.reduce_flash = true;
+    src.settings.cursor_scale = 125;
 
     TEST_ASSERT_TRUE(save_write(path, &src, NULL));
 

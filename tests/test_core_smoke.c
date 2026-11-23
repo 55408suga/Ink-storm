@@ -199,10 +199,108 @@ static void test_phase4_pre_contracts(void)
 
     const uint64_t h_before = game_hash(g);
     game_debug_start_act(g, -1);
-    game_debug_start_act(g, GAME_MAIN_ACT_COUNT);
+    game_debug_start_act(g, META_MAX_BEST_ACT);
     TEST_ASSERT_EQUAL_INT32(1, g->run.act_index);
     TEST_ASSERT_EQUAL_HEX64(h_before, game_hash(g));
 
+    game_destroy(g);
+}
+
+static void test_phase5_pre_contracts(void)
+{
+    TEST_ASSERT_EQUAL_INT(28, (int)UPG_COUNT);
+    TEST_ASSERT_EQUAL_INT(15, (int)RELIC_COUNT);
+    TEST_ASSERT_EQUAL_INT(12, (int)ENEMY_DEF_COUNT);
+    TEST_ASSERT_EQUAL_INT(6, (int)PROJ_KIND_COUNT);
+
+    for (int id = 0; id < (int)UPG_COUNT; ++id) {
+        TEST_ASSERT_EQUAL_UINT8(3, game_upgrade_max_level((UpgradeId)id));
+        TEST_ASSERT_TRUE((unsigned)game_upgrade_axis((UpgradeId)id) < (unsigned)AXIS_COUNT);
+    }
+
+    for (int id = 0; id < (int)RELIC_COUNT; ++id) {
+        const int32_t expected_slot =
+            id < (int)RELIC_SEAL_OF_TRINITY ? -1 : (id - (int)RELIC_SEAL_OF_TRINITY);
+        TEST_ASSERT_EQUAL_INT32(expected_slot, game_relic_unlock_slot((RelicId)id));
+    }
+    TEST_ASSERT_EQUAL_INT32(-1, game_relic_unlock_slot(RELIC_COUNT));
+    TEST_ASSERT_EQUAL_INT32(-1, game_relic_unlock_slot((RelicId)-1));
+
+    RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(55));
+    cfg.unlocked_relic_mask = UINT64_C(0x15); /* slots 0, 2, 4 */
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+
+    for (int id = 0; id < (int)RELIC_SEAL_OF_TRINITY; ++id) {
+        TEST_ASSERT_TRUE(game_is_relic_unlocked(g, (RelicId)id));
+    }
+    TEST_ASSERT_TRUE(game_is_relic_unlocked(g, RELIC_SEAL_OF_TRINITY));
+    TEST_ASSERT_FALSE(game_is_relic_unlocked(g, RELIC_INKSTORM_SECRET));
+    TEST_ASSERT_TRUE(game_is_relic_unlocked(g, RELIC_THUNDERFIRE_GEM));
+    TEST_ASSERT_FALSE(game_is_relic_unlocked(g, RELIC_ONI_TILE));
+    TEST_ASSERT_TRUE(game_is_relic_unlocked(g, RELIC_ENDLESS_BRUSH));
+    TEST_ASSERT_FALSE(game_is_relic_unlocked(g, RELIC_NIGHT_PARADE_SCROLL));
+    TEST_ASSERT_FALSE(game_is_relic_unlocked(g, RELIC_COUNT));
+    TEST_ASSERT_FALSE(game_is_relic_unlocked(NULL, RELIC_SEAL_OF_TRINITY));
+
+    for (int id = 0; id < (int)ENEMY_DEF_COUNT; ++id) {
+        if ((EnemyDefId)id == ENEMY_BOSS_RYU_ORB) {
+            TEST_ASSERT_TRUE(game_is_boss_part((EnemyDefId)id));
+        } else {
+            TEST_ASSERT_FALSE(game_is_boss_part((EnemyDefId)id));
+        }
+    }
+    TEST_ASSERT_FALSE(game_is_boss_part(ENEMY_DEF_COUNT));
+
+    /* RyuBodyState initial values and hash coverage */
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, g->ryu_body.head_id.index);
+    for (int k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
+        TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, g->ryu_body.orb_ids[k].index);
+    }
+    TEST_ASSERT_EQUAL_INT32(-1, g->ryu_body.active_orb_slot);
+    TEST_ASSERT_EQUAL_INT32(0, g->ryu_body.trail_count);
+    const uint64_t h_ryu_before = game_hash(g);
+    g->ryu_body.trail[0] = (GameVec2){120.0f, 180.0f};
+    g->ryu_body.trail_count = 1;
+    TEST_ASSERT_NOT_EQUAL_UINT64(h_ryu_before, game_hash(g));
+    g->ryu_body.trail_count = 0;
+    TEST_ASSERT_EQUAL_HEX64(h_ryu_before, game_hash(g));
+
+    /* game_debug_start_act endless range & out-of-range no-op */
+    game_debug_start_act(g, 3);
+    TEST_ASSERT_EQUAL_INT32(3, g->run.act_index);
+    TEST_ASSERT_EQUAL_INT32(1, g->run.endless_loop);
+    const uint64_t h_act3 = game_hash(g);
+    game_debug_start_act(g, -1);
+    game_debug_start_act(g, META_MAX_BEST_ACT);
+    TEST_ASSERT_EQUAL_INT32(3, g->run.act_index);
+    TEST_ASSERT_EQUAL_HEX64(h_act3, game_hash(g));
+
+    /* CMD_START_ENDLESS: no-op outside VICTORY, transitions in VICTORY when unsettled & loop 0 */
+    GameState *g2 = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g2);
+    const GameCommand start_endless = {.type = CMD_START_ENDLESS, .arg = 0};
+    GameState *g2_ref = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g2_ref);
+    game_step(g2_ref, NULL, NULL);
+    game_step(g2, NULL, &start_endless);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(g2_ref), game_hash(g2));
+
+    g2->phase = RUN_PHASE_VICTORY;
+    g2->run.run_settled = false;
+    g2->run.endless_loop = 0;
+    g2->run.act_index = GAME_MAIN_ACT_COUNT - 1;
+    g2->shrines[0].hp = g2->shrines[0].max_hp - 4;
+    const int32_t hp_before = g2->shrines[0].hp;
+    game_step(g2, NULL, &start_endless);
+    TEST_ASSERT_EQUAL_INT32(hp_before + 3, g2->shrines[0].hp);
+    TEST_ASSERT_EQUAL_INT32(1, g2->run.endless_loop);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_REWARD, g2->phase);
+    TEST_ASSERT_TRUE(g2->run.reward.kind == REWARD_KIND_RELIC ||
+                     g2->run.reward.kind == REWARD_KIND_FALLBACK);
+
+    game_destroy(g2_ref);
+    game_destroy(g2);
     game_destroy(g);
 }
 
@@ -217,5 +315,6 @@ int main(void)
     RUN_TEST(test_component_accessors_contract);
     RUN_TEST(test_event_queue_capacity_contract);
     RUN_TEST(test_phase4_pre_contracts);
+    RUN_TEST(test_phase5_pre_contracts);
     return UNITY_END();
 }

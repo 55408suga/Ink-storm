@@ -392,6 +392,7 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_SEAL_SANGEN] = {.ja = "三元", .en = "TRI"},
     [TEXT_SEAL_INKSTORM] = {.ja = "墨嵐", .en = "INK"},
     [TEXT_SHOWCASE_HEADER] = {.ja = "見本帳", .en = "Showcase"},
+    [TEXT_P2_STUB] = {.ja = "準備中", .en = "TBD"},
 };
 
 const char *text_get(TextId id, bool use_ja)
@@ -425,6 +426,9 @@ TextId text_enemy_name(EnemyDefId id)
         return TEXT_ENEMY_BOSS_NUE_NAME;
     case ENEMY_BOSS_RYU:
         return TEXT_ENEMY_BOSS_RYU_NAME;
+    case ENEMY_OFUDA_FOX:
+    case ENEMY_BOSS_RYU_ORB:
+        return TEXT_P2_STUB;
     default:
         return TEXT_NONE;
     }
@@ -453,6 +457,9 @@ TextId text_enemy_intro(EnemyDefId id)
         return TEXT_ENEMY_BOSS_NUE_INTRO;
     case ENEMY_BOSS_RYU:
         return TEXT_ENEMY_BOSS_RYU_INTRO;
+    case ENEMY_OFUDA_FOX:
+    case ENEMY_BOSS_RYU_ORB:
+        return TEXT_P2_STUB;
     default:
         return TEXT_NONE;
     }
@@ -477,6 +484,9 @@ TextId text_upgrade_name(UpgradeId id)
     if ((unsigned)id >= (unsigned)UPG_COUNT) {
         return TEXT_NONE;
     }
+    if (id >= UPG_LINGERING_EMBERS) {
+        return TEXT_P2_STUB;
+    }
     return (TextId)(TEXT_UPG_EMBER_TIP_NAME + (int)id * 4);
 }
 
@@ -484,6 +494,9 @@ TextId text_upgrade_effect(UpgradeId id, int level)
 {
     if ((unsigned)id >= (unsigned)UPG_COUNT || level < 1 || level > 3) {
         return TEXT_NONE;
+    }
+    if (id >= UPG_LINGERING_EMBERS) {
+        return TEXT_P2_STUB;
     }
     return (TextId)(TEXT_UPG_EMBER_TIP_NAME + (int)id * 4 + level);
 }
@@ -555,6 +568,13 @@ TextId text_relic_name(RelicId id)
         return TEXT_RELIC_LINGERING_INK_NAME;
     case RELIC_WIND_RETURN:
         return TEXT_RELIC_WIND_RETURN_NAME;
+    case RELIC_SEAL_OF_TRINITY:
+    case RELIC_INKSTORM_SECRET:
+    case RELIC_THUNDERFIRE_GEM:
+    case RELIC_ONI_TILE:
+    case RELIC_ENDLESS_BRUSH:
+    case RELIC_NIGHT_PARADE_SCROLL:
+        return TEXT_P2_STUB;
     default:
         return TEXT_NONE;
     }
@@ -581,6 +601,13 @@ TextId text_relic_effect(RelicId id)
         return TEXT_RELIC_LINGERING_INK_EFFECT;
     case RELIC_WIND_RETURN:
         return TEXT_RELIC_WIND_RETURN_EFFECT;
+    case RELIC_SEAL_OF_TRINITY:
+    case RELIC_INKSTORM_SECRET:
+    case RELIC_THUNDERFIRE_GEM:
+    case RELIC_ONI_TILE:
+    case RELIC_ENDLESS_BRUSH:
+    case RELIC_NIGHT_PARADE_SCROLL:
+        return TEXT_P2_STUB;
     default:
         return TEXT_NONE;
     }

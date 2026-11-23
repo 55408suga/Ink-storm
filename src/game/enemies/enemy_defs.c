@@ -126,6 +126,30 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
             .spawn_fn = boss_ryu_spawn,
             .ai_step_fn = boss_ryu_step,
         },
+    [ENEMY_OFUDA_FOX] =
+        {
+            .id = ENEMY_OFUDA_FOX,
+            .base_hp = 30,
+            .radius = 17.0f,
+            .mass_tier = MASS_MEDIUM,
+            .fluid_coupling = 1.5f,
+            .score = 200,
+            .orb_count = 2,
+            .spawn_fn = ofuda_fox_spawn,
+            .ai_step_fn = ofuda_fox_step,
+        },
+    [ENEMY_BOSS_RYU_ORB] =
+        {
+            .id = ENEMY_BOSS_RYU_ORB,
+            .base_hp = 300,
+            .radius = 30.0f,
+            .mass_tier = MASS_BOSS,
+            .fluid_coupling = 0.0f,
+            .score = 300,
+            .orb_count = 2,
+            .spawn_fn = NULL,
+            .ai_step_fn = NULL,
+        },
 };
 
 const EnemyDef *enemy_def_get(EnemyDefId id)
@@ -144,8 +168,9 @@ EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
     }
     const EnemyDef *def = &k_enemy_defs[def_id];
     const bool is_boss = game_is_boss_enemy(def_id);
+    const bool is_boss_part = game_is_boss_part(def_id);
     uint64_t mask = COMP_TRANSFORM | COMP_VELOCITY | COMP_HEALTH | COMP_STATUS | COMP_ENEMY;
-    if (is_boss) {
+    if (is_boss || is_boss_part) {
         mask |= COMP_BOSS;
     }
     const EntityId id = game_spawn_entity(g, mask);
@@ -198,7 +223,8 @@ void enemy_apply_elite(GameState *g, EntityId id, uint32_t elite_flags)
         return;
     }
     const EnemyDef *def = enemy_def_get(en->def_id);
-    if (def == NULL || game_is_boss_enemy(en->def_id)) {
+    if (def == NULL || game_is_boss_enemy(en->def_id) || game_is_boss_part(en->def_id) ||
+        en->def_id == ENEMY_OFUDA_FOX) {
         return;
     }
 

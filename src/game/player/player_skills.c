@@ -194,7 +194,9 @@ static void execute_gale(GameState *g, float origin_x, float origin_y, float bas
                 const bool is_stopped_nue =
                     en != NULL && en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1;
                 const float mass_mul =
-                    is_stopped_nue ? 0.55f : mass_gale_multiplier(vel->mass_tier);
+                    is_stopped_nue
+                        ? 0.55f
+                        : mass_gale_multiplier(game_effective_mass_tier(g, vel->mass_tier));
                 const float kb_t = is_stopped_nue ? 0.90f : 1.15f;
                 StatusComp *st = game_status_mut(g, id);
                 if (mass_mul > 0.0f && st != NULL && dot > 0.35f) {
@@ -285,6 +287,9 @@ static void cast_gale(GameState *g)
     g->player.ink -= cost;
     g->player.dry = g->player.ink < 20.0f;
     g->player.gale_cd = mods->gale_cd;
+    if (g->player.gale_charges > 0) {
+        --g->player.gale_charges;
+    }
 
     float gx = g->player.aim_x;
     float gy = g->player.aim_y;
@@ -319,6 +324,12 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
 
     decay_timer(&g->player.cyclone_cd);
     decay_timer(&g->player.gale_cd);
+    if (g->player.gale_max_charges <= 0) {
+        g->player.gale_max_charges = mods->gale_max_charges > 0 ? mods->gale_max_charges : 1;
+    }
+    if (g->player.gale_cd <= 0.0f && g->player.gale_charges < g->player.gale_max_charges) {
+        g->player.gale_charges = g->player.gale_max_charges;
+    }
     decay_timer(&g->player.surge_t);
     if (g->run.chain_t > 0.0f) {
         g->run.chain_t -= INK_FIXED_DT;
