@@ -671,4 +671,4 @@
 
 - 本書の数値を実プレイで調整する（ウェーブの所要時間、墨晶の値付け、ボスの HP）
 - **[Phase 4 確定]** 題字用の毛筆体フォントは Yuji Syuku Regular（SIL OFL 1.1・未改変、`assets/fonts/title_brush.ttf`）、外部 BGM 音源は CC0 の決定論的和風 OGG 4 曲（`assets/audio/bgm_{lobby,battle,boss,victory}.ogg`）を採用し、本文用の明朝体（`assets/fonts/ui_mincho.ttf`）とあわせて `assets/LICENSES.txt` へ記録済み。
-- 一筆龍（第 3 幕最終ボス）の多部位版における頭の軌跡の履歴の持ち方と、描画・演出の詳細（見た目の規約は [art-direction.md](art-direction.md) §10.5。ECS 上の `BossComp.part_id` / `parent_id` 表現、設定値・ヒントフラグの `MetaState` 統合、`CMD_REPAIR_SHRINE` コマンド、`fluid_add_radial_impulse` API は [architecture.md](architecture.md) で確定済み）
+- **[Phase 5 確定]** 一筆龍（第 3 幕最終ボス）の多部位版は、`GameState.ryu_body`（`RyuBodyState`：8px 間隔・最大 128 点リングバッファ `trail[128]`、3 龍玉エンティティ `ENEMY_BOSS_RYU_ORB` の `orb_ids[3]`・`orb_broken_mask`・`active_orb_slot`）で頭の軌跡履歴と弧長配置（0 / 450 / 900px）を管理し、描画側（`ink_render`）は `trail` を弧長リサンプルした 24 点の一筆胴体・龍玉破壊区間のかすれ骨折表現・独立 3 龍玉・`EV_BOSS_PART_BREAK` 破砕 VFX/SE・上中央合算 HP バー＋3 龍玉印・第 3 フェーズ金輪郭オーラとして実装・実機検証済み（見た目の規約は [art-direction.md](art-direction.md) §10.5、データ契約は [architecture.md](architecture.md) で確定済み）。

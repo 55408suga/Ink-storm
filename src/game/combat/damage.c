@@ -129,11 +129,15 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
             if (head.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, head)) {
                 BossComp *pboss = game_boss_mut(g, head);
                 HealthComp *php = game_health_mut(g, head);
+                EnemyComp *pen = game_enemy_mut(g, head);
                 const TransformComp *ptr = game_transform(g, head);
                 if (pboss != NULL && pboss->phase_idx == 0) {
                     pboss->phase_idx = 1;
                     if (php != NULL) {
                         php->invuln_t = 1.5f;
+                    }
+                    if (pen != NULL && pen->fire_cd < 0.90f) {
+                        pen->fire_cd = 0.90f;
                     }
                     pboss->gale_t = 0.0f;
                     pboss->telegraph = 0.0f;
@@ -377,6 +381,10 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                        hp->hp * 5 <= hp->max_hp * 2) {
                 boss->phase_idx = 2;
                 hp->invuln_t = 1.5f;
+                EnemyComp *en_mut = game_enemy_mut(g, target);
+                if (en_mut != NULL && en_mut->fire_cd < 0.90f) {
+                    en_mut->fire_cd = 0.90f;
+                }
                 boss->gale_t = 0.0f;
                 boss->telegraph = 0.0f;
                 boss->telegraph_pattern = 0;
