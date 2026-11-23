@@ -84,6 +84,10 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     const bool is_elite = en->is_elite;
     const uint32_t elite_flags = en->elite_flags;
     const float absorbed_ink = en->absorbed_ink;
+    const BossComp *boss_comp = game_boss(g, victim);
+    const int32_t part_id = boss_comp != NULL ? boss_comp->part_id : -1;
+    const EntityId parent_id =
+        boss_comp != NULL ? boss_comp->parent_id : (EntityId){ECS_INVALID_INDEX, 0};
     const EnemyDef *def = enemy_def_get(def_id);
     if (def == NULL) {
         return;
@@ -96,6 +100,81 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
     if (is_boss) {
         g->internal.last_boss_x = vx;
         g->internal.last_boss_y = vy;
+        if (def_id == ENEMY_BOSS_RYU) {
+            for (int32_t k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
+                const EntityId orb = g->ryu_body.orb_ids[k];
+                if (orb.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, orb)) {
+                    ecs_destroy(&g->ecs, orb);
+                }
+                g->ryu_body.orb_ids[k] = (EntityId){ECS_INVALID_INDEX, 0};
+            }
+            g->ryu_body.head_id = (EntityId){ECS_INVALID_INDEX, 0};
+            g->ryu_body.active_orb_slot = -1;
+        }
+    } else if (def_id == ENEMY_BOSS_RYU_ORB) {
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_BOSS_PART_BREAK,
+                                     .x = vx,
+                                     .y = vy,
+                                     .value = part_id,
+                                     .flags = dmg_flags,
+                                 });
+        if (part_id >= 0 && part_id < GAME_RYU_ORB_COUNT) {
+            g->ryu_body.orb_broken_mask |= (uint8_t)(1u << (unsigned)part_id);
+            g->ryu_body.orb_ids[part_id] = (EntityId){ECS_INVALID_INDEX, 0};
+        }
+        if ((g->ryu_body.orb_broken_mask & 0x7u) == 0x7u) {
+            const EntityId head =
+                parent_id.index != ECS_INVALID_INDEX ? parent_id : g->ryu_body.head_id;
+            if (head.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, head)) {
+                BossComp *pboss = game_boss_mut(g, head);
+                HealthComp *php = game_health_mut(g, head);
+                const TransformComp *ptr = game_transform(g, head);
+                if (pboss != NULL && pboss->phase_idx == 0) {
+                    pboss->phase_idx = 1;
+                    if (php != NULL) {
+                        php->invuln_t = 1.5f;
+                    }
+                    pboss->gale_t = 0.0f;
+                    pboss->telegraph = 0.0f;
+                    pboss->telegraph_pattern = 0;
+                    pboss->pattern = 0;
+                    g->ryu_body.active_orb_slot = -1;
+                    const float px = ptr != NULL ? ptr->x : vx;
+                    const float py = ptr != NULL ? ptr->y : vy;
+                    static const float k_ryu_awaken[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
+                    fluid_swirl(&g->fluid, px, py, 16.0f, 50.0f, k_ryu_awaken);
+                    (void)game_push_event(g, (GameEvent){
+                                                 .type = EV_BOSS_PHASE,
+                                                 .x = px,
+                                                 .y = py,
+                                                 .value = 2,
+                                                 .flags = 0,
+                                             });
+                }
+            }
+        } else if (g->ryu_body.active_orb_slot == part_id) {
+            g->ryu_body.active_orb_slot = -1;
+            for (int32_t off = 1; off <= GAME_RYU_ORB_COUNT; ++off) {
+                const int32_t slot = ((part_id >= 0 ? part_id : 0) + off) % GAME_RYU_ORB_COUNT;
+                if ((g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) == 0u &&
+                    ecs_is_alive(&g->ecs, g->ryu_body.orb_ids[slot])) {
+                    g->ryu_body.active_orb_slot = slot;
+                    BossComp *next_oboss = game_boss_mut(g, g->ryu_body.orb_ids[slot]);
+                    if (next_oboss != NULL) {
+                        next_oboss->telegraph = 0.0f;
+                    }
+                    break;
+                }
+            }
+            /* Ensure the replacement orb always gets its full 0.65s warning (+0.10s lead-in). */
+            const EntityId head =
+                parent_id.index != ECS_INVALID_INDEX ? parent_id : g->ryu_body.head_id;
+            EnemyComp *head_en = (head.index != ECS_INVALID_INDEX) ? game_enemy_mut(g, head) : NULL;
+            if (head_en != NULL && head_en->fire_cd < 0.75f) {
+                head_en->fire_cd = 0.75f;
+            }
+        }
     }
 
     if (g->run.chain_t > 0.0f) {
@@ -250,7 +329,7 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
 
     if (en->def_id == ENEMY_BOSS_RYU && (dmg_flags & DMG_CATACLYSM) != 0u) {
         const BossComp *boss_c = game_boss(g, target);
-        if (boss_c != NULL && boss_c->phase_idx >= 1) {
+        if (boss_c != NULL && boss_c->phase_idx >= 2) {
             dmg *= 2.0f;
         }
     }
@@ -294,28 +373,22 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                                              .value = 2,
                                              .flags = 0,
                                          });
-            } else if (en->def_id == ENEMY_BOSS_RYU) {
-                if (hp->hp * 3 <= hp->max_hp) {
-                    boss->part_id = 2;
-                    if (boss->phase_idx == 0) {
-                        boss->phase_idx = 1;
-                        hp->invuln_t = 1.5f;
-                        boss->gale_t = 0.0f;
-                        boss->telegraph = 0.0f;
-                        boss->telegraph_pattern = 0;
-                        static const float k_ryu_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
-                        fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 50.0f, k_ryu_dye);
-                        (void)game_push_event(g, (GameEvent){
-                                                     .type = EV_BOSS_PHASE,
-                                                     .x = tr->x,
-                                                     .y = tr->y,
-                                                     .value = 2,
-                                                     .flags = 0,
-                                                 });
-                    }
-                } else if (hp->hp * 3 <= hp->max_hp * 2 && boss->part_id < 1) {
-                    boss->part_id = 1;
-                }
+            } else if (en->def_id == ENEMY_BOSS_RYU && boss->phase_idx == 1 &&
+                       hp->hp * 5 <= hp->max_hp * 2) {
+                boss->phase_idx = 2;
+                hp->invuln_t = 1.5f;
+                boss->gale_t = 0.0f;
+                boss->telegraph = 0.0f;
+                boss->telegraph_pattern = 0;
+                static const float k_ryu_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.0f, 0.0f, 0.0f};
+                fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 50.0f, k_ryu_dye);
+                (void)game_push_event(g, (GameEvent){
+                                             .type = EV_BOSS_PHASE,
+                                             .x = tr->x,
+                                             .y = tr->y,
+                                             .value = 3,
+                                             .flags = 0,
+                                         });
             }
         }
     }

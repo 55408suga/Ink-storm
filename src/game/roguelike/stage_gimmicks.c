@@ -55,9 +55,9 @@ void stage_gimmicks_setup_act(GameState *g, int32_t act_index)
     }
     ecs_flush_destroy(&g->ecs);
 
-    if (act_index == 1) {
-        /* Act 2: Two Torii gates (2x2 cell pillars with 6-cell vertical gap) + four rock pillars.
-         */
+    const int32_t stage_act = act_index < 0 ? 0 : (act_index % GAME_MAIN_ACT_COUNT);
+    if (stage_act == 1) {
+        /* Act 2 (and endless cycle 1): Two Torii gates + four rock pillars. */
         fluid_set_solid_rect(&g->fluid, 376.0f, 320.0f, 16.0f, 16.0f, true);
         fluid_set_solid_rect(&g->fluid, 376.0f, 384.0f, 16.0f, 16.0f, true);
         fluid_set_solid_rect(&g->fluid, 888.0f, 320.0f, 16.0f, 16.0f, true);
@@ -67,8 +67,8 @@ void stage_gimmicks_setup_act(GameState *g, int32_t act_index)
         fluid_set_solid_circle(&g->fluid, 940.0f, 190.0f, 24.0f, true);
         fluid_set_solid_circle(&g->fluid, 340.0f, 530.0f, 24.0f, true);
         fluid_set_solid_circle(&g->fluid, 940.0f, 530.0f, 24.0f, true);
-    } else if (act_index == 2) {
-        /* Act 3: Two upper rock pillars + three Spirit Pillars in an equilateral triangle. */
+    } else if (stage_act == 2) {
+        /* Act 3 (and endless cycle 2): Two upper rock pillars + three Spirit Pillars. */
         fluid_set_solid_circle(&g->fluid, 340.0f, 190.0f, 24.0f, true);
         fluid_set_solid_circle(&g->fluid, 940.0f, 190.0f, 24.0f, true);
 
@@ -218,12 +218,12 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
         const uint32_t hw = g->ecs.high_water;
         for (uint32_t j = 0; j < hw; ++j) {
             const EntityId eid = ecs_entity_at(&g->ecs, j);
-            if (eid.index == ECS_INVALID_INDEX) {
+            if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
                 continue;
             }
             const TransformComp *etr = game_transform(g, eid);
             const EnemyComp *een = game_enemy(g, eid);
-            if (etr == NULL || een == NULL || etr->dissolving) {
+            if (etr == NULL || een == NULL) {
                 continue;
             }
             const float dx = etr->x - lx;
@@ -263,7 +263,8 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
 
 static void step_mountain_wind(GameState *g)
 {
-    if (g->run.act_index != 2) {
+    const int32_t stage_act = g->run.act_index < 0 ? 0 : (g->run.act_index % GAME_MAIN_ACT_COUNT);
+    if (stage_act != 2) {
         return;
     }
     float period = 12.0f;

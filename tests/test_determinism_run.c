@@ -88,11 +88,11 @@ static void advance_until_phase(GameState *a, GameState *b, RunPhase target, int
     TEST_ASSERT_EQUAL_INT(target, b->phase);
 }
 
-static void run_act_deterministically(GameState *a, GameState *b, int32_t act_idx,
+static void run_act_deterministically(GameState *a, GameState *b, int32_t act_idx, bool endless_act,
                                       RunTelemetry *tel)
 {
-    /* Act 1 transition runs 120 ticks from game_init; Act 2/3 run 1 tick inside CMD_PICK_REWARD
-     * plus 119 subsequent ticks (120 ticks total). */
+    /* Act 1 transition runs 120 ticks from game_init; subsequent acts run 1 tick inside the reward
+     * command plus 119 subsequent ticks (120 ticks total). */
     int trans_ticks = 0;
     while (a->phase == RUN_PHASE_ACT_TRANSITION && trans_ticks < 200) {
         step_pair_and_assert(a, b, NULL, tel);
@@ -105,9 +105,9 @@ static void run_act_deterministically(GameState *a, GameState *b, int32_t act_id
 
     /* Three normal waves per act. */
     for (int32_t w = 0; w < GAME_BOSS_WAVE_INDEX; ++w) {
-        const int wave_ticks = act_idx == 0 ? 420 : 300;
+        const int wave_ticks = (act_idx == 0) ? 420 : (endless_act ? 180 : 300);
         for (int i = 0; i < wave_ticks && a->phase == RUN_PHASE_PLAYING; ++i) {
-            /* Keep shrine healthy across all 3 acts during automated soak. */
+            /* Keep shrine healthy across acts during automated soak. */
             if (a->shrines[0].hp <= 2) {
                 a->shrines[0].hp = a->shrines[0].max_hp;
                 b->shrines[0].hp = b->shrines[0].max_hp;
@@ -146,17 +146,19 @@ static void run_act_deterministically(GameState *a, GameState *b, int32_t act_id
     /* Boss wave. */
     const HealthComp *boss_hp0 = game_health(a, a->run.boss_id);
     TEST_ASSERT_NOT_NULL(boss_hp0);
-    tel->boss_max_hp[act_idx] = boss_hp0->max_hp;
-    tel->boss_min_hp[act_idx] = boss_hp0->hp;
+    if (act_idx < GAME_MAIN_ACT_COUNT) {
+        tel->boss_max_hp[act_idx] = boss_hp0->max_hp;
+        tel->boss_min_hp[act_idx] = boss_hp0->hp;
+    }
 
-    const int boss_ticks = act_idx == 0 ? 600 : 480;
+    const int boss_ticks = (act_idx == 0) ? 600 : (endless_act ? 240 : 480);
     for (int i = 0; i < boss_ticks && a->phase == RUN_PHASE_PLAYING; ++i) {
         if (a->shrines[0].hp <= 2) {
             a->shrines[0].hp = a->shrines[0].max_hp;
             b->shrines[0].hp = b->shrines[0].max_hp;
         }
         step_pair_and_assert(a, b, NULL, tel);
-        if (a->run.boss_id.index != ECS_INVALID_INDEX) {
+        if (act_idx < GAME_MAIN_ACT_COUNT && a->run.boss_id.index != ECS_INVALID_INDEX) {
             const HealthComp *bhp = game_health(a, a->run.boss_id);
             if (bhp != NULL && bhp->hp < tel->boss_min_hp[act_idx]) {
                 tel->boss_min_hp[act_idx] = bhp->hp;
@@ -168,12 +170,13 @@ static void run_act_deterministically(GameState *a, GameState *b, int32_t act_id
         game_debug_force_wave_clear(b);
     }
 
-    if (act_idx + 1 < GAME_MAIN_ACT_COUNT) {
-        /* Boss defeat -> Shrine HP +3 -> Relic 3-choice -> next Act transition. */
+    if (endless_act || act_idx + 1 < GAME_MAIN_ACT_COUNT) {
+        /* Boss defeat -> Shrine HP +3 -> Relic / Fallback -> next Act transition. */
         advance_until_phase(a, b, RUN_PHASE_REWARD, 120, tel);
-        TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, a->run.reward.kind);
-        const GameCommand pick_relic = {.type = CMD_PICK_REWARD, .arg = 0};
-        step_pair_and_assert(a, b, &pick_relic, tel);
+        const GameCommand boss_reward = (a->run.reward.kind == REWARD_KIND_RELIC)
+                                            ? (GameCommand){.type = CMD_PICK_REWARD, .arg = 0}
+                                            : game_autoplay_command(a);
+        step_pair_and_assert(a, b, &boss_reward, tel);
         TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, a->phase);
     } else {
         advance_until_phase(a, b, RUN_PHASE_VICTORY, 120, tel);
@@ -192,7 +195,7 @@ static void test_full_run_determinism_sanity_and_settlement(void)
     RunTelemetry tel = {0};
 
     for (int32_t act = 0; act < GAME_MAIN_ACT_COUNT; ++act) {
-        run_act_deterministically(a, b, act, &tel);
+        run_act_deterministically(a, b, act, false, &tel);
     }
 
     /* Full 3-act campaign sanity assertions. */
@@ -443,10 +446,80 @@ static void test_entity_capacity_full(void)
     game_destroy(g);
 }
 
+static void test_campaign_plus_endless_loop_determinism_and_settlement(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x55aa));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+
+    RunTelemetry tel = {0};
+
+    /* Main campaign Acts 1..3 -> VICTORY (unsettled). */
+    for (int32_t act = 0; act < GAME_MAIN_ACT_COUNT; ++act) {
+        run_act_deterministically(a, b, act, false, &tel);
+    }
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, a->phase);
+    TEST_ASSERT_FALSE(a->run.run_settled);
+    TEST_ASSERT_EQUAL_INT32(3, a->run.acts_cleared);
+    TEST_ASSERT_EQUAL_INT32(0, a->run.endless_acts_cleared);
+
+    /* Damage shrine slightly to verify CMD_START_ENDLESS heals +3 and opens Act 3 boss relic offer.
+     */
+    a->shrines[0].hp = a->shrines[0].max_hp - 4;
+    b->shrines[0].hp = b->shrines[0].max_hp - 4;
+    const GameCommand start_endless = {.type = CMD_START_ENDLESS, .arg = 0};
+    step_pair_and_assert(a, b, &start_endless, &tel);
+    TEST_ASSERT_EQUAL_INT32(a->shrines[0].max_hp - 1, a->shrines[0].hp);
+    TEST_ASSERT_EQUAL_INT32(1, a->run.endless_loop);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_REWARD, a->phase);
+    TEST_ASSERT_EQUAL_INT(REWARD_KIND_RELIC, a->run.reward.kind);
+
+    const GameCommand pick_relic = {.type = CMD_PICK_REWARD, .arg = 0};
+    step_pair_and_assert(a, b, &pick_relic, &tel);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, a->phase);
+    TEST_ASSERT_EQUAL_INT32(3, a->run.act_index);
+
+    /* Endless Loop 1: Act 4 (Tengu), Act 5 (Nue), Act 6 (Multi-Part Ippitsu-Ryu). */
+    for (int32_t act = 3; act < 6; ++act) {
+        run_act_deterministically(a, b, act, true, &tel);
+    }
+    TEST_ASSERT_EQUAL_INT32(3, a->run.acts_cleared);
+    TEST_ASSERT_EQUAL_INT32(3, a->run.endless_acts_cleared);
+    TEST_ASSERT_EQUAL_INT32(6, a->run.act_index);
+    TEST_ASSERT_EQUAL_INT32(2, a->run.endless_loop);
+    TEST_ASSERT_EQUAL_INT32(6, tel.event_counts[EV_BOSS_ENTER]);
+    TEST_ASSERT_EQUAL_INT32(6, tel.event_counts[EV_ACT_CLEAR]);
+
+    /* Abort in Act 7 transition and settle exactly once. */
+    const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
+    step_pair_and_assert(a, b, &abort_cmd, &tel);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_GAME_OVER, a->phase);
+
+    MetaState meta;
+    meta_init_default(&meta);
+    const MetaRunResult res = game_run_result(a);
+    TEST_ASSERT_TRUE(res.cleared);
+    TEST_ASSERT_EQUAL_INT32(3, res.acts_cleared);
+    TEST_ASSERT_EQUAL_INT32(3, res.endless_acts_cleared);
+
+    MetaSettleBreakdown bd = {0};
+    TEST_ASSERT_TRUE(meta_settle_run(&meta, a, &bd));
+    TEST_ASSERT_EQUAL_INT32(120, bd.from_acts);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(120, bd.from_endless);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(6, meta.best_act);
+    TEST_ASSERT_FALSE(meta_settle_run(&meta, a, &bd));
+
+    game_destroy(b);
+    game_destroy(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_full_run_determinism_sanity_and_settlement);
+    RUN_TEST(test_campaign_plus_endless_loop_determinism_and_settlement);
     RUN_TEST(test_different_seed_diverges);
     RUN_TEST(test_multi_tick_per_frame_event_tally);
     RUN_TEST(test_event_queue_overflow_and_reset);

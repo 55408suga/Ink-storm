@@ -117,7 +117,7 @@ static const EnemyDef k_enemy_defs[ENEMY_DEF_COUNT] = {
     [ENEMY_BOSS_RYU] =
         {
             .id = ENEMY_BOSS_RYU,
-            .base_hp = 1500,
+            .base_hp = 900,
             .radius = 46.0f,
             .mass_tier = MASS_BOSS,
             .fluid_coupling = 0.0f,
@@ -160,6 +160,29 @@ const EnemyDef *enemy_def_get(EnemyDefId id)
     return &k_enemy_defs[id];
 }
 
+int32_t enemy_endless_loop_n(const GameState *g)
+{
+    if (g == NULL) {
+        return 0;
+    }
+    int32_t n = g->run.act_index / GAME_MAIN_ACT_COUNT;
+    if (n < 0) {
+        n = 0;
+    } else if (n > ENDLESS_MAX_LOOP_N) {
+        n = ENDLESS_MAX_LOOP_N;
+    }
+    return n;
+}
+
+float enemy_endless_boss_cd_mul(const GameState *g)
+{
+    const int32_t n = enemy_endless_loop_n(g);
+    if (n <= 0) {
+        return 1.0f;
+    }
+    return fmaxf(0.70f, powf(0.90f, (float)n));
+}
+
 EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
 {
     const EntityId invalid = {ECS_INVALID_INDEX, 0};
@@ -191,8 +214,12 @@ EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y)
     }
     HealthComp *hp = game_health_mut(g, id);
     if (hp != NULL) {
-        hp->max_hp = def->base_hp;
-        hp->hp = def->base_hp;
+        const int32_t loop_n = enemy_endless_loop_n(g);
+        const float hp_mul = (is_boss || is_boss_part) ? (1.0f + 0.35f * (float)loop_n)
+                                                       : (1.0f + 0.25f * (float)loop_n);
+        const int32_t scaled_hp = (int32_t)floorf((float)def->base_hp * hp_mul + 0.5f);
+        hp->max_hp = scaled_hp > 0 ? scaled_hp : 1;
+        hp->hp = hp->max_hp;
         hp->flash_t = 0.45f;
     }
     EnemyComp *en = game_enemy_mut(g, id);
@@ -236,9 +263,11 @@ void enemy_apply_elite(GameState *g, EntityId id, uint32_t elite_flags)
     en->is_elite = true;
     en->elite_flags = (en->elite_flags & ~ELITE_ALL_MASK) | flags;
 
-    const int32_t elite_hp = (int32_t)floorf((float)def->base_hp * 2.5f + 0.5f);
-    hp->max_hp = elite_hp;
-    hp->hp = elite_hp;
+    const int32_t loop_n = enemy_endless_loop_n(g);
+    const int32_t elite_hp =
+        (int32_t)floorf((float)def->base_hp * (1.0f + 0.25f * (float)loop_n) * 2.5f + 0.5f);
+    hp->max_hp = elite_hp > 0 ? elite_hp : 1;
+    hp->hp = hp->max_hp;
     tr->radius = def->radius * 1.2f;
 
     vel->mass_tier = def->mass_tier;

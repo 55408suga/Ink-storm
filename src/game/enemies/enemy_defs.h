@@ -18,6 +18,8 @@ typedef struct {
 } EnemyDef;
 
 const EnemyDef *enemy_def_get(EnemyDefId id);
+int32_t enemy_endless_loop_n(const GameState *g);
+float enemy_endless_boss_cd_mul(const GameState *g);
 EntityId enemy_spawn(GameState *g, EnemyDefId def_id, float x, float y);
 void enemy_apply_elite(GameState *g, EntityId id, uint32_t elite_flags);
 void enemies_ai_step(GameState *g);

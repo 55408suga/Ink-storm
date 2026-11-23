@@ -29,7 +29,13 @@ EntityId projectiles_spawn(GameState *g, ProjKind kind, float x, float y, float 
     if (vel != NULL) {
         vel->vx = vx;
         vel->vy = vy;
-        vel->fluid_coupling = (kind == PROJ_WIND_SICKLE) ? 1.5f : 1.0f;
+        if (kind == PROJ_WIND_SICKLE) {
+            vel->fluid_coupling = 1.5f;
+        } else if (kind == PROJ_HOMING_OFUDA) {
+            vel->fluid_coupling = 0.6f;
+        } else {
+            vel->fluid_coupling = 1.0f;
+        }
     }
     ProjComp *proj = game_proj_mut(g, id);
     if (proj != NULL) {
@@ -156,6 +162,15 @@ void projectiles_step(GameState *g)
         float fv = 0.0f;
         float dye[FLUID_MAX_CHANNELS] = {0};
         fluid_sample(&g->fluid, tr->x, tr->y, &fu, &fv, dye);
+
+        /* Undeflected homing ofuda burns up immediately in fire > 0.30 without hitting the shrine.
+         */
+        if (!proj->deflected && proj->kind == PROJ_HOMING_OFUDA && isfinite(dye[1]) &&
+            dye[1] > 0.30f) {
+            ecs_destroy(&g->ecs, id);
+            continue;
+        }
+
         const float fu_px = fu * FLUID_CELL_PX;
         const float fv_px = fv * FLUID_CELL_PX;
         const float fsp = hypotf(fu_px, fv_px);
@@ -212,6 +227,25 @@ void projectiles_step(GameState *g)
             }
         }
 
+        if (!proj->deflected && proj->kind == PROJ_HOMING_OFUDA && tcd > 1e-6f && psp > 1e-6f) {
+            /* Steer toward the shrine at up to 90 deg/s while preserving current speed. */
+            const float cur_ang = atan2f(vel->vy, vel->vx);
+            const float want_ang = atan2f(tcy, tcx);
+            float diff = want_ang - cur_ang;
+            const float k_pi = 3.14159265f;
+            const float k_two_pi = 6.2831853f;
+            if (diff > k_pi) {
+                diff -= k_two_pi;
+            } else if (diff < -k_pi) {
+                diff += k_two_pi;
+            }
+            const float max_turn = 1.5707963f * INK_FIXED_DT;
+            diff = ink_clampf(diff, -max_turn, max_turn);
+            const float new_ang = cur_ang + diff;
+            vel->vx = cosf(new_ang) * psp;
+            vel->vy = sinf(new_ang) * psp;
+        }
+
         if (proj->deflected) {
             float best_score = 1e12f;
             EntityId best = {ECS_INVALID_INDEX, 0};
@@ -260,12 +294,14 @@ void projectiles_step(GameState *g)
         const float max_sp = proj->deflected
                                  ? (base_max_sp * g->internal.mods.deflected_max_speed_mul)
                                  : base_max_sp;
-        const float target_sp = ink_clampf(psp, 180.0f, max_sp);
+        const float min_sp =
+            (!proj->deflected && proj->kind == PROJ_HOMING_OFUDA) ? 140.0f : 180.0f;
+        const float target_sp = ink_clampf(psp, min_sp, max_sp);
         if (psp > 1e-6f) {
             vel->vx = (vel->vx / psp) * target_sp;
             vel->vy = (vel->vy / psp) * target_sp;
         } else {
-            vel->vx = 180.0f;
+            vel->vx = min_sp;
             vel->vy = 0.0f;
         }
 
