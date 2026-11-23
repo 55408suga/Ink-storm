@@ -848,8 +848,10 @@ static void test_boss_nue_and_boss_ryu(void)
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f * 0.85f, ren->fire_cd);
 
-    /* Destroy Orb 2 (Wind) -> Phase 2 Awakening (EV_BOSS_PHASE value=2, head targetable, wind 6s).
+    /* Destroy Orb 2 (Wind) late in countdown -> Phase 2 Awakening (EV_BOSS_PHASE value=2, head
+     * targetable, wind 6s, head fire_cd clamped >= 0.90s so post-invuln attack keeps full warning).
      */
+    ren->fire_cd = 0.05f;
     g->event_count = 0;
     (void)combat_apply_damage(g, orbs[2], 500, DMG_PHYSICAL, 0.0f, 0.0f);
     ecs_flush_destroy(&g->ecs);
@@ -857,6 +859,7 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_EQUAL_INT32(-1, g->ryu_body.active_orb_slot);
     TEST_ASSERT_EQUAL_INT32(1, rboss->phase_idx);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, rhp->invuln_t);
+    TEST_ASSERT_TRUE(ren->fire_cd >= 0.90f);
     TEST_ASSERT_TRUE(game_enemy_is_targetable(g, ryu));
     bool saw_break2 = false;
     bool saw_ryu_p2 = false;
@@ -883,19 +886,26 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
     TEST_ASSERT_TRUE(g->internal.wind_timer <= 1.5f);
 
-    /* Phase 2 Cataclysm damage is 1x (80, NOT 160). */
+    /* Right after Phase 2 invuln ends, head must not fire immediately (< 0.65s warning). */
     rhp->invuln_t = 0.0f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(ren->fire_cd > 0.80f);
+
+    /* Phase 2 Cataclysm damage is 1x (80, NOT 160). */
     game_status_mut(g, ryu)->ink_mark_t = 0.0f;
     const int32_t p2_cata =
         combat_apply_damage(g, ryu, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);
     TEST_ASSERT_EQUAL_INT32(80, p2_cata);
 
-    /* Drop Dragon Eye HP <= 40% (<= 360) -> Phase 3 Ascension (EV_BOSS_PHASE value=3). */
+    /* Drop Dragon Eye HP <= 40% (<= 360) late in countdown -> Phase 3 Ascension (EV_BOSS_PHASE
+     * value=3, head fire_cd clamped >= 0.90s for full Breath/Coil warning after 1.5s invuln). */
+    ren->fire_cd = 0.05f;
     g->event_count = 0;
     (void)combat_apply_damage(g, ryu, 460, DMG_PHYSICAL, 0.0f, 0.0f);
     TEST_ASSERT_EQUAL_INT32(360, rhp->hp);
     TEST_ASSERT_EQUAL_INT32(2, rboss->phase_idx);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, rhp->invuln_t);
+    TEST_ASSERT_TRUE(ren->fire_cd >= 0.90f);
     bool saw_ryu_p3 = false;
     for (int32_t e = 0; e < g->event_count; ++e) {
         if (g->events[e].type == EV_BOSS_PHASE && g->events[e].value == 3) {
@@ -904,8 +914,12 @@ static void test_boss_nue_and_boss_ryu(void)
     }
     TEST_ASSERT_TRUE(saw_ryu_p3);
 
-    /* Phase 3 Cataclysm damage x2: 80 -> 160; attack CD x0.8 (1.76s). */
+    /* Phase 3 Cataclysm damage x2: 80 -> 160; post-invuln warning preserved; attack CD x0.8
+     * (1.76s).
+     */
     rhp->invuln_t = 0.0f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(ren->fire_cd > 0.80f);
     game_status_mut(g, ryu)->ink_mark_t = 0.0f;
     const int32_t p3_cata =
         combat_apply_damage(g, ryu, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM, 0.0f, 0.0f);

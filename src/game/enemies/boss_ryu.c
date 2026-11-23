@@ -95,10 +95,13 @@ static void spawn_lightning_strike_gimmick(GameState *g, float x, float y)
 }
 
 static void enter_awakening_phase(GameState *g, const TransformComp *tr, HealthComp *hp,
-                                  BossComp *boss)
+                                  EnemyComp *en, BossComp *boss)
 {
     boss->phase_idx = 1;
     hp->invuln_t = 1.5f;
+    if (en->fire_cd < 0.90f) {
+        en->fire_cd = 0.90f;
+    }
     boss->gale_t = 0.0f;
     boss->telegraph = 0.0f;
     boss->telegraph_pattern = 0;
@@ -116,10 +119,13 @@ static void enter_awakening_phase(GameState *g, const TransformComp *tr, HealthC
 }
 
 static void enter_ascension_phase(GameState *g, const TransformComp *tr, HealthComp *hp,
-                                  BossComp *boss)
+                                  EnemyComp *en, BossComp *boss)
 {
     boss->phase_idx = 2;
     hp->invuln_t = 1.5f;
+    if (en->fire_cd < 0.90f) {
+        en->fire_cd = 0.90f;
+    }
     boss->gale_t = 0.0f;
     boss->telegraph = 0.0f;
     boss->telegraph_pattern = 0;
@@ -256,9 +262,9 @@ void boss_ryu_step(GameState *g, EntityId id)
 
     /* Safety phase sync in case orbs were cleared or HP was adjusted externally. */
     if (boss->phase_idx == 0 && (g->ryu_body.orb_broken_mask & 0x7u) == 0x7u) {
-        enter_awakening_phase(g, tr, hp, boss);
+        enter_awakening_phase(g, tr, hp, en, boss);
     } else if (boss->phase_idx == 1 && hp->hp > 0 && hp->hp * 5 <= hp->max_hp * 2) {
-        enter_ascension_phase(g, tr, hp, boss);
+        enter_ascension_phase(g, tr, hp, en, boss);
     }
 
     if (boss->pattern_timer > 0.0f) {
