@@ -26,6 +26,17 @@ void input_latch_reset_for_ui_transition(InputLatch *l, float x, float y, bool l
     l->paint_suppressed = left_down;
 }
 
+void input_latch_anchor(InputLatch *l, float x, float y)
+{
+    if (l == NULL) {
+        return;
+    }
+    l->prev_x = x;
+    l->prev_y = y;
+    l->cur_x = x;
+    l->cur_y = y;
+}
+
 void input_latch_feed(InputLatch *l, const RawInput *raw)
 {
     if (l == NULL || raw == NULL) {

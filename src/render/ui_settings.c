@@ -3,6 +3,7 @@
 
 #include "core.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -114,9 +115,10 @@ void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *u
         } else if (i == 2) {
             snprintf(vbuf, sizeof vbuf, "%u%%", (unsigned)st->se_vol);
         } else if (i == 3) {
-            snprintf(
-                vbuf, sizeof vbuf, "%s",
-                text_get(st->post_shader_on ? TEXT_SETTINGS_ON : TEXT_SETTINGS_OFF, r->use_ja));
+            const TextId post_id = r->post_shader.id == 0 ? TEXT_SETTINGS_UNAVAILABLE
+                                   : st->post_shader_on   ? TEXT_SETTINGS_ON
+                                                          : TEXT_SETTINGS_OFF;
+            snprintf(vbuf, sizeof vbuf, "%s", text_get(post_id, r->use_ja));
         } else if (i == 4) {
             snprintf(vbuf, sizeof vbuf, "%u%%", (unsigned)st->shake_scale);
         } else if (i == 5) {
@@ -131,30 +133,33 @@ void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *u
             snprintf(vbuf, sizeof vbuf, "%u%%", (unsigned)st->cursor_scale);
         }
 
-        const float val_cx =
-            (layout.minus_rects[i].x + layout.minus_rects[i].width + layout.plus_rects[i].x) * 0.5f;
-        render_draw_text_centered(r, vbuf, (Vector2){val_cx, row.y + row.height * 0.5f}, 20.0f,
-                                  PAL_SUMI_SCORCH, 0.96f, false);
+        const float val_l = layout.minus_rects[i].x + layout.minus_rects[i].width;
+        const float val_cx = (val_l + layout.plus_rects[i].x) * 0.5f;
+        render_draw_text_fit(r, vbuf, (Vector2){val_cx, row.y + row.height * 0.5f},
+                             layout.plus_rects[i].x - val_l - 8.0f, 20.0f, 13.0f, PAL_SUMI_SCORCH,
+                             0.96f, false);
     }
 
     /* Utility buttons: Reset First-Time Hints (9) & Reset Settings to Defaults (10) */
     const bool hints_sel = (active == 9);
     ink_fill_panel(r, layout.reset_hints_rect, PAL_PAPER_ACT1, hints_sel ? 0.94f : 0.72f,
                    hints_sel ? PAL_SHU : PAL_SUMI_DARK, 0.90f, 1245u);
-    render_draw_text_centered(
+    render_draw_text_fit(
         r, text_get(TEXT_SETTINGS_RESET_HINTS, r->use_ja),
         (Vector2){layout.reset_hints_rect.x + layout.reset_hints_rect.width * 0.5f,
                   layout.reset_hints_rect.y + layout.reset_hints_rect.height * 0.5f},
-        19.0f, hints_sel ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
+        layout.reset_hints_rect.width - 20.0f, 19.0f, 13.0f, hints_sel ? PAL_SHU : PAL_SUMI_SCORCH,
+        0.96f, false);
 
     const bool def_sel = (active == 10);
     ink_fill_panel(r, layout.reset_defaults_rect, PAL_PAPER_ACT1, def_sel ? 0.94f : 0.72f,
                    def_sel ? PAL_SHU : PAL_SUMI_DARK, 0.90f, 1246u);
-    render_draw_text_centered(
+    render_draw_text_fit(
         r, text_get(TEXT_SETTINGS_RESET_DEFAULTS, r->use_ja),
         (Vector2){layout.reset_defaults_rect.x + layout.reset_defaults_rect.width * 0.5f,
                   layout.reset_defaults_rect.y + layout.reset_defaults_rect.height * 0.5f},
-        19.0f, def_sel ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
+        layout.reset_defaults_rect.width - 20.0f, 19.0f, 13.0f, def_sel ? PAL_SHU : PAL_SUMI_SCORCH,
+        0.96f, false);
 
     /* Back button (11) */
     const bool back_sel = (active == 11);
@@ -171,8 +176,11 @@ void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *u
         const TextId nid = ui->settings_notice_kind == 1 ? TEXT_SETTINGS_NOTICE_HINTS
                                                          : TEXT_SETTINGS_NOTICE_DEFAULTS;
         const float na = ink_clampf(ui->settings_notice_t * 2.0f, 0.0f, 1.0f);
-        const float nx = layout.back_rect.x + layout.back_rect.width + 18.0f;
-        const float ny = layout.back_rect.y + layout.back_rect.height * 0.5f - 9.0f;
-        render_draw_text_id(r, nid, (Vector2){nx, ny}, 18.0f, PAL_SHU, 0.96f * na, false);
+        const float nx = layout.back_rect.x + layout.back_rect.width + 16.0f;
+        const float panel_r = cx + 420.0f - 16.0f;
+        const Rectangle notice = {nx, layout.back_rect.y, fmaxf(40.0f, panel_r - nx),
+                                  layout.back_rect.height};
+        render_draw_text_wrapped(r, text_get(nid, r->use_ja), notice, 18.0f, 12.0f, PAL_SHU,
+                                 0.96f * na, false, false);
     }
 }

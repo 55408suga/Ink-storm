@@ -21,6 +21,10 @@ void render_lobby_layout(LobbyLayout *out)
     for (int i = 0; i < 4; ++i) {
         out->items[i] = (Rectangle){x, y0 + (float)i * (h + gap), w, h};
     }
+    out->title_rect = (Rectangle){548.0f, 168.0f, 556.0f, 198.0f};
+    out->footer_rect = (Rectangle){64.0f, 608.0f, (float)INK_SCREEN_W - 128.0f, 58.0f};
+    out->brush_rect = (Rectangle){x, y0 + 4.0f * (h + gap) + 4.0f, w, 52.0f};
+    out->hint_rect = (Rectangle){500.0f, 566.0f, 640.0f, 32.0f};
 }
 
 void render_brush_select_layout(BrushSelectLayout *out)
@@ -41,21 +45,65 @@ void render_brush_select_layout(BrushSelectLayout *out)
     out->back_rect = (Rectangle){((float)INK_SCREEN_W - 240.0f) * 0.5f, 606.0f, 240.0f, 52.0f};
 }
 
+static void draw_brush_switcher(RenderState *r, Rectangle box, BrushStyleId style)
+{
+    const PaletteId accent = style == BRUSH_STYLE_EMBER   ? PAL_SHU
+                             : style == BRUSH_STYLE_QUILL ? PAL_AO
+                                                          : PAL_SUMI_SCORCH;
+    ink_fill_panel(r, box, PAL_GOFUN, 0.88f, accent, 0.85f, 930u);
+    const float cy = box.y + box.height * 0.5f;
+    ink_teardrop(r, (Vector2){box.x + 18.0f, cy}, (Vector2){-1.0f, 0.0f}, 9.0f, 6.0f,
+                 pal_color_alpha(PAL_SUMI_DARK, 0.85f));
+    ink_teardrop(r, (Vector2){box.x + box.width - 18.0f, cy}, (Vector2){1.0f, 0.0f}, 9.0f, 6.0f,
+                 pal_color_alpha(PAL_SUMI_DARK, 0.85f));
+    render_draw_text_fit(r, text_get(TEXT_LOBBY_TEST_BRUSH, r->use_ja),
+                         (Vector2){box.x + box.width * 0.5f, box.y + 15.0f}, box.width - 72.0f,
+                         15.0f, 12.0f, PAL_SUMI_HEAVY, 0.88f, false);
+    render_draw_text_fit(r, text_get(text_brush_name(style), r->use_ja),
+                         (Vector2){box.x + box.width * 0.5f, box.y + 35.0f}, box.width - 72.0f,
+                         22.0f, 15.0f, accent, 0.98f, false);
+}
+
+static void draw_footer_records(RenderState *r, Rectangle footer, const MetaState *m)
+{
+    ink_fill_panel(r, footer, PAL_GOFUN, 0.88f, PAL_SUMI_LIGHT, 0.72f, 920u);
+    char vals[4][32];
+    snprintf(vals[0], sizeof vals[0], "%d", m->ink_crystals);
+    snprintf(vals[1], sizeof vals[1], "%d", m->best_act);
+    snprintf(vals[2], sizeof vals[2], "%07d", m->best_score);
+    snprintf(vals[3], sizeof vals[3], "%d", m->clears);
+    static const TextId k_labels[4] = {TEXT_LOBBY_CRYSTALS, TEXT_LOBBY_BEST_ACT,
+                                       TEXT_LOBBY_BEST_SCORE, TEXT_LOBBY_CLEARS};
+    static const PaletteId k_val_pal[4] = {PAL_KIN, PAL_SUMI_SCORCH, PAL_SUMI_SCORCH, PAL_SHU};
+    const float slot_w = (footer.width - 32.0f) / 4.0f;
+    const float fy = footer.y + 18.0f;
+    for (int i = 0; i < 4; ++i) {
+        const char *label = text_get(k_labels[i], r->use_ja);
+        const float label_w = render_measure_text(r, label, 20.0f, false).x;
+        const float val_w = render_measure_number_fixed(r, vals[i], 20.0f);
+        const float total = label_w + 12.0f + val_w;
+        const float x = footer.x + 16.0f + slot_w * (float)i + fmaxf(0.0f, (slot_w - total) * 0.5f);
+        render_draw_text(r, label, (Vector2){x, fy}, 20.0f, PAL_SUMI_HEAVY, 0.95f, false);
+        render_draw_number_fixed(r, vals[i], (Vector2){x + label_w + 12.0f, fy}, 20.0f,
+                                 k_val_pal[i], 0.97f);
+    }
+}
+
 void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
 {
     if (r == NULL || g == NULL || ui == NULL) {
         return;
     }
 
+    LobbyLayout layout;
+    render_lobby_layout(&layout);
+
     /* Calligraphic title "墨嵐" & vermilion seal on right-center */
     const char *title_str = text_get(TEXT_GAME_TITLE, r->use_ja);
     const float title_px = r->use_ja ? 88.0f : 72.0f;
     const Vector2 title_m = render_measure_text(r, title_str, title_px, true);
     const Vector2 title_center = {800.0f, 258.0f};
-    const float backing_w = fmaxf(500.0f, title_m.x + 180.0f);
-    const Rectangle title_backing = {title_center.x - backing_w * 0.5f + 24.0f, 168.0f, backing_w,
-                                     198.0f};
-    ink_fill_panel(r, title_backing, PAL_GOFUN, 0.62f, PAL_SUMI_CLEAR, 0.0f, 900u);
+    ink_fill_panel(r, layout.title_rect, PAL_GOFUN, 0.62f, PAL_SUMI_CLEAR, 0.0f, 900u);
     render_draw_text_centered(r, title_str, title_center, title_px, PAL_SUMI_SCORCH, 0.98f, true);
     const float seal_x =
         fminf(title_center.x + title_m.x * 0.5f + 46.0f, (float)INK_SCREEN_W - 60.0f);
@@ -75,8 +123,6 @@ void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
                               (Vector2){810.0f, 348.0f}, 20.0f, PAL_SUMI_HEAVY, 0.94f, false);
 
     /* Left-side menu buttons */
-    LobbyLayout layout;
-    render_lobby_layout(&layout);
     static const TextId k_menu_ids[4] = {
         TEXT_LOBBY_SORTIE,
         TEXT_LOBBY_BOKUAN,
@@ -88,10 +134,7 @@ void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
 
     for (int i = 0; i < 4; ++i) {
         const bool sel = (active == i);
-        Rectangle rect = layout.items[i];
-        if (sel) {
-            rect.x += 8.0f;
-        }
+        const Rectangle rect = layout.items[i];
         ink_fill_panel(r, rect, PAL_GOFUN, sel ? 0.96f : 0.86f, sel ? PAL_SHU : PAL_SUMI_DARK,
                        0.92f, 910u + (uint32_t)i);
         render_draw_text_centered(
@@ -104,37 +147,23 @@ void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
         }
     }
 
-    /* Bottom meta record strip */
-    const Rectangle footer = {64.0f, 608.0f, (float)INK_SCREEN_W - 128.0f, 58.0f};
-    ink_fill_panel(r, footer, PAL_GOFUN, 0.88f, PAL_SUMI_LIGHT, 0.72f, 920u);
+    draw_brush_switcher(r, layout.brush_rect, ui->selected_brush);
+    draw_footer_records(r, layout.footer_rect, &ui->meta_view);
 
-    const MetaState *m = &ui->meta_view;
-    char buf[64];
-    const float fy = footer.y + 18.0f;
+    /* Canvas hint sits on its own washi pill so test strokes never drown it out. */
+    const char *hint = text_get(TEXT_LOBBY_CANVAS_HINT, r->use_ja);
+    const float hint_w =
+        fminf(layout.hint_rect.width, render_measure_text(r, hint, 18.0f, false).x + 32.0f);
+    const Rectangle pill = {layout.hint_rect.x + (layout.hint_rect.width - hint_w) * 0.5f,
+                            layout.hint_rect.y, hint_w, layout.hint_rect.height};
+    ink_fill_panel(r, pill, PAL_GOFUN, 0.84f, PAL_SUMI_LIGHT, 0.45f, 925u);
+    render_draw_text_fit(r, hint,
+                         (Vector2){pill.x + pill.width * 0.5f, pill.y + pill.height * 0.5f},
+                         pill.width - 20.0f, 18.0f, 13.0f, PAL_SUMI_HEAVY, 0.92f, false);
 
-    render_draw_text_id(r, TEXT_LOBBY_CRYSTALS, (Vector2){96.0f, fy}, 20.0f, PAL_SUMI_HEAVY, 0.95f,
-                        false);
-    snprintf(buf, sizeof buf, "%d", m->ink_crystals);
-    render_draw_number_fixed(r, buf, (Vector2){204.0f, fy}, 20.0f, PAL_KIN, 0.98f);
-
-    render_draw_text_id(r, TEXT_LOBBY_BEST_ACT, (Vector2){356.0f, fy}, 20.0f, PAL_SUMI_HEAVY, 0.95f,
-                        false);
-    snprintf(buf, sizeof buf, "%d", m->best_act);
-    render_draw_number_fixed(r, buf, (Vector2){470.0f, fy}, 20.0f, PAL_SUMI_SCORCH, 0.96f);
-
-    render_draw_text_id(r, TEXT_LOBBY_BEST_SCORE, (Vector2){566.0f, fy}, 20.0f, PAL_SUMI_HEAVY,
-                        0.95f, false);
-    snprintf(buf, sizeof buf, "%07d", m->best_score);
-    render_draw_number_fixed(r, buf, (Vector2){696.0f, fy}, 20.0f, PAL_SUMI_SCORCH, 0.96f);
-
-    render_draw_text_id(r, TEXT_LOBBY_CLEARS, (Vector2){868.0f, fy}, 20.0f, PAL_SUMI_HEAVY, 0.95f,
-                        false);
-    snprintf(buf, sizeof buf, "%d", m->clears);
-    render_draw_number_fixed(r, buf, (Vector2){1002.0f, fy}, 20.0f, PAL_SHU, 0.96f);
-
-    /* Subtle interactive canvas hint */
-    render_draw_text_centered(r, text_get(TEXT_LOBBY_CANVAS_HINT, r->use_ja),
-                              (Vector2){820.0f, 586.0f}, 18.0f, PAL_SUMI_HEAVY, 0.78f, false);
+    if (ui->lobby_canvas_hover) {
+        render_draw_brush_cursor(r, g, ui);
+    }
 }
 
 static void draw_brush_trial_demo(RenderState *r, Rectangle box, BrushStyleId style, float t)
@@ -263,15 +292,16 @@ void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiVie
         const float ccx = card.x + card.width * 0.5f;
         char hdr[48];
         snprintf(hdr, sizeof hdr, "[%d] %s", i + 1, text_get(text_brush_name(style), r->use_ja));
-        render_draw_text_centered(r, hdr, (Vector2){ccx, card.y + 38.0f}, 28.0f, PAL_SUMI_SCORCH,
-                                  0.98f, false);
+        render_draw_text_fit(r, hdr, (Vector2){ccx, card.y + 38.0f}, card.width - 40.0f, 28.0f,
+                             20.0f, PAL_SUMI_SCORCH, 0.98f, false);
 
         const Rectangle demo_box = {card.x + 22.0f, card.y + 68.0f, card.width - 44.0f, 112.0f};
         draw_brush_trial_demo(r, demo_box, style, r->vfx_time);
 
-        render_draw_text_centered(r, text_get(text_brush_desc(style), r->use_ja),
-                                  (Vector2){ccx, card.y + 216.0f}, 18.0f, PAL_SUMI_DARK, 0.94f,
-                                  false);
+        render_draw_text_wrapped(
+            r, text_get(text_brush_desc(style), r->use_ja),
+            (Rectangle){card.x + 22.0f, card.y + 190.0f, card.width - 44.0f, 52.0f}, 18.0f, 14.0f,
+            PAL_SUMI_DARK, 0.94f, false, true);
 
         const Vector2 div_pts[2] = {{card.x + 26.0f, card.y + 248.0f},
                                     {card.x + card.width - 26.0f, card.y + 248.0f}};
@@ -284,15 +314,16 @@ void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiVie
                                   .seed = 970u + (uint32_t)i},
                    (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f}, 1.0f);
 
-        render_draw_text_centered(r, text_get(text_brush_stats(style), r->use_ja),
-                                  (Vector2){ccx, card.y + 286.0f}, 18.0f, PAL_SUMI_HEAVY, 0.94f,
-                                  false);
+        render_draw_text_wrapped(
+            r, text_get(text_brush_stats(style), r->use_ja),
+            (Rectangle){card.x + 22.0f, card.y + 258.0f, card.width - 44.0f, 62.0f}, 18.0f, 14.0f,
+            PAL_SUMI_HEAVY, 0.94f, false, true);
 
         char rec_buf[96];
         snprintf(rec_buf, sizeof rec_buf, "%s%s", text_get(TEXT_BRUSH_REC_LABEL, r->use_ja),
                  text_get(text_brush_recommended(style), r->use_ja));
-        render_draw_text_centered(r, rec_buf, (Vector2){ccx, card.y + 344.0f}, 18.0f, border, 0.96f,
-                                  false);
+        render_draw_text_fit(r, rec_buf, (Vector2){ccx, card.y + 344.0f}, card.width - 40.0f, 18.0f,
+                             13.0f, border, 0.96f, false);
 
         if (sel) {
             seal_stamp(r, TEXT_SEAL_DONE,

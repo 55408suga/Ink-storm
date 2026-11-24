@@ -124,11 +124,7 @@ static void charged_seal_on_cyclone(const CycloneHookArgs *a)
         return;
     }
     if (a->storm_add != NULL) {
-        if (a->g->config.brush_style == BRUSH_STYLE_QUILL) {
-            *a->storm_add += 0.15f * (float)a->lv;
-        } else {
-            *a->storm_add += k_storm[a->lv - 1];
-        }
+        *a->storm_add += k_storm[a->lv - 1];
     }
     if (a->lv >= 3 && a->storm_sustain_add != NULL) {
         *a->storm_sustain_add += 0.60f;
@@ -275,6 +271,21 @@ static void maelstrom_bind_apply_add(RunModifiers *mods, uint8_t lv)
     }
 }
 
+static void decay_hook_timer(float *t, float dt)
+{
+    if (*t > 0.0f) {
+        *t -= dt;
+        if (*t <= 1e-4f) {
+            *t = 0.0f;
+        }
+    }
+}
+
+static bool maelstrom_can_collide(const GameState *g, uint32_t idx)
+{
+    return g->internal.maelstrom_bind_t[idx] > 0.0f && g->internal.maelstrom_hit_cd[idx] <= 0.0f;
+}
+
 static void maelstrom_bind_on_tick(const TickHookArgs *a)
 {
     GameState *g = a->g;
@@ -284,21 +295,17 @@ static void maelstrom_bind_on_tick(const TickHookArgs *a)
 
     for (uint32_t idx = 0; idx < ECS_MAX_ENTITIES; ++idx) {
         const EntityId id = ecs_entity_at(&g->ecs, idx);
-        if (id.index == ECS_INVALID_INDEX || !ecs_has_mask(&g->ecs, id, COMP_ENEMY)) {
-            g->internal.maelstrom_bind_t[idx] = 0.0f;
-            continue;
-        }
-        const TransformComp *tr = game_transform(g, id);
+        const TransformComp *tr =
+            id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_ENEMY)
+                ? game_transform(g, id)
+                : NULL;
         if (tr == NULL || tr->dissolving) {
             g->internal.maelstrom_bind_t[idx] = 0.0f;
+            g->internal.maelstrom_hit_cd[idx] = 0.0f;
             continue;
         }
-        if (g->internal.maelstrom_bind_t[idx] > 0.0f) {
-            g->internal.maelstrom_bind_t[idx] -= a->dt;
-            if (g->internal.maelstrom_bind_t[idx] <= 1e-4f) {
-                g->internal.maelstrom_bind_t[idx] = 0.0f;
-            }
-        }
+        decay_hook_timer(&g->internal.maelstrom_bind_t[idx], a->dt);
+        decay_hook_timer(&g->internal.maelstrom_hit_cd[idx], a->dt);
     }
 
     const float pull_rad = 140.0f * g->internal.mods.cyclone_radius_mul;
@@ -362,8 +369,9 @@ static void maelstrom_bind_on_tick(const TickHookArgs *a)
 
     if (a->lv >= 3) {
         const float collide_rad2 = 32.0f * 32.0f;
+        const float hit_cooldown = 0.45f;
         for (uint32_t i = 0; i < hw; ++i) {
-            if (g->internal.maelstrom_bind_t[i] <= 0.0f) {
+            if (!maelstrom_can_collide(g, i)) {
                 continue;
             }
             const EntityId id_a = ecs_entity_at(&g->ecs, i);
@@ -376,7 +384,7 @@ static void maelstrom_bind_on_tick(const TickHookArgs *a)
                 continue;
             }
             for (uint32_t j = i + 1; j < hw; ++j) {
-                if (g->internal.maelstrom_bind_t[j] <= 0.0f) {
+                if (!maelstrom_can_collide(g, j)) {
                     continue;
                 }
                 const EntityId id_b = ecs_entity_at(&g->ecs, j);
@@ -393,6 +401,8 @@ static void maelstrom_bind_on_tick(const TickHookArgs *a)
                 if (dx * dx + dy * dy <= collide_rad2) {
                     g->internal.maelstrom_bind_t[i] = 0.0f;
                     g->internal.maelstrom_bind_t[j] = 0.0f;
+                    g->internal.maelstrom_hit_cd[i] = hit_cooldown;
+                    g->internal.maelstrom_hit_cd[j] = hit_cooldown;
                     if (ecs_is_alive(&g->ecs, id_a)) {
                         (void)combat_apply_damage(g, id_a, 40, DMG_PHYSICAL | DMG_SECONDARY, 0.0f,
                                                   0.0f);
@@ -423,7 +433,7 @@ static void tailwind_apply_mul(RunModifiers *mods, uint8_t lv)
 static void rich_ink_on_kill(const KillHookArgs *a)
 {
     GameState *g = a->g;
-    if (a->lv < 1 || a->lv > 3 || (a->dmg_flags & DMG_SECONDARY) != 0) {
+    if (a->lv < 1 || a->lv > 3) {
         return;
     }
     static const float k_chance[3] = {0.33f, 0.66f, 1.0f};
@@ -636,6 +646,7 @@ static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
             .axis = AXIS_INKWAY,
             .max_level = 3,
             .on_kill = rich_ink_on_kill,
+            .on_kill_secondary = true,
         },
     [UPG_LASTING_SURGE] =
         {
@@ -659,6 +670,7 @@ static const UpgradeDef k_upgrade_defs[UPG_COUNT] = {
             .max_level = 3,
             .apply_mods_add = inferno_apply_add,
             .on_kill = inferno_on_kill,
+            .on_kill_secondary = true,
         },
     [UPG_PHOENIX_ARROW] =
         {
@@ -826,6 +838,8 @@ void roguelike_recompute_modifiers(GameState *g)
         .ink_mark_mul = 2.0f,
         .ink_mark_duration = 3.0f,
         .stroke_ember_mul = 1.0f,
+        .stroke_ember_rad = 2.5f,
+        .stroke_ember_amt = 0.5f,
         .ink_damp_override = 0.985f,
         .fire_damp_override = 0.935f,
         .chain_storm_interval = 3,
@@ -852,13 +866,16 @@ void roguelike_recompute_modifiers(GameState *g)
     /* Pass 1: brush base/additions -> meta -> owned upgrades -> owned relics. */
     switch (g->config.brush_style) {
     case BRUSH_STYLE_EMBER:
-        mods.stroke_ember_interval = 120.0f;
+        mods.stroke_ember_interval = 72.0f;
         mods.stroke_ember_mul = 1.0f;
+        mods.stroke_ember_rad = 3.0f;
+        mods.stroke_ember_amt = 0.64f;
         mods.gale_fire_add += 0.35f;
         break;
     case BRUSH_STYLE_QUILL:
         mods.cyclone_cd = 1.10f;
-        mods.cyclone_storm_add += 0.55f;
+        mods.cyclone_storm_add += 0.72f;
+        mods.cyclone_storm_sustain += 0.18f;
         break;
     case BRUSH_STYLE_HEAVY:
     default:
@@ -879,7 +896,7 @@ void roguelike_recompute_modifiers(GameState *g)
     /* Pass 2: all multiplications (brush -> meta -> owned upgrades -> owned relics). */
     switch (g->config.brush_style) {
     case BRUSH_STYLE_EMBER:
-        mods.stroke_cost_mul *= 1.20f;
+        mods.stroke_cost_mul *= 1.12f;
         break;
     case BRUSH_STYLE_QUILL:
         mods.brush_radius_mul *= 0.80f;
@@ -916,6 +933,8 @@ void roguelike_recompute_modifiers(GameState *g)
     }
     g->player.cyclone_cd_total = mods.cyclone_cd;
     g->player.gale_cd_total = mods.gale_cd;
+    g->player.cyclone_cd = fminf(g->player.cyclone_cd, mods.cyclone_cd);
+    g->player.gale_cd = fminf(g->player.gale_cd, mods.gale_cd);
     const int32_t prev_max_charges = g->player.gale_max_charges;
     const int32_t new_max_charges = mods.gale_max_charges > 0 ? mods.gale_max_charges : 1;
     g->player.gale_max_charges = new_max_charges;
@@ -977,7 +996,8 @@ bool roguelike_grant_upgrade(GameState *g, UpgradeId id)
     return true;
 }
 
-void upgrades_fire_on_stroke(GameState *g, float x, float y, float vx, float vy, float dist)
+void upgrades_fire_on_stroke(GameState *g, float px, float py, float x, float y, float vx, float vy,
+                             float dist)
 {
     if (g == NULL) {
         return;
@@ -990,6 +1010,8 @@ void upgrades_fire_on_stroke(GameState *g, float x, float y, float vx, float vy,
             const StrokeHookArgs args = {
                 .g = g,
                 .lv = g->run.upgrades[i].level,
+                .px = px,
+                .py = py,
                 .x = x,
                 .y = y,
                 .vx = vx,
@@ -999,7 +1021,7 @@ void upgrades_fire_on_stroke(GameState *g, float x, float y, float vx, float vy,
             k_upgrade_defs[id].on_stroke(&args);
         }
     }
-    relics_fire_on_stroke(g, x, y, vx, vy, dist);
+    relics_fire_on_stroke(g, px, py, x, y, vx, vy, dist);
 }
 
 void upgrades_fire_on_cyclone(GameState *g, float x, float y, float *storm_add,
@@ -1076,14 +1098,17 @@ void upgrades_fire_on_hit(GameState *g, EntityId target, float *dmg_inout, uint3
 
 void upgrades_fire_on_kill(GameState *g, EntityId victim, float x, float y, uint32_t dmg_flags)
 {
-    if (g == NULL || (dmg_flags & DMG_SECONDARY) != 0) {
+    if (g == NULL) {
         return;
     }
+    /* Secondary kills skip damaging hooks so chained blasts cannot recurse without bound. */
+    const bool secondary = (dmg_flags & DMG_SECONDARY) != 0;
     const int32_t count = g->run.upgrade_count <= GAME_MAX_OWNED_UPGRADES ? g->run.upgrade_count
                                                                           : GAME_MAX_OWNED_UPGRADES;
     for (int32_t i = 0; i < count; ++i) {
         const UpgradeId id = g->run.upgrades[i].id;
-        if ((unsigned)id < (unsigned)UPG_COUNT && k_upgrade_defs[id].on_kill != NULL) {
+        if ((unsigned)id < (unsigned)UPG_COUNT && k_upgrade_defs[id].on_kill != NULL &&
+            (!secondary || k_upgrade_defs[id].on_kill_secondary)) {
             const KillHookArgs args = {
                 .g = g,
                 .lv = g->run.upgrades[i].level,

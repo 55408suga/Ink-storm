@@ -29,5 +29,21 @@ bool save_resolve_path(const char *explicit_path, const char *xdg_data_home, con
                        const char *exe_dir, char *out, size_t size);
 SaveLoadResult save_load(const char *path, MetaState *meta);
 bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops);
+#define SAVE_BACKUP_SLOTS 10
+
+typedef enum {
+    SAVE_BACKUP_CREATED = 0,
+    SAVE_BACKUP_ALREADY_KEPT,
+    SAVE_BACKUP_FAILED
+} SaveBackupResult;
+
+typedef struct {
+    int (*link)(const char *oldpath, const char *newpath);
+    int (*unlink)(const char *path);
+} SaveBackupOps;
+
+SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t out_cap);
+SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, size_t out_cap,
+                                             const SaveBackupOps *ops);
 
 #endif

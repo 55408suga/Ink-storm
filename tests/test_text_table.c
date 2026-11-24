@@ -1,3 +1,4 @@
+#include "text_layout.h"
 #include "text_table.h"
 #include "unity.h"
 
@@ -157,10 +158,85 @@ static void test_text_table_content_mappings(void)
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_hint_message(HINT_COUNT));
 }
 
+static float fake_measure(void *ctx, const char *text, size_t len)
+{
+    (void)ctx;
+    float w = 0.0f;
+    for (size_t i = 0; i < len; i = text_utf8_next(text, i, len)) {
+        w += ((unsigned char)text[i] < 0x80u) ? 1.0f : 2.0f;
+    }
+    return w;
+}
+
+static void assert_line(const char *text, const TextLine *line, const char *expected)
+{
+    char buf[128];
+    memcpy(buf, text + line->start, line->len);
+    buf[line->len] = '\0';
+    TEST_ASSERT_EQUAL_STRING(expected, buf);
+}
+
+static void test_text_layout_wraps_words_and_cjk_with_kinsoku(void)
+{
+    TextLine lines[TEXT_LAYOUT_MAX_LINES];
+    bool truncated = true;
+
+    const char *en = "Rad x1.25 / Force x1.2";
+    int32_t n = text_layout_wrap(en, 12.0f, fake_measure, NULL, lines, 4, &truncated);
+    TEST_ASSERT_EQUAL_INT32(2, n);
+    TEST_ASSERT_FALSE(truncated);
+    assert_line(en, &lines[0], "Rad x1.25 /");
+    assert_line(en, &lines[1], "Force x1.2");
+
+    /* 「墨と炎。」 must not leave 。 at a line start */
+    const char *ja = "\xE5\xA2\xA8\xE3\x81\xA8\xE7\x82\x8E\xE3\x80\x82\xE9\x9B\xB7";
+    n = text_layout_wrap(ja, 6.0f, fake_measure, NULL, lines, 4, &truncated);
+    TEST_ASSERT_EQUAL_INT32(2, n);
+    assert_line(ja, &lines[0], "\xE5\xA2\xA8\xE3\x81\xA8");
+    assert_line(ja, &lines[1], "\xE7\x82\x8E\xE3\x80\x82\xE9\x9B\xB7");
+
+    n = text_layout_wrap("aaaa bbbb cccc dddd", 4.0f, fake_measure, NULL, lines, 2, &truncated);
+    TEST_ASSERT_EQUAL_INT32(2, n);
+    TEST_ASSERT_TRUE(truncated);
+
+    n = text_layout_wrap("abcdefghij", 4.0f, fake_measure, NULL, lines, 4, &truncated);
+    TEST_ASSERT_EQUAL_INT32(3, n);
+    assert_line("abcdefghij", &lines[2], "ij");
+}
+
+static void test_text_layout_fit_prefix_stops_on_codepoint_boundary(void)
+{
+    const char *ja = "\xE5\xA2\xA8\xE5\xB5\x90"
+                     "abc";
+    TEST_ASSERT_EQUAL_size_t(3u, text_layout_fit_prefix(ja, strlen(ja), 3.0f, fake_measure, NULL));
+    TEST_ASSERT_EQUAL_size_t(7u, text_layout_fit_prefix(ja, strlen(ja), 5.0f, fake_measure, NULL));
+    TEST_ASSERT_EQUAL_size_t(0u, text_layout_fit_prefix(ja, strlen(ja), 1.0f, fake_measure, NULL));
+}
+
+static void test_utf8_clip_never_splits_a_codepoint(void)
+{
+    char text[520];
+    size_t n = 0;
+    while (n + 3 <= 513) {
+        text[n++] = (char)0xE5;
+        text[n++] = (char)0xA2;
+        text[n++] = (char)0xA8;
+    }
+    text[n] = '\0';
+    TEST_ASSERT_EQUAL_size_t(513u, n);
+    TEST_ASSERT_EQUAL_size_t(510u, text_utf8_clip(text, n, 511));
+    TEST_ASSERT_EQUAL_size_t(507u, text_utf8_clip(text, n, 511 - 3));
+    TEST_ASSERT_EQUAL_size_t(5u, text_utf8_clip("abcde", 5, 511));
+    TEST_ASSERT_EQUAL_size_t(0u, text_utf8_clip(text, n, 2));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_text_table_entries_valid);
     RUN_TEST(test_text_table_content_mappings);
+    RUN_TEST(test_text_layout_wraps_words_and_cjk_with_kinsoku);
+    RUN_TEST(test_text_layout_fit_prefix_stops_on_codepoint_boundary);
+    RUN_TEST(test_utf8_clip_never_splits_a_codepoint);
     return UNITY_END();
 }

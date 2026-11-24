@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include "core.h"
+#include "roguelike/rewards.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -300,7 +301,7 @@ GameCommand game_autoplay_command(const GameState *g)
     const int32_t act_rerolls = 1 + (int32_t)rlv;
     const bool pickable_offer =
         g->run.reward.kind == REWARD_KIND_UPGRADE || g->run.reward.kind == REWARD_KIND_RELIC;
-    if (pickable_offer && g->run.rerolls_left == act_rerolls) {
+    if (pickable_offer && g->run.rerolls_left == act_rerolls && rewards_can_reroll(g)) {
         return (GameCommand){.type = CMD_REROLL_REWARD, .arg = 0};
     }
     if (pickable_offer && g->run.reward.choice_count > 0) {

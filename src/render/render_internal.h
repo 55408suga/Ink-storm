@@ -52,7 +52,6 @@ void render_post_close(RenderState *r);
 void render_fonts_init(RenderState *r, const RenderOptions *opt);
 void render_fonts_close(RenderState *r);
 Vector2 render_measure_text(const RenderState *r, const char *text, float size, bool title_font);
-Vector2 render_measure_text_id(RenderState *r, TextId id, float size, bool title_font);
 void render_draw_text(const RenderState *r, const char *text, Vector2 pos, float size,
                       PaletteId color, float alpha, bool title_font);
 void render_draw_text_id(const RenderState *r, TextId id, Vector2 pos, float size, PaletteId color,
@@ -61,21 +60,31 @@ void render_draw_text_centered(const RenderState *r, const char *text, Vector2 c
                                PaletteId color, float alpha, bool title_font);
 void render_draw_number_fixed(const RenderState *r, const char *digits, Vector2 pos, float size,
                               PaletteId color, float alpha);
+float render_measure_number_fixed(const RenderState *r, const char *digits, float size);
+void render_draw_text_fit(const RenderState *r, const char *text, Vector2 center, float max_w,
+                          float size, float min_size, PaletteId color, float alpha,
+                          bool title_font);
+float render_draw_text_wrapped(const RenderState *r, const char *text, Rectangle box, float size,
+                               float min_size, PaletteId color, float alpha, bool title_font,
+                               bool center);
 
 /* Entities (draw_entities.c) */
 void render_draw_entities(RenderState *r, const GameState *g, int act_index);
 
 /* VFX (vfx.c) */
 void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui);
+void render_vfx_draw_flash(RenderState *r, const UiView *ui);
 void render_vfx_draw_ui(RenderState *r, const GameState *g);
 Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
 
 /* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, ui_lobby.c, ui_shop.c, ui_pause.c,
  * ui_settings.c, xray.c) */
 void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_clear_banner(RenderState *r);
 void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiView *ui);

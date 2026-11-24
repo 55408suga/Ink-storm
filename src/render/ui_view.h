@@ -22,6 +22,13 @@ typedef enum {
     PAUSE_CONFIRM_LOBBY
 } PauseConfirmKind;
 
+typedef struct {
+    float x, y;
+    bool valid;
+    bool hover_suppressed;
+    int32_t context;
+} UiPointer;
+
 #define UI_HOVER_NONE (-1)
 #define UI_HOVER_REPAIR 3
 #define UI_HOVER_REROLL 4
@@ -58,6 +65,12 @@ typedef struct {
     uint8_t cursor_scale;
     float settings_notice_t;
     int32_t settings_notice_kind;
+
+    /* Menu pointer tracking, Result keyboard cursor, Lobby test-stroke gate */
+    UiPointer pointer;
+    int32_t result_cursor;
+    bool lobby_stroke_active;
+    bool lobby_canvas_hover;
 } UiView;
 
 #endif

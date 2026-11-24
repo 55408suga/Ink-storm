@@ -28,7 +28,9 @@
     - `audio.h` → `struct GameState` の前方宣言のみ（`game.h` を include しない）
     - `render.h` → `raylib.h`, `game.h`, `ui_view.h`
     - `ui_view.h` → `game_ids.h`, `meta.h`（raylib 非依存）
-    - `cli.h` / `frame_clock.h` / `input_latch.h` / `save.h` / `text_table.h` → 標準ヘッダと `game.h` / `meta.h` のみ（raylib 非依存）
+    - `cli.h` / `frame_clock.h` / `input_latch.h` / `hint_queue.h` / `save.h` / `text_table.h` / `text_layout.h` / `vfx_rules.h` → 標準ヘッダと `game.h` / `meta.h` / `game_ids.h` のみ（raylib 非依存）
+    - `menu_nav.h` → 標準ヘッダと `input_map.h` / `ui_view.h` のみ（`input_map.h` も `game.h` / `input_latch.h` / `ui_view.h` だけに依存し raylib 非依存）
+    - `bgm_fade.h` → `audio.h` のみ（`BgmTrack` を参照するため。raylib 非依存）
     - 全モジュールのヘッダファイル名は `src/` 全体および raylib ヘッダ名と重複させない。
 - **`ink_render` が所有するもの**:
   - 純粋な見た目 VFX（火花パーティクル、雷ボルト残像、渦印リング演出、画面シェイク、日本語ポップアップ文字／コールアウト）はすべて `RenderState` 内に固定長プールとして持つ。
@@ -571,6 +573,7 @@ typedef struct {
   4. フォールバック：実行ファイル基準の `inkstorm_save.txt`
 - **原子的書き込みと失敗時契約**:
   - 同一ディレクトリへ `.tmp` を書き出し、`fflush`・`fclose`・`rename` の戻り値をすべて検査する。いずれかが失敗した場合は `.tmp` を削除し、**既存の `save.txt` を破壊せず** に失敗をログ出力して続行する。
+  - 起動時の読み込みが破損（`SAVE_LOAD_CORRUPT`）または入出力エラー（`SAVE_LOAD_IO_ERROR`）なら、既定値で上書きする前に `save_backup_unreadable()` で退避する。同じディレクトリの一時ファイル（`mkstemp`）へコピーして閉じた後、置き換えない `link()` で `<save>.bak` として公開する（途中で失敗・中断したコピーが `.bak` に見えることはない）。既存の `.bak` と同じ内容なら退避済みとし、内容が違えば `.bak.1`〜`.bak.9` の空き名へ退避する。置き換えが起こりうる `rename()` への切り替えは行わないため、ハードリンクを作れないファイルシステムでは退避は失敗扱いになる。退避できなかった場合は、そのセッションの保存を無効にして元のファイルを守る。一時ファイルの削除に失敗したときはログに出す。
 - **テスト・デモ隔離**: `--no-save`・`--headless-smoke`・`--smoke-frames`・`--showcase`・`--demo`・`--snap` 指定時はセーブファイルの読み書きを行わない（`--save-path` とこれらのオプションの同時指定は CLI 排他エラーとする）。
 
 ---

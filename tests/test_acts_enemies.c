@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 void setUp(void) {}
 
@@ -18,6 +19,14 @@ void tearDown(void) {}
 static void advance_aftermath(GameState *g)
 {
     for (int i = 0; i < 65 && g->phase == RUN_PHASE_WAVE_AFTERMATH; ++i) {
+        game_step(g, NULL, NULL);
+    }
+}
+
+/* A reaction or slam on the winning tick starts a hitstop, and the clear resolves when it ends. */
+static void step_until_cleared(GameState *g)
+{
+    for (int i = 0; i < 10 && g->phase == RUN_PHASE_PLAYING; ++i) {
         game_step(g, NULL, NULL);
     }
 }
@@ -85,7 +94,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
     g->shrines[0].hp = g->shrines[0].max_hp - 4;
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
 
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_WAVE_AFTERMATH, g->phase);
     TEST_ASSERT_EQUAL_INT32(1, g->run.acts_cleared);
@@ -129,7 +138,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     assert_boss_alive_kind(g, ENEMY_BOSS_NUE);
     g->shrines[0].hp = g->shrines[0].max_hp - 1;
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     TEST_ASSERT_EQUAL_INT32(g->shrines[0].max_hp, g->shrines[0].hp);
     TEST_ASSERT_EQUAL_INT32(2, g->run.acts_cleared);
 
@@ -159,7 +168,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
     assert_boss_alive_kind(g, ENEMY_BOSS_RYU);
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     TEST_ASSERT_EQUAL_INT32(3, g->run.acts_cleared);
 
     advance_aftermath(g);
@@ -182,7 +191,7 @@ static void test_boss_relic_fallback_advances_act(void)
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
     assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     advance_aftermath(g);
 
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_REWARD, g->phase);
@@ -861,6 +870,23 @@ static void test_boss_nue_and_boss_ryu(void)
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f * 0.85f, ren->fire_cd);
 
+    /* The earlier on-screen orb volleys are real fire/storm sources that may legitimately react,
+     * and breaking a third orb in one chain adds chain lightning storm onto its death splash (a
+     * genuine Cataclysm). Clear both so only what the awakening itself injects is under test. */
+    g->run.chain = 0;
+    g->run.chain_t = 0.0f;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId pid = ecs_entity_at(&g->ecs, i);
+        if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+            ecs_destroy(&g->ecs, pid);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    memset(fluid_channel_mut(&g->fluid, 1), 0, sizeof(float) * FLUID_N);
+    memset(fluid_channel_mut(&g->fluid, 2), 0, sizeof(float) * FLUID_N);
+    const int32_t cataclysms_before = g->run.cataclysms;
+    const int32_t thunderbursts_before = g->run.thunderbursts;
+
     /* Destroy Orb 2 (Wind) late in countdown -> Phase 2 Awakening (EV_BOSS_PHASE value=2, head
      * targetable, wind 6s, head fire_cd clamped >= 0.90s so post-invuln attack keeps full warning).
      */
@@ -888,15 +914,16 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_TRUE(saw_ryu_p2);
 
     /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst; mountain wind clamps to
-     * 6s period (wind_timer <= 1.5s). */
+     * 6s period (wind_timer <= 1.5s). Counters were sampled before the last orb broke, so any fire
+     * or storm the awakening itself injects is still on the field here. */
     g->internal.wind_timer = 7.0f;
     g->internal.wind_telegraph_t = 0.0f;
     g->internal.wind_active_t = 0.0f;
     for (int t = 0; t < 6; ++t) {
         game_step(g, NULL, NULL);
     }
-    TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
-    TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
+    TEST_ASSERT_EQUAL_INT32(cataclysms_before, g->run.cataclysms);
+    TEST_ASSERT_EQUAL_INT32(thunderbursts_before, g->run.thunderbursts);
     TEST_ASSERT_TRUE(g->internal.wind_timer <= 1.5f);
 
     /* Let the full 1.5s Phase 2 invuln expire naturally, then verify the head counts down from

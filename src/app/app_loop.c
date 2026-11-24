@@ -3,8 +3,10 @@
 #include "audio_out.h"
 #include "core.h"
 #include "frame_clock.h"
+#include "hint_queue.h"
 #include "input_latch.h"
 #include "input_map.h"
+#include "menu_nav.h"
 #include "paths.h"
 #include "raylib.h"
 #include "save.h"
@@ -24,15 +26,11 @@ typedef struct {
     bool quit_requested;
     UiView ui;
 
-    /* First-time hint FIFO queue (2.0s each, non-blocking) */
-    HintId hint_queue[HINT_COUNT];
-    int32_t hint_head;
-    int32_t hint_count;
+    HintQueue hints;
 
-    /* Lobby ambient fluid demo state */
-    float lobby_prev_x, lobby_prev_y;
-    bool lobby_prev_painting;
+    /* Lobby brush sandbox */
     uint64_t lobby_ticks;
+    float lobby_idle_t;
 } AppRunContext;
 
 static void sync_meta_view(AppRunContext *ctx)
@@ -60,8 +58,7 @@ static uint64_t next_run_seed(const MetaState *meta)
 
 static void clear_hint_queue(AppRunContext *ctx)
 {
-    ctx->hint_head = 0;
-    ctx->hint_count = 0;
+    hint_queue_clear(&ctx->hints);
     ctx->ui.active_hint = HINT_STROKE;
     ctx->ui.active_hint_t = 0.0f;
 }
@@ -91,6 +88,7 @@ static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *rend
     ctx->ui.settle_preview = false;
     ctx->ui.settle = (MetaSettleBreakdown){0};
     ctx->ui.hover_choice = UI_HOVER_NONE;
+    ctx->ui.result_cursor = MENU_RESULT_LOBBY;
     clear_hint_queue(ctx);
     sync_meta_view(ctx);
     if (audio != NULL) {
@@ -106,8 +104,12 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
     ctx->ui.paused = false;
     ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
     ctx->ui.hover_choice = UI_HOVER_NONE;
+    ctx->ui.lobby_stroke_active = false;
     clear_hint_queue(ctx);
-    fluid_reset(&game->fluid);
+    const RunConfig sandbox_cfg =
+        meta_build_run_config(&ctx->meta, ctx->ui.selected_brush, UINT64_C(1));
+    game_init_sandbox(game, &sandbox_cfg);
+    ctx->lobby_idle_t = 0.0f;
     render_reset_vfx(render, UINT64_C(1));
     sync_meta_view(ctx);
     if (audio != NULL) {
@@ -119,7 +121,6 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
 static void consume_hint_events(AppRunContext *ctx, const GameState *game)
 {
     const int32_t count = game->event_count > GAME_MAX_EVENTS ? GAME_MAX_EVENTS : game->event_count;
-    bool marked_any = false;
     for (int32_t i = 0; i < count; ++i) {
         const GameEvent *ev = &game->events[i];
         if (ev->type != EV_HINT_TRIGGER) {
@@ -129,33 +130,32 @@ static void consume_hint_events(AppRunContext *ctx, const GameState *game)
         if (raw_id < 0 || raw_id >= HINT_COUNT) {
             continue;
         }
-        if (!ctx->meta.settings.hints_on || meta_is_hint_seen(&ctx->meta, (uint32_t)raw_id)) {
+        const HintId id = (HintId)raw_id;
+        const bool showing = ctx->ui.active_hint == id && ctx->ui.active_hint_t > 0.0f;
+        if (!ctx->meta.settings.hints_on || meta_is_hint_seen(&ctx->meta, (uint32_t)raw_id) ||
+            showing) {
             continue;
         }
-        meta_mark_hint_seen(&ctx->meta, (uint32_t)raw_id);
-        marked_any = true;
-        if (ctx->hint_count < HINT_COUNT) {
-            const int32_t tail = (ctx->hint_head + ctx->hint_count) % HINT_COUNT;
-            ctx->hint_queue[tail] = (HintId)raw_id;
-            ctx->hint_count++;
-        }
-    }
-    if (marked_any) {
-        sync_meta_view(ctx);
-        persist_meta(ctx);
+        (void)hint_queue_push(&ctx->hints, id);
     }
 }
 
-static void step_hint_queue(AppRunContext *ctx, float dt)
+static bool hint_strip_visible(const AppRunContext *ctx, const GameState *game)
 {
-    if (ctx->ui.active_hint_t > 0.0f) {
-        ctx->ui.active_hint_t = fmaxf(0.0f, ctx->ui.active_hint_t - dt);
-    }
-    if (ctx->ui.active_hint_t <= 0.0f && ctx->hint_count > 0) {
-        ctx->ui.active_hint = ctx->hint_queue[ctx->hint_head];
-        ctx->hint_head = (ctx->hint_head + 1) % HINT_COUNT;
-        ctx->hint_count--;
-        ctx->ui.active_hint_t = 2.0f;
+    return !ctx->ui.paused && game->phase != RUN_PHASE_REWARD && game->phase != RUN_PHASE_VICTORY &&
+           game->phase != RUN_PHASE_GAME_OVER && game->phase != RUN_PHASE_WAVE_AFTERMATH;
+}
+
+/* A hint counts as seen only once it is actually on screen. */
+static void step_hint_queue(AppRunContext *ctx, const GameState *game, float dt)
+{
+    const int32_t started =
+        hint_queue_step(&ctx->hints, &ctx->ui.active_hint, &ctx->ui.active_hint_t, dt,
+                        hint_strip_visible(ctx, game));
+    if (started >= 0) {
+        meta_mark_hint_seen(&ctx->meta, (uint32_t)started);
+        sync_meta_view(ctx);
+        persist_meta(ctx);
     }
 }
 
@@ -254,6 +254,20 @@ static void init_save_context(AppRunContext *ctx, const CliOptions *opts)
     if (res == SAVE_LOAD_CORRUPT || res == SAVE_LOAD_IO_ERROR) {
         fprintf(stderr, "INKSTORM: save file '%s' unreadable (%s); using defaults\n",
                 ctx->save_path, res == SAVE_LOAD_CORRUPT ? "corrupt" : "io error");
+        char bak_path[PATH_MAX];
+        const SaveBackupResult kept =
+            save_backup_unreadable(ctx->save_path, bak_path, sizeof bak_path);
+        if (kept == SAVE_BACKUP_FAILED) {
+            /* Without a verified copy, writing defaults would destroy the only record of the run
+             * history, so this session plays without saving instead. */
+            fprintf(stderr,
+                    "INKSTORM: could not back up the unreadable save; saving is disabled for "
+                    "this session to keep '%s' intact\n",
+                    ctx->save_path);
+            ctx->save_enabled = false;
+        } else if (kept == SAVE_BACKUP_CREATED) {
+            fprintf(stderr, "INKSTORM: kept a copy of the unreadable save at '%s'\n", bak_path);
+        }
     }
 }
 
@@ -298,43 +312,67 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
 
     apply_all_settings(ctx, render, audio);
     persist_meta(ctx);
+    if (row == 0 || row == 2) {
+        audio_trigger_ui_cue(audio, AUDIO_UI_PREVIEW);
+    } else {
+        audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
+    }
 }
 
-static void step_lobby_fluid_demo(AppRunContext *ctx, GameState *game, RenderState *render,
-                                  const MenuInput *menu)
+/* The Lobby canvas runs the real brush, skills and element reactions on a sandbox GameState so
+ * what the player feels there is exactly what each brush does in a run. */
+static void step_lobby_sandbox(AppRunContext *ctx, GameState *game, RenderState *render,
+                               AudioState *audio, InputLatch *latch, bool interactive)
 {
     ctx->lobby_ticks++;
-    render->vfx_time += INK_FIXED_DT;
+    game_sandbox_set_brush(game, ctx->ui.selected_brush);
+    const BrushInput in = input_latch_take_tick(latch);
+    const bool active = interactive && (in.paint || in.cyclone || in.gale);
+    ctx->lobby_idle_t = active ? 0.0f : ctx->lobby_idle_t + INK_FIXED_DT;
 
-    /* Gentle autonomous ink swirl across the open right side of the washi canvas */
+    /* The ambient swirl backs off while the player is testing so it never fights their stroke. */
+    const float ambient = ink_clampf((ctx->lobby_idle_t - 0.8f) / 1.6f, 0.0f, 1.0f);
     const float t = (float)ctx->lobby_ticks * INK_FIXED_DT;
     const float px = 784.0f + cosf(t * 0.42f) * 240.0f;
     const float py = 368.0f + sinf(t * 0.65f) * 160.0f;
-    const float vx = -sinf(t * 0.42f) * 16.0f;
-    const float vy = cosf(t * 0.65f) * 14.0f;
-    const float amb_dye[FLUID_MAX_CHANNELS] = {(ctx->lobby_ticks % 6u) == 0u ? 0.24f : 0.0f, 0.0f,
-                                               0.0f, 0.0f};
-    fluid_splat(&game->fluid, px, py, 5.5f, vx, vy, amb_dye);
-
-    /* Interactive mouse painting on the Lobby canvas */
-    if (ctx->ui.scene == UI_SCENE_TITLE_LOBBY && menu->lobby_paint) {
-        float dvx = 0.0f;
-        float dvy = 0.0f;
-        if (ctx->lobby_prev_painting) {
-            dvx = ink_clampf((menu->mouse_x - ctx->lobby_prev_x) * 0.55f, -38.0f, 38.0f);
-            dvy = ink_clampf((menu->mouse_y - ctx->lobby_prev_y) * 0.55f, -38.0f, 38.0f);
-        }
-        const float paint_dye[FLUID_MAX_CHANNELS] = {0.55f, 0.0f, 0.0f, 0.0f};
-        fluid_splat(&game->fluid, menu->mouse_x, menu->mouse_y, 4.0f, dvx, dvy, paint_dye);
-        ctx->lobby_prev_x = menu->mouse_x;
-        ctx->lobby_prev_y = menu->mouse_y;
-        ctx->lobby_prev_painting = true;
-    } else {
-        ctx->lobby_prev_painting = false;
+    const float vx = -sinf(t * 0.42f) * 16.0f * ambient;
+    const float vy = cosf(t * 0.65f) * 14.0f * ambient;
+    const float amb_dye[FLUID_MAX_CHANNELS] = {
+        (ctx->lobby_ticks % 6u) == 0u ? 0.24f * ambient : 0.0f, 0.0f, 0.0f, 0.0f};
+    if (ambient > 0.0f) {
+        fluid_splat(&game->fluid, px, py, 5.5f, vx, vy, amb_dye);
     }
 
-    fluid_step(&game->fluid, INK_FIXED_DT);
-    fluid_sanitize_channels(&game->fluid);
+    game_step_sandbox(game, interactive ? &in : NULL);
+    audio_consume_lobby_events(audio, game);
+    render_consume_events(render, game);
+    render_update_vfx(render, game, INK_FIXED_DT);
+}
+
+static void cycle_lobby_brush(AppRunContext *ctx, AudioState *audio, int32_t step)
+{
+    if (step == 0) {
+        return;
+    }
+    const int32_t n = BRUSH_STYLE_COUNT;
+    ctx->ui.selected_brush = (BrushStyleId)((((int32_t)ctx->ui.selected_brush + step) % n + n) % n);
+    audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
+}
+
+static void on_scene_entered(AppRunContext *ctx, InputLatch *latch, const MenuInput *menu)
+{
+    if (ctx->ui.scene == UI_SCENE_TITLE_LOBBY) {
+        ctx->ui.lobby_stroke_active = false;
+        input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y, menu->left_down);
+    }
+}
+
+/* Meta upgrades bought in the Bokuan change ink and regen; the Lobby test brush must use them
+ * right away, without wiping what is already on the canvas. */
+static void refresh_sandbox_meta(const AppRunContext *ctx, GameState *game)
+{
+    const RunConfig cfg = meta_build_run_config(&ctx->meta, ctx->ui.selected_brush, UINT64_C(1));
+    game_sandbox_apply_config(game, &cfg);
 }
 
 static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState *render,
@@ -374,6 +412,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y, menu->left_down);
         break;
     case MENU_ACT_BACK:
+        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
         if (ctx->ui.scene == UI_SCENE_SETTINGS) {
             persist_meta(ctx);
             ctx->ui.settings_notice_t = 0.0f;
@@ -391,6 +430,9 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
             audio_trigger_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
+            refresh_sandbox_meta(ctx, game);
+        } else {
+            audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
         }
         break;
     case MENU_ACT_SHOP_BUY_RELIC:
@@ -398,6 +440,9 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
             audio_trigger_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
+            refresh_sandbox_meta(ctx, game);
+        } else {
+            audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
         }
         break;
     case MENU_ACT_SETTINGS_CHANGE:
@@ -420,6 +465,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         persist_meta(ctx);
         break;
     case MENU_ACT_TOGGLE_PAUSE:
+        audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
         ctx->ui.paused = true;
         ctx->ui.pause_cursor = 0;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
@@ -427,15 +473,16 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         audio_set_paused(audio, true);
         break;
     case MENU_ACT_PAUSE_RESUME:
+        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
         ctx->ui.paused = false;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         audio_set_paused(audio, false);
         frame_clock_reset(clock);
-        if (menu->ui_clicked) {
-            input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
-                                                menu->left_down);
-        }
+        /* Always re-anchor the latch: a stale pre-pause position would replay as one huge stroke
+         * and a queued key would fire on the first resumed tick. */
+        input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
+                                            menu->ui_clicked && menu->left_down);
         break;
     case MENU_ACT_PAUSE_RESTART:
         ctx->ui.pause_confirm = PAUSE_CONFIRM_RESTART;
@@ -457,6 +504,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
     case MENU_ACT_CONFIRM_NO:
+        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
@@ -478,6 +526,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_RESULT_ENDLESS:
         if (render->victory_scroll_t >= 0.75f && game->phase == RUN_PHASE_VICTORY &&
             !game->run.run_settled && game->run.endless_loop == 0) {
+            audio_trigger_ui_stamp(audio);
             const GameCommand cmd = {.type = CMD_START_ENDLESS, .arg = 0};
             game_step(game, NULL, &cmd);
             ctx->ui.settle_preview = false;
@@ -493,6 +542,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_RESULT_LOBBY:
         if (render->victory_scroll_t >= 0.75f) {
+            audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
             settle_victory_if_pending(ctx, game);
             enter_lobby_scene(ctx, game, render, audio);
             frame_clock_reset(clock);
@@ -500,6 +550,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_RESULT_RETRY:
         if (render->victory_scroll_t >= 0.75f) {
+            audio_trigger_ui_stamp(audio);
             settle_victory_if_pending(ctx, game);
             start_new_run(ctx, game, render, audio, ctx->ui.selected_brush);
             frame_clock_reset(clock);
@@ -567,6 +618,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
     const Vector2 init_mouse = GetMousePosition();
     InputLatch latch;
     input_latch_init(&latch, init_mouse.x, init_mouse.y);
+    UiScene prev_scene = ctx.ui.scene;
 
     int remaining_frames = opts->smoke_frames;
     while (remaining_frames > 0 || (!WindowShouldClose() && !ctx.quit_requested)) {
@@ -578,7 +630,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
             render_consume_events(render, game);
             render_update_vfx(render, game, INK_FIXED_DT);
             app_after_tick(&ctx, game);
-            step_hint_queue(&ctx, INK_FIXED_DT);
+            step_hint_queue(&ctx, game, INK_FIXED_DT);
         } else {
             const MenuInput menu = input_map_read_menu(game, &ctx.ui);
             handle_menu_action(&ctx, game, render, audio, &clock, &latch, &menu);
@@ -586,13 +638,21 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
             if (ctx.quit_requested) {
                 break;
             }
+            if (ctx.ui.scene != prev_scene) {
+                on_scene_entered(&ctx, &latch, &menu);
+                prev_scene = ctx.ui.scene;
+            }
 
             if (ctx.ui.scene == UI_SCENE_SETTINGS && ctx.ui.settings_notice_t > 0.0f) {
                 const float dt = ink_clampf(GetFrameTime(), 0.0f, 0.1f);
                 ctx.ui.settings_notice_t = fmaxf(0.0f, ctx.ui.settings_notice_t - dt);
             }
 
-            if (ctx.ui.scene == UI_SCENE_RUN && !ctx.ui.paused) {
+            /* A frame that handled a menu transition must not also read gameplay input or run
+             * ticks: the click/key that resumed or started a run would otherwise land on the run
+             * (e.g. picking a reward card) in the same frame. */
+            const bool frame_free = !menu_action_ends_frame(menu.action);
+            if (frame_free && ctx.ui.scene == UI_SCENE_RUN && !ctx.ui.paused) {
                 const RawInput raw = input_map_read(game, &ctx.ui);
                 input_latch_feed(&latch, &raw);
 
@@ -610,16 +670,34 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                     render_consume_events(render, game);
                     render_update_vfx(render, game, INK_FIXED_DT);
                     app_after_tick(&ctx, game);
-                    step_hint_queue(&ctx, INK_FIXED_DT);
+                    step_hint_queue(&ctx, game, INK_FIXED_DT);
                     if (prev_phase == RUN_PHASE_REWARD && game->phase != RUN_PHASE_REWARD) {
                         frame_clock_reset(&clock);
                         break;
                     }
                 }
-            } else if (!is_active_run_scene(&ctx.ui)) {
+            } else if (frame_free && !is_active_run_scene(&ctx.ui)) {
+                const bool interactive = ctx.ui.scene == UI_SCENE_TITLE_LOBBY;
+                if (interactive) {
+                    cycle_lobby_brush(&ctx, audio, menu.lobby_brush_step);
+                    /* A stroke starts where the button went down, not where the pointer was on
+                     * the previous tick (possibly over a menu button). */
+                    if (menu.lobby_stroke_started) {
+                        input_latch_anchor(&latch, menu.mouse_x, menu.mouse_y);
+                    }
+                    const RawInput raw = {
+                        .mouse_x = menu.mouse_x,
+                        .mouse_y = menu.mouse_y,
+                        .left_down = menu.lobby_paint,
+                        .cyclone_pressed = menu.lobby_cyclone,
+                        .gale_pressed = menu.lobby_gale,
+                        .pick_pressed = -1,
+                    };
+                    input_latch_feed(&latch, &raw);
+                }
                 const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
                 for (int t = 0; t < ticks; ++t) {
-                    step_lobby_fluid_demo(&ctx, game, render, &menu);
+                    step_lobby_sandbox(&ctx, game, render, audio, &latch, interactive);
                 }
             }
             audio_out_pump(&audio_out, audio);

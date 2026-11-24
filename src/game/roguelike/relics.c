@@ -33,24 +33,17 @@ static void vermilion_inkstone_on_stroke(const StrokeHookArgs *a)
     if (g->player.dry || interval <= 0.0f) {
         return;
     }
-    static const float k_ember_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.5f, 0.0f, 0.0f};
-    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
-    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
-
-    g->internal.relic_ember_dist += a->dist;
-    int32_t bursts = 0;
-    while (g->internal.relic_ember_dist >= interval && bursts < 8) {
-        g->internal.relic_ember_dist -= interval;
-        fluid_splat(&g->fluid, a->x, a->y, 2.5f, 0.0f, 0.0f, k_ember_dye);
-        if (g->internal.mods.twin_brush) {
-            fluid_splat(&g->fluid, 2.0f * sx - a->x, 2.0f * sy - a->y, 2.5f, 0.0f, 0.0f,
-                        k_ember_dye);
-        }
-        ++bursts;
-    }
-    if (g->internal.relic_ember_dist >= interval) {
-        g->internal.relic_ember_dist = fmodf(g->internal.relic_ember_dist, interval);
-    }
+    player_skills_emit_ember_trail(g, &g->internal.relic_ember_dist, interval,
+                                   (EmberTrailSegment){
+                                       .px = a->px,
+                                       .py = a->py,
+                                       .x = a->x,
+                                       .y = a->y,
+                                       .vx = a->vx * 0.35f,
+                                       .vy = a->vy * 0.35f,
+                                       .rad = 2.5f,
+                                       .fire_amt = 0.5f,
+                                   });
 }
 
 static void thunder_drum_apply_add(RunModifiers *mods) { mods->thunder_drum = true; }
@@ -141,11 +134,14 @@ static void wind_return_on_tick(const TickHookArgs *a)
 
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
-    const float trig_rad2 = 54.0f * 54.0f;
+    const float contact_r = g->shrine_count > 0 ? g->shrines[0].hit_radius_contact : 42.0f;
+    const float proj_rad2 = 54.0f * 54.0f;
+    const float melee_rad = contact_r + 24.0f;
+    const float melee_rad2 = melee_rad * melee_rad;
     const uint32_t hw = g->ecs.high_water;
 
     bool found = false;
-    float best_d2 = trig_rad2 + 1.0f;
+    float best_d2 = fmaxf(proj_rad2, melee_rad2) + 1.0f;
     float best_x = 0.0f;
     float best_y = 0.0f;
 
@@ -155,14 +151,25 @@ static void wind_return_on_tick(const TickHookArgs *a)
             continue;
         }
         const TransformComp *tr = game_transform(g, id);
-        const ProjComp *proj = game_proj(g, id);
-        if (tr == NULL || proj == NULL || tr->dissolving || proj->deflected) {
+        if (tr == NULL || tr->dissolving) {
             continue;
         }
         const float dx = tr->x - sx;
         const float dy = tr->y - sy;
         const float d2 = dx * dx + dy * dy;
-        if (d2 <= trig_rad2 && d2 < best_d2) {
+        const ProjComp *proj = game_proj(g, id);
+        bool threat = false;
+        if (proj != NULL) {
+            threat = !proj->deflected && d2 <= proj_rad2;
+        } else if (d2 <= melee_rad2 && game_enemy_is_targetable(g, id)) {
+            const VelocityComp *vel = game_velocity(g, id);
+            const EnemyComp *en = game_enemy(g, id);
+            const bool walker = vel != NULL && en != NULL && vel->mass_tier != MASS_TURRET &&
+                                vel->mass_tier != MASS_BOSS && !game_is_boss_enemy(en->def_id) &&
+                                !game_is_boss_part(en->def_id);
+            threat = walker && (vel->vx * -dx + vel->vy * -dy) > 0.0f;
+        }
+        if (threat && d2 < best_d2) {
             best_d2 = d2;
             best_x = tr->x;
             best_y = tr->y;
@@ -364,7 +371,8 @@ void relics_apply_modifiers_mul(const GameState *g, RunModifiers *mods)
     }
 }
 
-void relics_fire_on_stroke(GameState *g, float x, float y, float vx, float vy, float dist)
+void relics_fire_on_stroke(GameState *g, float px, float py, float x, float y, float vx, float vy,
+                           float dist)
 {
     const int32_t count = clamped_relic_count(g);
     for (int32_t i = 0; i < count; ++i) {
@@ -373,6 +381,8 @@ void relics_fire_on_stroke(GameState *g, float x, float y, float vx, float vy, f
             const StrokeHookArgs args = {
                 .g = g,
                 .lv = 1,
+                .px = px,
+                .py = py,
                 .x = x,
                 .y = y,
                 .vx = vx,

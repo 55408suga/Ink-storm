@@ -73,6 +73,16 @@ static bool scene_draws_combat_world(const UiView *ui)
     }
 }
 
+static bool scene_is_lobby_canvas(const UiView *ui)
+{
+    if (ui == NULL) {
+        return false;
+    }
+    return ui->scene == UI_SCENE_TITLE_LOBBY || ui->scene == UI_SCENE_BRUSH_SELECT ||
+           ui->scene == UI_SCENE_BOKUAN ||
+           (ui->scene == UI_SCENE_SETTINGS && ui->settings_return_scene != UI_SCENE_RUN);
+}
+
 static void draw_world_layers(RenderState *r, const GameState *g, const UiView *ui)
 {
     const bool combat = scene_draws_combat_world(ui);
@@ -100,9 +110,14 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
         /* 7. World VFX & Act 3 rain / wind telegraph */
         render_vfx_draw_world(r, g, ui);
         render_paper_draw_weather(r, g, act);
+    } else if (scene_is_lobby_canvas(ui)) {
+        render_vfx_draw_world(r, g, ui);
     }
     render_reset_blend(r);
     EndMode2D();
+    /* Drawn outside the shaken camera so a flash never leaves an unflashed border strip. */
+    render_vfx_draw_flash(r, ui);
+    render_reset_blend(r);
 }
 
 static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
@@ -124,6 +139,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         break;
     case UI_SCENE_SHOWCASE:
         if (ui->showcase_page <= 2) {
+            render_draw_clear_banner(r);
             render_vfx_draw_ui(r, g);
             render_draw_hud(r, g, ui);
             render_draw_banners(r, g, ui);
@@ -150,6 +166,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         break;
     case UI_SCENE_RUN:
     default:
+        render_draw_clear_banner(r);
         render_vfx_draw_ui(r, g);
         render_draw_hud(r, g, ui);
         render_draw_banners(r, g, ui);
@@ -230,7 +247,8 @@ void render_draw(RenderState *r, const GameState *g, const UiView *ui)
 void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui,
                             RenderTexture2D target)
 {
-    if (r == NULL || g == NULL || target.id == 0 || target.id == r->scene.id) {
+    if (r == NULL || g == NULL || target.id == 0 || target.id == r->scene.id ||
+        target.id == r->bg_cache.id) {
         return;
     }
     render_draw_internal(r, g, ui, true, target);

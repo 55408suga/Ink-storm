@@ -130,6 +130,7 @@ static uint64_t hash_components(const GameState *g)
             h = hash_bool(h, c->burning);
             h = hash_bool(h, c->electrified);
             h = hash_bool(h, c->accelerated);
+            h = hash_bool(h, c->fluid_pushed);
             h = hash_i32(h, c->pierce);
             h = hash_i32(h, c->bounces_left);
             h = ink_hash_f32(h, c->age);
@@ -138,6 +139,13 @@ static uint64_t hash_components(const GameState *g)
             for (int32_t k = 0; k < tn; ++k) {
                 h = ink_hash_f32(h, c->trail[k].x);
                 h = ink_hash_f32(h, c->trail[k].y);
+            }
+            h = hash_i32(h, c->hit_n);
+            const int32_t hn =
+                c->hit_n > PROJ_MAX_HIT_IDS ? PROJ_MAX_HIT_IDS : (c->hit_n < 0 ? 0 : c->hit_n);
+            for (int32_t k = 0; k < hn; ++k) {
+                h = ink_hash_u32(h, c->hit_ids[k].index);
+                h = ink_hash_u32(h, c->hit_ids[k].gen);
             }
         }
         if ((mask & COMP_INK_ORB) != 0) {
@@ -342,6 +350,8 @@ static uint64_t hash_internal(const GameInternal *in)
     h = hash_bool(h, m->barrier_shield_enabled);
     h = ink_hash_f32(h, m->stroke_ember_interval);
     h = ink_hash_f32(h, m->stroke_ember_mul);
+    h = ink_hash_f32(h, m->stroke_ember_rad);
+    h = ink_hash_f32(h, m->stroke_ember_amt);
     h = ink_hash_f32(h, m->relic_ember_interval);
     h = ink_hash_f32(h, m->ink_damp_override);
     h = ink_hash_f32(h, m->fire_damp_override);
@@ -403,6 +413,7 @@ static uint64_t hash_internal(const GameInternal *in)
     h = ink_hash_u32(h, in->triggered_hints_mask);
     for (int i = 0; i < ECS_MAX_ENTITIES; ++i) {
         h = ink_hash_f32(h, in->maelstrom_bind_t[i]);
+        h = ink_hash_f32(h, in->maelstrom_hit_cd[i]);
     }
 
     h = ink_hash_f32(h, in->wind_timer);

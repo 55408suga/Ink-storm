@@ -8,6 +8,7 @@
 typedef struct {
     GameState *g;
     uint8_t lv;
+    float px, py;
     float x, y;
     float vx, vy;
     float dist;
@@ -62,6 +63,7 @@ typedef struct {
     UpgradeId id;
     UpgradeAxis axis;
     uint8_t max_level;
+    bool on_kill_secondary;
     void (*apply_mods_add)(RunModifiers *mods, uint8_t lv);
     void (*apply_mods_mul)(RunModifiers *mods, uint8_t lv);
     void (*on_stroke)(const StrokeHookArgs *a);
@@ -76,7 +78,8 @@ typedef struct {
 void roguelike_recompute_modifiers(GameState *g);
 bool roguelike_grant_upgrade(GameState *g, UpgradeId id);
 
-void upgrades_fire_on_stroke(GameState *g, float x, float y, float vx, float vy, float dist);
+void upgrades_fire_on_stroke(GameState *g, float px, float py, float x, float y, float vx, float vy,
+                             float dist);
 void upgrades_fire_on_cyclone(GameState *g, float x, float y, float *storm_add,
                               float *storm_sustain_add);
 void upgrades_fire_on_gale(GameState *g, float x, float y, float dx, float dy);

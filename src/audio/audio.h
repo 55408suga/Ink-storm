@@ -9,6 +9,9 @@
 #define AUDIO_SAMPLES_PER_TICK 735
 #define AUDIO_MAX_VOICES 24
 #define AUDIO_STATE_QUEUE_CAP 32
+#define AUDIO_PENDING_VOICE_CAP 256
+#define AUDIO_SKILL_PARAM_DRY 4
+#define AUDIO_SKILL_PARAM_SURGE 8
 
 typedef enum { BGM_NONE = 0, BGM_LOBBY, BGM_BATTLE, BGM_BOSS, BGM_VICTORY } BgmTrack;
 
@@ -33,8 +36,15 @@ typedef enum {
     AUDIO_VOICE_ACT_CLEAR,
     AUDIO_VOICE_REWARD_PICK,
     AUDIO_VOICE_REWARD_REROLL,
-    AUDIO_VOICE_PART_BREAK
+    AUDIO_VOICE_PART_BREAK,
+    AUDIO_VOICE_SKILL_DENIED,
+    AUDIO_VOICE_GAME_OVER,
+    AUDIO_VOICE_UI_CLICK,
+    AUDIO_VOICE_WARD_BELL,
+    AUDIO_VOICE_PURIFY
 } AudioVoiceKind;
+
+typedef enum { AUDIO_UI_CLICK = 0, AUDIO_UI_BACK, AUDIO_UI_DENY, AUDIO_UI_PREVIEW } AudioUiCue;
 
 typedef struct {
     AudioVoiceKind kind;
@@ -49,17 +59,31 @@ typedef struct {
     float lp;
     float bp;
     uint32_t age;
+    bool releasing;
+    bool ui;
 } AudioVoice;
+
+typedef struct {
+    AudioVoiceKind kind;
+    uint64_t start_sample;
+    float freq;
+    float param;
+} AudioPendingVoice;
 
 typedef struct {
     uint64_t at_sample;
     BgmTrack bgm;
     float brush_target;
     float wind_target;
+    int32_t brush_style;
+    bool brush_dry;
+    bool brush_surge;
+    bool lobby;
 } AudioTickState;
 
 typedef struct {
     uint64_t samples_rendered;
+    uint64_t next_tick_sample;
     uint64_t consumed_ticks;
     uint64_t events_consumed;
     uint64_t voice_seq;
@@ -82,6 +106,11 @@ typedef struct {
     float brush_env;
     float brush_lp;
     float brush_bp;
+    float brush_ph;
+    int32_t brush_style;
+    bool brush_dry;
+    bool brush_surge;
+    float bgm_duck;
     float wind_target;
     float wind_env;
     float wind_lp;
@@ -99,6 +128,9 @@ typedef struct {
     int32_t bgm_victory_step;
 
     AudioVoice voices[AUDIO_MAX_VOICES];
+    AudioPendingVoice pending[AUDIO_PENDING_VOICE_CAP];
+    int32_t pending_head;
+    int32_t pending_count;
     AudioTickState state_q[AUDIO_STATE_QUEUE_CAP];
     int32_t state_q_head;
     int32_t state_q_count;
@@ -112,7 +144,9 @@ void audio_set_lobby_mode(AudioState *audio, bool lobby);
 void audio_set_external_bgm(AudioState *audio, bool external_active);
 void audio_set_paused(AudioState *audio, bool paused);
 void audio_trigger_ui_stamp(AudioState *audio);
+void audio_trigger_ui_cue(AudioState *audio, AudioUiCue cue);
 void audio_consume_events(AudioState *audio, const struct GameState *game);
+void audio_consume_lobby_events(AudioState *audio, const struct GameState *game);
 void audio_render(AudioState *audio, int16_t *samples, size_t sample_count);
 BgmTrack audio_bgm_track(const AudioState *audio);
 bool audio_validate_finite(const AudioState *audio);

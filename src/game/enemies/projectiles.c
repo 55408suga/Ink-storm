@@ -61,6 +61,48 @@ static bool is_storm_proj_kind(ProjKind kind)
     return kind == PROJ_STORM_ORB || kind == PROJ_BOUNCE_ORB;
 }
 
+static bool proj_already_hit(const ProjComp *proj, EntityId target)
+{
+    const int32_t n = proj->hit_n < PROJ_MAX_HIT_IDS ? proj->hit_n : PROJ_MAX_HIT_IDS;
+    for (int32_t k = 0; k < n; ++k) {
+        if (proj->hit_ids[k].index == target.index && proj->hit_ids[k].gen == target.gen) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void proj_remember_hit(ProjComp *proj, EntityId target)
+{
+    if (proj->hit_n >= 0 && proj->hit_n < PROJ_MAX_HIT_IDS) {
+        proj->hit_ids[proj->hit_n++] = target;
+    }
+}
+
+static void block_with_barrier(GameState *g, float px, float py)
+{
+    g->internal.barrier_shield_ready = false;
+    g->internal.barrier_shield_cd = 12.0f;
+    if (g->shrine_count <= 0) {
+        return;
+    }
+    const ShrineState *sh = &g->shrines[0];
+    static const float k_ward_dye[FLUID_MAX_CHANNELS] = {0.18f, 0.0f, 0.0f, 0.0f};
+    fluid_swirl(&g->fluid, sh->x, sh->y, 9.0f, 30.0f, k_ward_dye);
+    const float dx = px - sh->x;
+    const float dy = py - sh->y;
+    const float d = hypotf(dx, dy);
+    (void)game_push_event(g, (GameEvent){
+                                 .type = EV_SHRINE_HIT,
+                                 .x = sh->x,
+                                 .y = sh->y,
+                                 .x2 = d > 1e-6f ? dx / d : 0.0f,
+                                 .y2 = d > 1e-6f ? dy / d : 0.0f,
+                                 .value = sh->hp,
+                                 .flags = EVF_SHRINE_BLOCKED,
+                             });
+}
+
 static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float ox, float oy,
                                        uint32_t hw)
 {
@@ -174,6 +216,9 @@ void projectiles_step(GameState *g)
         const float fu_px = fu * FLUID_CELL_PX;
         const float fv_px = fv * FLUID_CELL_PX;
         const float fsp = hypotf(fu_px, fv_px);
+        if (fsp > 35.0f) {
+            proj->fluid_pushed = true;
+        }
 
         const float coupling = vel->fluid_coupling > 0.0f ? vel->fluid_coupling : 1.0f;
         vel->vx += fu_px * 5.0f * coupling * INK_FIXED_DT;
@@ -188,12 +233,13 @@ void projectiles_step(GameState *g)
             const float toward_center = (tcd > 1e-6f && psp > 1e-6f)
                                             ? ((vel->vx * tcx + vel->vy * tcy) / (psp * tcd))
                                             : 1.0f;
-            /* Bounce orbs require actual fluid flow to deflect so wall bounces do not self-deflect.
-             */
-            const bool deflect_hit =
-                (proj->kind == PROJ_BOUNCE_ORB)
-                    ? (fsp > 48.0f && toward_center < 0.90f)
-                    : ((fsp > 48.0f && toward_center < 0.90f) || toward_center < 0.28f);
+            /* Turning away from the shrine only counts as a deflect when ink actually pushed the
+             * shot; fan volleys and wall bounces otherwise drift past at fsp == 0. */
+            const bool fluid_turned = proj->fluid_pushed || fsp > 20.0f;
+            const bool deflect_hit = (proj->kind == PROJ_BOUNCE_ORB)
+                                         ? (fsp > 48.0f && toward_center < 0.90f)
+                                         : ((fsp > 48.0f && toward_center < 0.90f) ||
+                                            (toward_center < 0.28f && fluid_turned));
             if (deflect_hit) {
                 proj->deflected = true;
                 if (is_storm_proj_kind(proj->kind) || g->internal.mods.deflect_auto_electrify) {
@@ -251,7 +297,8 @@ void projectiles_step(GameState *g)
             EntityId best = {ECS_INVALID_INDEX, 0};
             for (uint32_t j = 0; j < hw; ++j) {
                 const EntityId eid = ecs_entity_at(&g->ecs, j);
-                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
+                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid) ||
+                    proj_already_hit(proj, eid)) {
                     continue;
                 }
                 const TransformComp *etr = game_transform(g, eid);
@@ -381,9 +428,8 @@ void projectiles_step(GameState *g)
         }
 
         if (!proj->deflected && hypotf(sx - tr->x, sy - tr->y) < shrine_proj_r) {
-            if (g->internal.barrier_shield_ready) {
-                g->internal.barrier_shield_ready = false;
-                g->internal.barrier_shield_cd = 12.0f;
+            if (g->internal.barrier_shield_ready && game_shrine_can_be_hit(g)) {
+                block_with_barrier(g, tr->x, tr->y);
             } else {
                 combat_damage_shrine(g, tr->x, tr->y, 1);
             }
@@ -399,7 +445,7 @@ void projectiles_step(GameState *g)
                 }
                 const TransformComp *etr = game_transform(g, eid);
                 const EnemyComp *een = game_enemy(g, eid);
-                if (etr == NULL || een == NULL) {
+                if (etr == NULL || een == NULL || proj_already_hit(proj, eid)) {
                     continue;
                 }
                 const float hit_r = game_is_boss_enemy(een->def_id)
@@ -410,10 +456,11 @@ void projectiles_step(GameState *g)
                 if (ex * ex + ey * ey < hit_r * hit_r) {
                     const int32_t dmg =
                         proj->burning ? 40 : (proj->kind == PROJ_FIREBALL ? 30 : 20);
-                    const uint32_t flags =
-                        DMG_DEFLECTED | (proj->burning ? DMG_FIRE : DMG_PHYSICAL);
+                    const bool fiery = proj->burning || proj->kind == PROJ_FIREBALL;
+                    const uint32_t flags = DMG_DEFLECTED | (fiery ? DMG_FIRE : DMG_PHYSICAL);
                     const float hit_x = etr->x;
                     const float hit_y = etr->y;
+                    proj_remember_hit(proj, eid);
                     (void)combat_apply_damage(g, eid, dmg, flags, vel->vx, vel->vy);
 
                     if (proj->kind == PROJ_FIREBALL) {
@@ -432,8 +479,6 @@ void projectiles_step(GameState *g)
 
                     if (proj->pierce > 0) {
                         --proj->pierce;
-                        tr->x += (vel->vx / target_sp) * 28.0f;
-                        tr->y += (vel->vy / target_sp) * 28.0f;
                     } else {
                         ecs_destroy(&g->ecs, id);
                     }

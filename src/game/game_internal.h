@@ -58,6 +58,8 @@ typedef struct {
     bool barrier_shield_enabled;
     float stroke_ember_interval;
     float stroke_ember_mul;
+    float stroke_ember_rad;
+    float stroke_ember_amt;
     float relic_ember_interval;
     float ink_damp_override;
     float fire_damp_override;
@@ -118,6 +120,7 @@ typedef struct {
     float wind_return_cd;
     uint32_t triggered_hints_mask;
     float maelstrom_bind_t[ECS_MAX_ENTITIES];
+    float maelstrom_hit_cd[ECS_MAX_ENTITIES];
 
     /* Phase 4-B fields */
     float wind_timer;

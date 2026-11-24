@@ -39,6 +39,10 @@ typedef struct {
 
 typedef struct {
     Rectangle items[4]; /* 0: Sortie, 1: Bokuan, 2: Settings, 3: Quit */
+    Rectangle title_rect;
+    Rectangle footer_rect;
+    Rectangle brush_rect;
+    Rectangle hint_rect;
 } LobbyLayout;
 
 typedef struct {
@@ -92,12 +96,19 @@ typedef struct {
     uint32_t seed;
 } VfxBolt;
 
+typedef enum {
+    SEAL_PRIO_STAMP = 1, /* UI confirmations (reward pick) */
+    SEAL_PRIO_REACTION,  /* elemental reactions (Cataclysm) */
+    SEAL_PRIO_MILESTONE  /* wave / act clear */
+} SealPriority;
+
 typedef struct {
     bool active;
     TextId glyph;
     float x, y;
     float size;
     int32_t style;
+    int32_t priority;
     float age, life;
 } VfxSeal;
 
@@ -113,9 +124,11 @@ typedef struct {
 
 typedef struct {
     bool active;
-    int32_t kind; /* 0=cyclone, 1=gale, 2=act wipe, 3=orb trail, 4=boss burst,
-                     5=thunderburst enso, 6=cataclysm gold enso, 7=bounce enso,
-                     8=nue dash trail, 9=ryu orb break */
+    int32_t kind;  /* 0=cyclone, 1=gale, 2=act wipe, 3=orb trail, 4=boss burst,
+                      5=thunderburst enso, 6=cataclysm gold enso, 7=bounce enso,
+                      8=nue dash trail, 9=ryu orb break, 10=purification shockwave,
+                      11=brush pressure ripple, 12=barrier ward ring */
+    int32_t style; /* BrushStyleId for cyclone/gale/ripple, -1 for neutral */
     float x, y, dx, dy;
     float radius;
     float age, life;
@@ -155,8 +168,6 @@ typedef struct {
     bool owns_title_font;
     bool title_is_brush;
     bool use_ja;
-    Vector2 text_size_cache[TEXT_COUNT][2];
-    bool text_size_valid[TEXT_COUNT][2];
 
     uint64_t frames_drawn;
     uint64_t vfx_rng;
@@ -173,6 +184,8 @@ typedef struct {
     /* Banners, intro queue, major effects */
     float boss_banner_t;
     EnemyDefId boss_banner_id;
+    float clear_banner_t;
+    TextId clear_banner_text;
     float gameover_drip_t;
     bool gameover_drip_active;
     float victory_scroll_t;

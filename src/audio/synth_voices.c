@@ -1,6 +1,7 @@
 #include "synth_voices.h"
 
 #include "core.h"
+#include "meta.h"
 
 #include <math.h>
 #include <string.h>
@@ -13,25 +14,105 @@ const float k_yo_scale[8] = {293.66f, 329.63f, 392.00f, 440.00f,
 
 float audio_noise_next(AudioState *audio) { return ink_rng_f01(&audio->rng) * 2.0f - 1.0f; }
 
-void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample, float freq,
-                       float param)
+static int voice_tier(const AudioVoice *v)
 {
-    int slot = -1;
-    uint64_t oldest_seq = UINT64_MAX;
-    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
-        if (!audio->voices[i].active) {
-            slot = i;
-            break;
-        }
-        if (audio->voices[i].birth_seq < oldest_seq) {
-            oldest_seq = audio->voices[i].birth_seq;
-            slot = i;
-        }
+    if (v->releasing) {
+        return 0;
     }
-    if (slot < 0) {
-        slot = 0;
+    switch (v->kind) {
+    case AUDIO_VOICE_WAVE_CLEAR:
+    case AUDIO_VOICE_ACT_CLEAR:
+    case AUDIO_VOICE_SHRINE_GONG:
+    case AUDIO_VOICE_BOSS_TAIKO:
+    case AUDIO_VOICE_CATACLYSM:
+    case AUDIO_VOICE_GAME_OVER:
+        return 3;
+    case AUDIO_VOICE_KILL_TAIKO:
+    case AUDIO_VOICE_CHAIN_KOTO:
+    case AUDIO_VOICE_DEFLECT_BAMBOO:
+    case AUDIO_VOICE_IGNITE_FLAME:
+    case AUDIO_VOICE_STORM_ZAP:
+    case AUDIO_VOICE_ORB_DROP:
+    case AUDIO_VOICE_SKILL_DENIED:
+    case AUDIO_VOICE_UI_CLICK:
+        return 1;
+    default:
+        return 2;
     }
+}
 
+static int voice_kind_cap(AudioVoiceKind kind)
+{
+    switch (kind) {
+    case AUDIO_VOICE_KILL_TAIKO:
+        return 4;
+    case AUDIO_VOICE_STORM_ZAP:
+    case AUDIO_VOICE_ORB_DROP:
+    case AUDIO_VOICE_DEFLECT_BAMBOO:
+        return 3;
+    case AUDIO_VOICE_CHAIN_KOTO:
+    case AUDIO_VOICE_IGNITE_FLAME:
+    case AUDIO_VOICE_UI_CLICK:
+        return 2;
+    case AUDIO_VOICE_SKILL_DENIED:
+    case AUDIO_VOICE_PURIFY:
+        return 1;
+    default:
+        return AUDIO_MAX_VOICES;
+    }
+}
+
+/* Spammy hits recycle their own oldest voice first, and a full bank only steals from an equal or
+ * lower tier, so a burst of zaps and kills can never cut off a clear chime or a shrine gong. */
+static int pick_voice_slot(const AudioState *audio, AudioVoiceKind kind)
+{
+    const AudioVoice probe = {.kind = kind};
+    const int tier = voice_tier(&probe);
+    int same = 0;
+    int oldest_same = -1;
+    int free_slot = -1;
+    int victim = -1;
+    int victim_tier = 1 << 30;
+    uint64_t oldest_same_seq = UINT64_MAX;
+    uint64_t victim_seq = UINT64_MAX;
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        const AudioVoice *v = &audio->voices[i];
+        if (!v->active) {
+            if (free_slot < 0) {
+                free_slot = i;
+            }
+            continue;
+        }
+        if (v->kind == kind && !v->releasing) {
+            ++same;
+            if (v->birth_seq < oldest_same_seq) {
+                oldest_same_seq = v->birth_seq;
+                oldest_same = i;
+            }
+        }
+        const int t = voice_tier(v);
+        if (t < victim_tier || (t == victim_tier && v->birth_seq < victim_seq)) {
+            victim_tier = t;
+            victim_seq = v->birth_seq;
+            victim = i;
+        }
+    }
+    if (same >= voice_kind_cap(kind) && oldest_same >= 0) {
+        return oldest_same;
+    }
+    if (free_slot >= 0) {
+        return free_slot;
+    }
+    return victim_tier <= tier ? victim : -1;
+}
+
+static AudioVoice *allocate_voice(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample,
+                                  float freq, float param)
+{
+    const int slot = pick_voice_slot(audio, kind);
+    if (slot < 0) {
+        return NULL;
+    }
     AudioVoice *v = &audio->voices[slot];
     memset(v, 0, sizeof *v);
     v->kind = kind;
@@ -41,6 +122,45 @@ void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sa
     v->env = 1.0f;
     v->freq = freq;
     v->param = param;
+    return v;
+}
+
+/* Voices for later ticks wait here and take a slot only when their start sample is reached, so
+ * per-kind caps and stealing see the same bank whether ticks are rendered one by one or in a
+ * batch. */
+void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample, float freq,
+                       float param)
+{
+    if (start_sample <= audio->samples_rendered) {
+        (void)allocate_voice(audio, kind, start_sample, freq, param);
+        return;
+    }
+    if (audio->pending_count >= AUDIO_PENDING_VOICE_CAP) {
+        return;
+    }
+    const int32_t tail = (audio->pending_head + audio->pending_count) % AUDIO_PENDING_VOICE_CAP;
+    audio->pending[tail] = (AudioPendingVoice){
+        .kind = kind, .start_sample = start_sample, .freq = freq, .param = param};
+    audio->pending_count++;
+}
+
+void audio_voice_spawn_ui(AudioState *audio, AudioVoiceKind kind, float freq, float param)
+{
+    AudioVoice *v = allocate_voice(audio, kind, audio->samples_rendered, freq, param);
+    if (v != NULL) {
+        v->ui = true;
+    }
+}
+
+static void start_due_voices(AudioState *audio, uint64_t sample_idx)
+{
+    while (audio->pending_count > 0 &&
+           audio->pending[audio->pending_head].start_sample <= sample_idx) {
+        const AudioPendingVoice p = audio->pending[audio->pending_head];
+        audio->pending_head = (audio->pending_head + 1) % AUDIO_PENDING_VOICE_CAP;
+        audio->pending_count--;
+        (void)allocate_voice(audio, p.kind, sample_idx, p.freq, p.param);
+    }
 }
 
 static float step_single_voice(AudioVoice *v, float nz)
@@ -154,20 +274,57 @@ static float step_single_voice(AudioVoice *v, float nz)
         break;
     }
     case AUDIO_VOICE_CYCLONE_SWIRL: {
-        v->lp += 0.10f * (nz - v->lp);
+        /* param carries the caster's BrushStyleId plus AUDIO_SKILL_PARAM_* flags. */
+        const int bits = (int)lroundf(v->param);
+        const int style = bits & 3;
+        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
+        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
+        const bool heavy = style == BRUSH_STYLE_HEAVY;
+        const bool quill = style == BRUSH_STYLE_QUILL;
+        const float lp_k = dry ? 0.30f : (heavy ? 0.07f : (quill ? 0.18f : 0.10f));
+        v->lp += lp_k * (nz - v->lp);
         v->bp += 0.045f * (v->lp - v->bp);
-        const float f = 145.0f + 260.0f * (1.0f - v->env);
+        const float f = heavy   ? 105.0f + 190.0f * (1.0f - v->env)
+                        : quill ? 230.0f + 420.0f * (1.0f - v->env)
+                                : 145.0f + 260.0f * (1.0f - v->env);
         v->phase += f / sr;
-        out = (sinf(v->phase * k_two_pi) * 0.34f + (v->lp - v->bp) * 0.95f) * v->env * 0.52f;
+        float body = sinf(v->phase * k_two_pi) * 0.34f + (v->lp - v->bp) * 0.95f;
+        if (style == BRUSH_STYLE_EMBER && nz > 0.86f) {
+            body += nz * 0.45f;
+        } else if (quill) {
+            v->phase2 += (f * 3.01f) / sr;
+            body += sinf(v->phase2 * k_two_pi) * 0.14f * v->env;
+        }
+        if (surge) {
+            body += sinf(v->phase * k_two_pi * 2.0f) * 0.18f * v->env;
+        }
+        out = body * v->env * (dry ? 0.36f : (heavy ? 0.60f : 0.52f));
         v->env *= 0.99968f;
         break;
     }
     case AUDIO_VOICE_GALE_SLASH: {
-        v->lp += 0.16f * (nz - v->lp);
-        const float f = 175.0f + 460.0f * v->env;
+        const int bits = (int)lroundf(v->param);
+        const int style = bits & 3;
+        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
+        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
+        const bool heavy = style == BRUSH_STYLE_HEAVY;
+        const bool quill = style == BRUSH_STYLE_QUILL;
+        v->lp += (dry ? 0.40f : (heavy ? 0.10f : (quill ? 0.26f : 0.16f))) * (nz - v->lp);
+        const float f = heavy   ? 120.0f + 320.0f * v->env
+                        : quill ? 260.0f + 640.0f * v->env
+                                : 175.0f + 460.0f * v->env;
         v->phase += f / sr;
-        out = ((nz - v->lp) * 0.56f + sinf(v->phase * k_two_pi) * 0.28f) * v->env * 0.50f;
-        v->env *= 0.99935f;
+        float body = (nz - v->lp) * 0.56f + sinf(v->phase * k_two_pi) * 0.28f;
+        if (heavy) {
+            body += sinf(v->phase * k_two_pi * 0.5f) * 0.22f * v->env;
+        } else if (style == BRUSH_STYLE_EMBER && nz > 0.82f) {
+            body += nz * 0.40f * v->env;
+        }
+        if (surge) {
+            body += sinf(v->phase * k_two_pi * 2.0f) * 0.16f * v->env;
+        }
+        out = body * v->env * (dry ? 0.34f : 0.50f);
+        v->env *= quill ? 0.99915f : 0.99935f;
         break;
     }
     case AUDIO_VOICE_ORB_DROP: {
@@ -212,9 +369,15 @@ static float step_single_voice(AudioVoice *v, float nz)
         const float f2 = k_yo_scale[5]; /* D5 */
         v->phase += f1 / sr;
         v->phase2 += f2 / sr;
-        const float chord = sinf(v->phase * k_two_pi) * 0.52f + sinf(v->phase2 * k_two_pi) * 0.48f;
-        out = chord * v->env * 0.44f;
-        v->env *= 0.99978f;
+        const float strike = v->age < 2600u ? 1.0f - (float)v->age / 2600.0f : 0.0f;
+        const float chord = sinf(v->phase * k_two_pi) * 0.46f + sinf(v->phase2 * k_two_pi) * 0.40f;
+        const float suzu = sinf(v->phase2 * k_two_pi * 2.76f) * 0.30f * strike +
+                           sinf(v->phase * k_two_pi * 5.40f) * 0.18f * strike +
+                           nz * 0.08f * strike * strike;
+        const float shimmer =
+            sinf(v->phase2 * k_two_pi * 2.0f + 0.6f * sinf((float)v->age * 0.0009f)) * 0.12f;
+        out = (chord + suzu + shimmer * v->env) * v->env * 0.48f;
+        v->env *= 0.99982f;
         break;
     }
     case AUDIO_VOICE_ACT_CLEAR: {
@@ -262,11 +425,68 @@ static float step_single_voice(AudioVoice *v, float nz)
         v->env *= 0.99962f;
         break;
     }
+    case AUDIO_VOICE_SKILL_DENIED: {
+        /* Dry wooden clack (hyoshigi) */
+        v->phase += (v->freq + 260.0f * v->env) / sr;
+        v->phase2 += (v->freq * 2.64f) / sr;
+        v->lp += 0.30f * (nz - v->lp);
+        const float knock = sinf(v->phase * k_two_pi) * 0.50f + sinf(v->phase2 * k_two_pi) * 0.25f +
+                            (nz - v->lp) * 0.30f * v->env;
+        out = knock * v->env * 0.42f;
+        v->env *= 0.99820f;
+        break;
+    }
+    case AUDIO_VOICE_GAME_OVER: {
+        /* Descending low koto over a muffled taiko */
+        static const float k_fall[3] = {220.00f, 164.81f, 146.83f};
+        const int step = (int)(v->age / 9000u);
+        const float f = k_fall[step < 3 ? step : 2];
+        v->phase += f / sr;
+        v->phase2 += (58.0f + 120.0f * v->env * v->env) / sr;
+        const float koto =
+            sinf(v->phase * k_two_pi) * 0.50f + sinf(v->phase * k_two_pi * 2.0f) * 0.16f * v->env;
+        const float drum = sinf(v->phase2 * k_two_pi) * 0.45f * v->env;
+        out = (koto + drum) * v->env * 0.55f;
+        v->env *= 0.99988f;
+        break;
+    }
+    case AUDIO_VOICE_UI_CLICK: {
+        v->phase += v->freq / sr;
+        v->phase2 += (v->freq * (v->param > 0.5f ? 1.5f : 2.0f)) / sr;
+        out = (sinf(v->phase * k_two_pi) * 0.40f + sinf(v->phase2 * k_two_pi) * 0.16f) * v->env *
+              0.34f;
+        v->env *= 0.99760f;
+        break;
+    }
+    case AUDIO_VOICE_WARD_BELL: {
+        v->phase += v->freq / sr;
+        v->phase2 += (v->freq * 2.76f) / sr;
+        const float bell = sinf(v->phase * k_two_pi) * 0.55f +
+                           sinf(v->phase2 * k_two_pi) * 0.30f * v->env +
+                           sinf(v->phase * k_two_pi * 0.5f) * 0.20f;
+        out = bell * v->env * 0.46f;
+        v->env *= 0.99955f;
+        break;
+    }
+    case AUDIO_VOICE_PURIFY: {
+        /* Breathy rising whoosh with a faint bell tail as the field is cleansed */
+        v->lp += 0.12f * (nz - v->lp);
+        v->bp += 0.04f * (v->lp - v->bp);
+        v->phase += (v->freq * (0.6f + 0.4f * (1.0f - v->env))) / sr;
+        const float swell = v->age < 4000u ? (float)v->age / 4000.0f : 1.0f;
+        const float air = (v->lp - v->bp) * 0.85f * swell;
+        out = (air + sinf(v->phase * k_two_pi) * 0.12f) * v->env * 0.44f;
+        v->env *= 0.99970f;
+        break;
+    }
     default:
         v->active = false;
         return 0.0f;
     }
 
+    if (v->releasing) {
+        v->env *= 0.9985f;
+    }
     if (v->phase > 1000.0f) {
         v->phase -= 1000.0f;
     }
@@ -279,8 +499,61 @@ static float step_single_voice(AudioVoice *v, float nz)
     return out;
 }
 
+static float brush_scrape_sample(AudioState *audio, float nz)
+{
+    const int style = audio->brush_style;
+    float lp_k = 0.22f;
+    float bp_k = 0.07f;
+    float gain = 0.24f;
+    if (audio->brush_dry) {
+        lp_k = 0.46f;
+        bp_k = 0.18f;
+        gain = 0.17f;
+    } else if (style == BRUSH_STYLE_HEAVY) {
+        lp_k = 0.12f;
+        bp_k = 0.035f;
+        gain = 0.34f;
+    } else if (style == BRUSH_STYLE_QUILL) {
+        lp_k = 0.34f;
+        bp_k = 0.12f;
+        gain = 0.20f;
+    }
+    audio->brush_lp += lp_k * (nz - audio->brush_lp);
+    audio->brush_bp += bp_k * (audio->brush_lp - audio->brush_bp);
+    float s = (audio->brush_lp - audio->brush_bp) * gain;
+
+    float tone_hz = 0.0f;
+    float tone_amp = 0.0f;
+    if (audio->brush_dry) {
+        s *= 0.55f + 0.45f * (nz > 0.2f ? 1.0f : 0.0f);
+    } else if (style == BRUSH_STYLE_HEAVY) {
+        tone_hz = 82.0f;
+        tone_amp = 0.05f;
+    } else if (style == BRUSH_STYLE_EMBER) {
+        if (nz > 0.93f) {
+            s += nz * 0.22f;
+        }
+    } else if (style == BRUSH_STYLE_QUILL) {
+        tone_hz = 880.0f;
+        tone_amp = 0.025f;
+    }
+    if (audio->brush_surge && !audio->brush_dry) {
+        tone_hz = tone_hz > 0.0f ? tone_hz * 2.0f : 523.25f;
+        tone_amp += 0.035f;
+    }
+    if (tone_amp > 0.0f) {
+        audio->brush_ph += tone_hz / (float)AUDIO_SAMPLE_RATE;
+        if (audio->brush_ph > 1000.0f) {
+            audio->brush_ph -= 1000.0f;
+        }
+        s += sinf(audio->brush_ph * k_two_pi) * tone_amp;
+    }
+    return s * audio->brush_env;
+}
+
 float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
 {
+    start_due_voices(audio, sample_idx);
     float mix = 0.0f;
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
         AudioVoice *v = &audio->voices[i];
@@ -290,13 +563,10 @@ float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
         mix += step_single_voice(v, nz);
     }
 
-    /* Continuous brush-on-paper scrape (silenced while paused) */
     const float target = audio->paused ? 0.0f : audio->brush_target;
     audio->brush_env += (target - audio->brush_env) * 0.0045f;
     if (audio->brush_env > 0.001f) {
-        audio->brush_lp += 0.22f * (nz - audio->brush_lp);
-        audio->brush_bp += 0.07f * (audio->brush_lp - audio->brush_bp);
-        mix += (audio->brush_lp - audio->brush_bp) * audio->brush_env * 0.24f;
+        mix += brush_scrape_sample(audio, nz);
     }
 
     return mix;

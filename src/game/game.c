@@ -29,6 +29,25 @@ static bool brush_input_is_finite(const BrushInput *in)
            isfinite(in->pmy);
 }
 
+/* Finite but huge coordinates (e.g. +-FLT_MAX from the API) would overflow stroke lengths into
+ * Inf/NaN downstream; one screen of slack around the arena keeps every real pointer position. */
+static const BrushInput *bounded_brush_input(const BrushInput *in, BrushInput *out)
+{
+    if (!brush_input_is_finite(in)) {
+        return NULL;
+    }
+    const float lo_x = -(float)INK_SCREEN_W;
+    const float hi_x = 2.0f * (float)INK_SCREEN_W;
+    const float lo_y = -(float)INK_SCREEN_H;
+    const float hi_y = 2.0f * (float)INK_SCREEN_H;
+    *out = *in;
+    out->mx = ink_clampf(in->mx, lo_x, hi_x);
+    out->my = ink_clampf(in->my, lo_y, hi_y);
+    out->pmx = ink_clampf(in->pmx, lo_x, hi_x);
+    out->pmy = ink_clampf(in->pmy, lo_y, hi_y);
+    return out;
+}
+
 static void step_dissolving_entities(GameState *g)
 {
     const uint32_t hw = g->ecs.high_water;
@@ -103,24 +122,11 @@ static void handle_command(GameState *g, const GameCommand *cmd)
     }
 }
 
+/* Chain and Surge timers stay frozen here: the purification window is not player time. */
 static void step_aftermath(GameState *g)
 {
     g->player.painting = false;
     g->player.stroke_speed = 0.0f;
-
-    if (g->run.chain_t > 0.0f) {
-        g->run.chain_t -= INK_FIXED_DT;
-        if (g->run.chain_t <= 1e-4f) {
-            g->run.chain_t = 0.0f;
-            g->run.chain = 0;
-        }
-    }
-    if (g->player.surge_t > 0.0f) {
-        g->player.surge_t -= INK_FIXED_DT;
-        if (g->player.surge_t <= 1e-4f) {
-            g->player.surge_t = 0.0f;
-        }
-    }
 
     fluid_step(&g->fluid, INK_FIXED_DT);
     fluid_sanitize_channels(&g->fluid);
@@ -153,6 +159,51 @@ static void step_aftermath(GameState *g)
         }
     }
     ++g->ticks;
+}
+
+/* Shrine break has already been ruled out by the caller. A winning tick that also started a
+ * hitstop (e.g. a final wall slam) defers this until the freeze ends, so the clear banner,
+ * purification and its sound play after the impact instead of during it. */
+static void finish_wave_if_won(GameState *g)
+{
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    if (g->run.wave_index == GAME_BOSS_WAVE_INDEX && g->run.boss_id.index == ECS_INVALID_INDEX) {
+        if (g->run.act_index < GAME_MAIN_ACT_COUNT) {
+            ++g->run.acts_cleared;
+        } else if (g->run.endless_acts_cleared < META_MAX_ENDLESS_ACTS) {
+            ++g->run.endless_acts_cleared;
+        }
+        g->internal.wave_clear_is_boss = true;
+        if ((g->run.act_index + 1 < g->run.act_count || g->run.endless_loop > 0) &&
+            g->shrine_count > 0) {
+            ShrineState *sh = &g->shrines[0];
+            sh->hp += 3;
+            if (sh->hp > sh->max_hp) {
+                sh->hp = sh->max_hp;
+            }
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_ACT_CLEAR,
+                                     .x = g->internal.last_boss_x,
+                                     .y = g->internal.last_boss_y,
+                                     .value = g->run.act_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+        return;
+    }
+    if (g->run.wave_index < GAME_BOSS_WAVE_INDEX && g->run.wave_kills >= g->run.wave_quota) {
+        g->internal.wave_clear_is_boss = false;
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_WAVE_CLEAR,
+                                     .x = sx,
+                                     .y = sy,
+                                     .value = g->run.wave_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+    }
 }
 
 static void step_pending_impulses(GameState *g)
@@ -238,6 +289,56 @@ void game_init(GameState *g, const RunConfig *cfg)
     g->player.ink = g->player.ink_max;
 }
 
+void game_init_sandbox(GameState *g, const RunConfig *cfg)
+{
+    if (g == NULL) {
+        return;
+    }
+    game_init(g, cfg);
+    g->phase = RUN_PHASE_PLAYING;
+    g->phase_t = 0.0f;
+    g->internal.act_prepared = true;
+}
+
+void game_sandbox_set_brush(GameState *g, BrushStyleId brush)
+{
+    if (g == NULL || (unsigned)brush >= (unsigned)BRUSH_STYLE_COUNT ||
+        g->config.brush_style == brush) {
+        return;
+    }
+    g->config.brush_style = brush;
+    g->internal.ember_tip_dist = 0.0f;
+    roguelike_recompute_modifiers(g);
+}
+
+void game_sandbox_apply_config(GameState *g, const RunConfig *cfg)
+{
+    if (g == NULL || cfg == NULL) {
+        return;
+    }
+    g->config = *cfg;
+    g->internal.ember_tip_dist = 0.0f;
+    roguelike_recompute_modifiers(g);
+}
+
+void game_step_sandbox(GameState *g, const BrushInput *in)
+{
+    if (g == NULL) {
+        return;
+    }
+    g->event_count = 0;
+    BrushInput bounded;
+    const BrushInput *valid_in = bounded_brush_input(in, &bounded);
+    step_pending_impulses(g);
+    player_skills_step(g, valid_in);
+    fluid_step(&g->fluid, INK_FIXED_DT);
+    elements_step(g);
+    fluid_sanitize_channels(&g->fluid);
+    ecs_flush_destroy(&g->ecs);
+    g->phase_t += INK_FIXED_DT;
+    ++g->ticks;
+}
+
 void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
 {
     if (g == NULL) {
@@ -246,7 +347,8 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
 
     /* Step 1: Event clear, input validation, command handling, stopping-phase branch. */
     g->event_count = 0;
-    const BrushInput *valid_in = brush_input_is_finite(in) ? in : NULL;
+    BrushInput bounded;
+    const BrushInput *valid_in = bounded_brush_input(in, &bounded);
     handle_command(g, cmd);
 
     if (g->phase == RUN_PHASE_REWARD || g->phase == RUN_PHASE_VICTORY ||
@@ -282,12 +384,16 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
         return;
     }
 
-    /* Step 2: Hitstop (ticks and phase_t advance; steps 3..8 skipped while active). */
+    /* Step 2: Hitstop (ticks and phase_t advance; steps 3..8 skipped while active). A clear that
+     * was deferred by the hitstop resolves on the tick the freeze ends. */
     g->phase_t += INK_FIXED_DT;
     if (g->hitstop_t > 0.0f) {
         g->hitstop_t -= INK_FIXED_DT;
         if (g->hitstop_t <= 1e-4f) {
             g->hitstop_t = 0.0f;
+            if (game_wave_goal_met(g)) {
+                finish_wave_if_won(g);
+            }
         }
         ++g->ticks;
         return;
@@ -335,40 +441,8 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
                                      .value = 0,
                                      .flags = 0,
                                  });
-    } else if (g->run.wave_index == GAME_BOSS_WAVE_INDEX &&
-               g->run.boss_id.index == ECS_INVALID_INDEX) {
-        if (g->run.act_index < GAME_MAIN_ACT_COUNT) {
-            ++g->run.acts_cleared;
-        } else if (g->run.endless_acts_cleared < META_MAX_ENDLESS_ACTS) {
-            ++g->run.endless_acts_cleared;
-        }
-        g->internal.wave_clear_is_boss = true;
-        if ((g->run.act_index + 1 < g->run.act_count || g->run.endless_loop > 0) &&
-            g->shrine_count > 0) {
-            ShrineState *sh = &g->shrines[0];
-            sh->hp += 3;
-            if (sh->hp > sh->max_hp) {
-                sh->hp = sh->max_hp;
-            }
-        }
-        (void)game_push_event(g, (GameEvent){
-                                     .type = EV_ACT_CLEAR,
-                                     .x = g->internal.last_boss_x,
-                                     .y = g->internal.last_boss_y,
-                                     .value = g->run.act_index,
-                                     .flags = 0,
-                                 });
-        combat_begin_wave_aftermath(g);
-    } else if (g->run.wave_index < GAME_BOSS_WAVE_INDEX && g->run.wave_kills >= g->run.wave_quota) {
-        g->internal.wave_clear_is_boss = false;
-        (void)game_push_event(g, (GameEvent){
-                                     .type = EV_WAVE_CLEAR,
-                                     .x = sx,
-                                     .y = sy,
-                                     .value = g->run.wave_index,
-                                     .flags = 0,
-                                 });
-        combat_begin_wave_aftermath(g);
+    } else if (g->hitstop_t <= 0.0f) {
+        finish_wave_if_won(g);
     }
 
     ++g->ticks;

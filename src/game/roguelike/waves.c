@@ -591,6 +591,18 @@ EntityId waves_spawn_summoned_escort(GameState *g, EnemyDefId def_id, float x, f
     return id;
 }
 
+static void clear_transient_field_state(GameState *g)
+{
+    memset(g->internal.cyclones, 0, sizeof g->internal.cyclones);
+    memset(g->internal.maelstrom_bind_t, 0, sizeof g->internal.maelstrom_bind_t);
+    memset(g->internal.maelstrom_hit_cd, 0, sizeof g->internal.maelstrom_hit_cd);
+    g->internal.wind_telegraph_t = 0.0f;
+    g->internal.wind_active_t = 0.0f;
+    if (stage_act_index(g->run.act_index) == 2) {
+        g->internal.wind_timer = 12.0f - 1.5f;
+    }
+}
+
 void waves_prepare_act(GameState *g)
 {
     if (g == NULL) {
@@ -617,8 +629,7 @@ void waves_prepare_act(GameState *g)
     g->internal.ryu_coil_t = 0.0f;
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
-    g->internal.wind_telegraph_t = 0.0f;
-    g->internal.wind_active_t = 0.0f;
+    clear_transient_field_state(g);
 
     fluid_reset(&g->fluid);
     stage_gimmicks_setup_act(g, g->run.act_index);
@@ -669,6 +680,7 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
     g->internal.ryu_coil_t = 0.0f;
+    clear_transient_field_state(g);
 
     g->player.ink = g->player.ink_max;
     g->player.dry = false;
@@ -685,7 +697,8 @@ void waves_start_wave(GameState *g, int32_t wave_index)
 
 void waves_step_spawns(GameState *g)
 {
-    if (g == NULL || g->run.wave_index < 0 || g->run.wave_index > GAME_BOSS_WAVE_INDEX) {
+    if (g == NULL || g->run.wave_index < 0 || g->run.wave_index > GAME_BOSS_WAVE_INDEX ||
+        game_wave_goal_met(g)) {
         return;
     }
     const WaveDef *wdef = &current_act_def(g)->waves[g->run.wave_index];

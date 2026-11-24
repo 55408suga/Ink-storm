@@ -1,5 +1,7 @@
 #include "game.h"
 
+#include "core.h"
+
 #include <stddef.h>
 #include <string.h>
 
@@ -177,7 +179,29 @@ bool game_enemy_is_targetable(const GameState *g, EntityId id)
             return false;
         }
     }
+    if (game_is_boss_part(en->def_id) && (tr->x < 0.0f || tr->x > (float)INK_SCREEN_W ||
+                                          tr->y < 0.0f || tr->y > (float)INK_SCREEN_H)) {
+        return false;
+    }
     return true;
+}
+
+bool game_shrine_can_be_hit(const GameState *g)
+{
+    return g != NULL && g->shrine_count > 0 && g->shrines[0].hp > 0 &&
+           g->shrines[0].invuln_t <= 0.0f && !game_wave_goal_met(g);
+}
+
+bool game_wave_goal_met(const GameState *g)
+{
+    if (g == NULL || g->phase != RUN_PHASE_PLAYING) {
+        return false;
+    }
+    if (g->run.wave_index == GAME_BOSS_WAVE_INDEX) {
+        return g->run.boss_id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, g->run.boss_id);
+    }
+    return g->run.wave_index >= 0 && g->run.wave_quota > 0 &&
+           g->run.wave_kills >= g->run.wave_quota;
 }
 
 int32_t game_relic_unlock_slot(RelicId id)
@@ -250,6 +274,10 @@ EntityId game_spawn_entity(GameState *g, uint64_t comp_mask)
         return invalid;
     }
     zero_component_slots(g, id.index, comp_mask);
+    /* Per-slot timers are indexed by ECS slot, so a recycled slot must not inherit the previous
+     * occupant's Maelstrom bind (stun) or collision cooldown. */
+    g->internal.maelstrom_bind_t[id.index] = 0.0f;
+    g->internal.maelstrom_hit_cd[id.index] = 0.0f;
     if (!ecs_add_mask(&g->ecs, id, comp_mask)) {
         ecs_destroy(&g->ecs, id);
         return invalid;
