@@ -228,9 +228,16 @@ static bool copy_into(FILE *src, FILE *dst)
     }
 }
 
+static void discard_temp(const SaveBackupOps *ops, const char *tmp_path)
+{
+    if (ops->unlink(tmp_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "INKSTORM: could not remove temporary backup '%s'\n", tmp_path);
+    }
+}
+
 /* The copy goes to a private temp file first, so an interrupted or failed copy can never be
  * mistaken for a finished backup under the final name. */
-static bool copy_to_temp(const char *path, char *tmp_path, size_t cap)
+static bool copy_to_temp(const SaveBackupOps *ops, const char *path, char *tmp_path, size_t cap)
 {
     const int n = snprintf(tmp_path, cap, "%s.tmpbak.XXXXXX", path);
     if (n < 0 || (size_t)n >= cap) {
@@ -248,7 +255,7 @@ static bool copy_to_temp(const char *path, char *tmp_path, size_t cap)
     FILE *dst = fdopen(fd, "wb");
     if (dst == NULL) {
         (void)close(fd);
-        (void)unlink(tmp_path);
+        discard_temp(ops, tmp_path);
         (void)fclose(src);
         return false;
     }
@@ -257,33 +264,30 @@ static bool copy_to_temp(const char *path, char *tmp_path, size_t cap)
     ok = (fflush(dst) == 0) && ok;
     ok = (fclose(dst) == 0) && ok;
     if (!ok) {
-        (void)unlink(tmp_path);
+        discard_temp(ops, tmp_path);
     }
     return ok;
 }
 
-/* link() publishes the finished copy atomically and refuses to replace an existing file. */
-static int publish_without_replacing(const char *tmp_path, const char *final_path)
+/* link() publishes the finished copy atomically and refuses to replace an existing file. There is
+ * deliberately no rename() fallback: rename() would silently replace a backup created in the
+ * meantime, so a filesystem without hard links reports failure and saving stays disabled. */
+static int publish_without_replacing(const SaveBackupOps *ops, const char *tmp_path,
+                                     const char *final_path)
 {
-    if (link(tmp_path, final_path) == 0) {
-        return 0;
-    }
-    const int err = errno;
-    if (err == EEXIST) {
-        return EEXIST;
-    }
-    struct stat st;
-    if (stat(final_path, &st) == 0) {
-        return EEXIST;
-    }
-    return rename(tmp_path, final_path) == 0 ? 0 : errno;
+    return ops->link(tmp_path, final_path) == 0 ? 0 : errno;
 }
 
-SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t out_cap)
+SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, size_t out_cap,
+                                             const SaveBackupOps *ops)
 {
     if (path == NULL || path[0] == '\0') {
         return SAVE_BACKUP_FAILED;
     }
+    const SaveBackupOps io = {
+        .link = (ops != NULL && ops->link != NULL) ? ops->link : link,
+        .unlink = (ops != NULL && ops->unlink != NULL) ? ops->unlink : unlink,
+    };
     char tmp_path[PATH_MAX];
     bool have_copy = false;
     SaveBackupResult result = SAVE_BACKUP_FAILED;
@@ -308,12 +312,12 @@ SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t
             break;
         }
         if (!have_copy) {
-            have_copy = copy_to_temp(path, tmp_path, sizeof tmp_path);
+            have_copy = copy_to_temp(&io, path, tmp_path, sizeof tmp_path);
             if (!have_copy) {
                 break;
             }
         }
-        const int err = publish_without_replacing(tmp_path, candidate);
+        const int err = publish_without_replacing(&io, tmp_path, candidate);
         if (err == 0) {
             result = SAVE_BACKUP_CREATED;
             if (out_path != NULL) {
@@ -323,8 +327,13 @@ SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t
             break;
         }
     }
-    if (have_copy && access(tmp_path, F_OK) == 0 && unlink(tmp_path) != 0) {
-        fprintf(stderr, "INKSTORM: could not remove temporary backup '%s'\n", tmp_path);
+    if (have_copy) {
+        discard_temp(&io, tmp_path);
     }
     return result;
+}
+
+SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t out_cap)
+{
+    return save_backup_unreadable_with(path, out_path, out_cap, NULL);
 }

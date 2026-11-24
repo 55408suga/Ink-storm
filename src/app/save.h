@@ -37,6 +37,13 @@ typedef enum {
     SAVE_BACKUP_FAILED
 } SaveBackupResult;
 
+typedef struct {
+    int (*link)(const char *oldpath, const char *newpath);
+    int (*unlink)(const char *path);
+} SaveBackupOps;
+
 SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t out_cap);
+SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, size_t out_cap,
+                                             const SaveBackupOps *ops);
 
 #endif
