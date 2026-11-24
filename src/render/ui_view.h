@@ -26,6 +26,7 @@ typedef struct {
     float x, y;
     bool valid;
     bool hover_suppressed;
+    int32_t context;
 } UiPointer;
 
 #define UI_HOVER_NONE (-1)

@@ -14,6 +14,7 @@ typedef enum { MENU_NAV_UP = 0, MENU_NAV_DOWN, MENU_NAV_LEFT, MENU_NAV_RIGHT } M
 #define MENU_RESULT_ENDLESS 2
 
 bool menu_pointer_track(UiPointer *p, float x, float y);
+void menu_pointer_enter_context(UiPointer *p, int32_t context);
 int32_t menu_pointer_visible_hover(UiPointer *p, int32_t hit, bool moved, bool nav_key);
 int32_t menu_nav_bokuan(int32_t cursor, MenuNavKey key);
 int32_t menu_nav_result(int32_t cursor, bool has_endless, MenuNavKey key);

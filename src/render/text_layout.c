@@ -14,6 +14,18 @@ size_t text_utf8_next(const char *s, size_t i, size_t n)
     return j;
 }
 
+size_t text_utf8_clip(const char *s, size_t len, size_t max_bytes)
+{
+    if (s == NULL || len <= max_bytes) {
+        return s == NULL ? 0 : len;
+    }
+    size_t n = max_bytes;
+    while (n > 0 && ((unsigned char)s[n] & 0xC0u) == 0x80u) {
+        --n;
+    }
+    return n;
+}
+
 static uint32_t decode_at(const char *s, size_t i, size_t n)
 {
     const unsigned char c0 = (unsigned char)s[i];

@@ -174,6 +174,7 @@ bool game_is_boss_enemy(EnemyDefId id);
 bool game_is_boss_part(EnemyDefId id);
 bool game_enemy_is_targetable(const GameState *g, EntityId id);
 bool game_wave_goal_met(const GameState *g);
+bool game_shrine_can_be_hit(const GameState *g);
 int32_t game_relic_unlock_slot(RelicId id);
 bool game_is_relic_unlocked(const GameState *g, RelicId id);
 MassTier game_effective_mass_tier(const GameState *g, MassTier raw);
@@ -210,6 +211,7 @@ void game_debug_force_wave_clear(GameState *g);
 /* Lobby brush sandbox: same stroke/skill/element path as combat, without waves or enemies. */
 void game_init_sandbox(GameState *g, const RunConfig *cfg);
 void game_sandbox_set_brush(GameState *g, BrushStyleId brush);
+void game_sandbox_apply_config(GameState *g, const RunConfig *cfg);
 void game_step_sandbox(GameState *g, const BrushInput *in);
 
 BrushInput game_autoplay_input(const GameState *g);

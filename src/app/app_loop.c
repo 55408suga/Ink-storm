@@ -3,6 +3,7 @@
 #include "audio_out.h"
 #include "core.h"
 #include "frame_clock.h"
+#include "hint_queue.h"
 #include "input_latch.h"
 #include "input_map.h"
 #include "menu_nav.h"
@@ -25,10 +26,7 @@ typedef struct {
     bool quit_requested;
     UiView ui;
 
-    /* First-time hint FIFO queue (2.0s each, non-blocking) */
-    HintId hint_queue[HINT_COUNT];
-    int32_t hint_head;
-    int32_t hint_count;
+    HintQueue hints;
 
     /* Lobby brush sandbox */
     uint64_t lobby_ticks;
@@ -60,8 +58,7 @@ static uint64_t next_run_seed(const MetaState *meta)
 
 static void clear_hint_queue(AppRunContext *ctx)
 {
-    ctx->hint_head = 0;
-    ctx->hint_count = 0;
+    hint_queue_clear(&ctx->hints);
     ctx->ui.active_hint = HINT_STROKE;
     ctx->ui.active_hint_t = 0.0f;
 }
@@ -124,7 +121,6 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
 static void consume_hint_events(AppRunContext *ctx, const GameState *game)
 {
     const int32_t count = game->event_count > GAME_MAX_EVENTS ? GAME_MAX_EVENTS : game->event_count;
-    bool marked_any = false;
     for (int32_t i = 0; i < count; ++i) {
         const GameEvent *ev = &game->events[i];
         if (ev->type != EV_HINT_TRIGGER) {
@@ -134,33 +130,32 @@ static void consume_hint_events(AppRunContext *ctx, const GameState *game)
         if (raw_id < 0 || raw_id >= HINT_COUNT) {
             continue;
         }
-        if (!ctx->meta.settings.hints_on || meta_is_hint_seen(&ctx->meta, (uint32_t)raw_id)) {
+        const HintId id = (HintId)raw_id;
+        const bool showing = ctx->ui.active_hint == id && ctx->ui.active_hint_t > 0.0f;
+        if (!ctx->meta.settings.hints_on || meta_is_hint_seen(&ctx->meta, (uint32_t)raw_id) ||
+            showing) {
             continue;
         }
-        meta_mark_hint_seen(&ctx->meta, (uint32_t)raw_id);
-        marked_any = true;
-        if (ctx->hint_count < HINT_COUNT) {
-            const int32_t tail = (ctx->hint_head + ctx->hint_count) % HINT_COUNT;
-            ctx->hint_queue[tail] = (HintId)raw_id;
-            ctx->hint_count++;
-        }
-    }
-    if (marked_any) {
-        sync_meta_view(ctx);
-        persist_meta(ctx);
+        (void)hint_queue_push(&ctx->hints, id);
     }
 }
 
-static void step_hint_queue(AppRunContext *ctx, float dt)
+static bool hint_strip_visible(const AppRunContext *ctx, const GameState *game)
 {
-    if (ctx->ui.active_hint_t > 0.0f) {
-        ctx->ui.active_hint_t = fmaxf(0.0f, ctx->ui.active_hint_t - dt);
-    }
-    if (ctx->ui.active_hint_t <= 0.0f && ctx->hint_count > 0) {
-        ctx->ui.active_hint = ctx->hint_queue[ctx->hint_head];
-        ctx->hint_head = (ctx->hint_head + 1) % HINT_COUNT;
-        ctx->hint_count--;
-        ctx->ui.active_hint_t = 2.0f;
+    return !ctx->ui.paused && game->phase != RUN_PHASE_REWARD && game->phase != RUN_PHASE_VICTORY &&
+           game->phase != RUN_PHASE_GAME_OVER && game->phase != RUN_PHASE_WAVE_AFTERMATH;
+}
+
+/* A hint counts as seen only once it is actually on screen. */
+static void step_hint_queue(AppRunContext *ctx, const GameState *game, float dt)
+{
+    const int32_t started =
+        hint_queue_step(&ctx->hints, &ctx->ui.active_hint, &ctx->ui.active_hint_t, dt,
+                        hint_strip_visible(ctx, game));
+    if (started >= 0) {
+        meta_mark_hint_seen(&ctx->meta, (uint32_t)started);
+        sync_meta_view(ctx);
+        persist_meta(ctx);
     }
 }
 
@@ -259,13 +254,20 @@ static void init_save_context(AppRunContext *ctx, const CliOptions *opts)
     if (res == SAVE_LOAD_CORRUPT || res == SAVE_LOAD_IO_ERROR) {
         fprintf(stderr, "INKSTORM: save file '%s' unreadable (%s); using defaults\n",
                 ctx->save_path, res == SAVE_LOAD_CORRUPT ? "corrupt" : "io error");
-    }
-    /* An I/O failure mid-read also leaves defaults in memory that would overwrite the file; the
-     * backup refuses existing .bak files and cleans up partial copies, so trying it is safe. */
-    if ((res == SAVE_LOAD_CORRUPT || res == SAVE_LOAD_IO_ERROR) &&
-        save_backup_unreadable(ctx->save_path)) {
-        fprintf(stderr, "INKSTORM: kept a copy of the unreadable save at '%s.bak'\n",
-                ctx->save_path);
+        char bak_path[PATH_MAX];
+        const SaveBackupResult kept =
+            save_backup_unreadable(ctx->save_path, bak_path, sizeof bak_path);
+        if (kept == SAVE_BACKUP_FAILED) {
+            /* Without a verified copy, writing defaults would destroy the only record of the run
+             * history, so this session plays without saving instead. */
+            fprintf(stderr,
+                    "INKSTORM: could not back up the unreadable save; saving is disabled for "
+                    "this session to keep '%s' intact\n",
+                    ctx->save_path);
+            ctx->save_enabled = false;
+        } else if (kept == SAVE_BACKUP_CREATED) {
+            fprintf(stderr, "INKSTORM: kept a copy of the unreadable save at '%s'\n", bak_path);
+        }
     }
 }
 
@@ -365,6 +367,14 @@ static void on_scene_entered(AppRunContext *ctx, InputLatch *latch, const MenuIn
     }
 }
 
+/* Meta upgrades bought in the Bokuan change ink and regen; the Lobby test brush must use them
+ * right away, without wiping what is already on the canvas. */
+static void refresh_sandbox_meta(const AppRunContext *ctx, GameState *game)
+{
+    const RunConfig cfg = meta_build_run_config(&ctx->meta, ctx->ui.selected_brush, UINT64_C(1));
+    game_sandbox_apply_config(game, &cfg);
+}
+
 static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState *render,
                                AudioState *audio, FrameClock *clock, InputLatch *latch,
                                const MenuInput *menu)
@@ -420,6 +430,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
             audio_trigger_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
+            refresh_sandbox_meta(ctx, game);
         } else {
             audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
         }
@@ -429,6 +440,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
             audio_trigger_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
+            refresh_sandbox_meta(ctx, game);
         } else {
             audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
         }
@@ -618,7 +630,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
             render_consume_events(render, game);
             render_update_vfx(render, game, INK_FIXED_DT);
             app_after_tick(&ctx, game);
-            step_hint_queue(&ctx, INK_FIXED_DT);
+            step_hint_queue(&ctx, game, INK_FIXED_DT);
         } else {
             const MenuInput menu = input_map_read_menu(game, &ctx.ui);
             handle_menu_action(&ctx, game, render, audio, &clock, &latch, &menu);
@@ -658,7 +670,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                     render_consume_events(render, game);
                     render_update_vfx(render, game, INK_FIXED_DT);
                     app_after_tick(&ctx, game);
-                    step_hint_queue(&ctx, INK_FIXED_DT);
+                    step_hint_queue(&ctx, game, INK_FIXED_DT);
                     if (prev_phase == RUN_PHASE_REWARD && game->phase != RUN_PHASE_REWARD) {
                         frame_clock_reset(&clock);
                         break;
@@ -668,6 +680,11 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                 const bool interactive = ctx.ui.scene == UI_SCENE_TITLE_LOBBY;
                 if (interactive) {
                     cycle_lobby_brush(&ctx, audio, menu.lobby_brush_step);
+                    /* A stroke starts where the button went down, not where the pointer was on
+                     * the previous tick (possibly over a menu button). */
+                    if (menu.lobby_stroke_started) {
+                        input_latch_anchor(&latch, menu.mouse_x, menu.mouse_y);
+                    }
                     const RawInput raw = {
                         .mouse_x = menu.mouse_x,
                         .mouse_y = menu.mouse_y,

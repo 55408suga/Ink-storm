@@ -428,8 +428,7 @@ void projectiles_step(GameState *g)
         }
 
         if (!proj->deflected && hypotf(sx - tr->x, sy - tr->y) < shrine_proj_r) {
-            const bool shrine_invuln = g->shrine_count > 0 && g->shrines[0].invuln_t > 0.0f;
-            if (g->internal.barrier_shield_ready && !shrine_invuln && !game_wave_goal_met(g)) {
+            if (g->internal.barrier_shield_ready && game_shrine_can_be_hit(g)) {
                 block_with_barrier(g, tr->x, tr->y);
             } else {
                 combat_damage_shrine(g, tr->x, tr->y, 1);

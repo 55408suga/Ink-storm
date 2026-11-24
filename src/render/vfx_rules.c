@@ -9,6 +9,10 @@ bool vfx_event_bypasses_fx_budget(GameEventType type)
     return type == EV_WAVE_CLEAR || type == EV_ACT_CLEAR || type == EV_BOSS_ENTER;
 }
 
+/* The intro strip is hidden during the purification, so its timer must not run there either, or
+ * an intro queued near the end of a wave would expire unseen. */
+bool vfx_enemy_intro_shown_in(RunPhase phase) { return phase == RUN_PHASE_PLAYING; }
+
 /* Only two seals fit on screen at once; higher priority wins, then the newest (smallest age),
  * instead of whichever happened to sit at the lowest array slot. */
 int32_t vfx_rank_top_two(const VfxSealRank *seals, int32_t n, int32_t out[2])

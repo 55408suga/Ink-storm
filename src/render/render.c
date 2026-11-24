@@ -139,6 +139,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         break;
     case UI_SCENE_SHOWCASE:
         if (ui->showcase_page <= 2) {
+            render_draw_clear_banner(r);
             render_vfx_draw_ui(r, g);
             render_draw_hud(r, g, ui);
             render_draw_banners(r, g, ui);
@@ -165,6 +166,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         break;
     case UI_SCENE_RUN:
     default:
+        render_draw_clear_banner(r);
         render_vfx_draw_ui(r, g);
         render_draw_hud(r, g, ui);
         render_draw_banners(r, g, ui);

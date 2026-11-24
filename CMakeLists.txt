@@ -96,9 +96,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_app_save PRIVATE unity ink_game ink_core)
     add_test(NAME test_app_save COMMAND test_app_save)
     add_executable(test_app_core tests/test_app_core.c src/app/cli.c src/app/frame_clock.c
-        src/app/input_latch.c src/app/menu_nav.c)
+        src/app/input_latch.c src/app/menu_nav.c src/app/bgm_fade.c src/app/hint_queue.c)
     target_include_directories(test_app_core PRIVATE src/app src/render)
-    target_link_libraries(test_app_core PRIVATE unity ink_game ink_core)
+    target_link_libraries(test_app_core PRIVATE unity ink_audio ink_game ink_core)
     add_test(NAME test_app_core COMMAND test_app_core)
     add_executable(test_text_table tests/test_text_table.c src/render/text_table.c
         src/render/text_layout.c)

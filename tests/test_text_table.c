@@ -213,6 +213,23 @@ static void test_text_layout_fit_prefix_stops_on_codepoint_boundary(void)
     TEST_ASSERT_EQUAL_size_t(0u, text_layout_fit_prefix(ja, strlen(ja), 1.0f, fake_measure, NULL));
 }
 
+static void test_utf8_clip_never_splits_a_codepoint(void)
+{
+    char text[520];
+    size_t n = 0;
+    while (n + 3 <= 513) {
+        text[n++] = (char)0xE5;
+        text[n++] = (char)0xA2;
+        text[n++] = (char)0xA8;
+    }
+    text[n] = '\0';
+    TEST_ASSERT_EQUAL_size_t(513u, n);
+    TEST_ASSERT_EQUAL_size_t(510u, text_utf8_clip(text, n, 511));
+    TEST_ASSERT_EQUAL_size_t(507u, text_utf8_clip(text, n, 511 - 3));
+    TEST_ASSERT_EQUAL_size_t(5u, text_utf8_clip("abcde", 5, 511));
+    TEST_ASSERT_EQUAL_size_t(0u, text_utf8_clip(text, n, 2));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -220,5 +237,6 @@ int main(void)
     RUN_TEST(test_text_table_content_mappings);
     RUN_TEST(test_text_layout_wraps_words_and_cjk_with_kinsoku);
     RUN_TEST(test_text_layout_fit_prefix_stops_on_codepoint_boundary);
+    RUN_TEST(test_utf8_clip_never_splits_a_codepoint);
     return UNITY_END();
 }

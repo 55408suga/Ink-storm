@@ -1,5 +1,7 @@
+#include "bgm_fade.h"
 #include "cli.h"
 #include "frame_clock.h"
+#include "hint_queue.h"
 #include "input_latch.h"
 #include "menu_nav.h"
 #include "unity.h"
@@ -433,6 +435,93 @@ static void test_latch_endless_crystal_command(void)
     TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
 }
 
+static void test_hints_wait_while_hidden_and_never_duplicate(void)
+{
+    HintQueue q;
+    hint_queue_clear(&q);
+    TEST_ASSERT_TRUE(hint_queue_push(&q, HINT_STROKE));
+    TEST_ASSERT_FALSE(hint_queue_push(&q, HINT_STROKE));
+    TEST_ASSERT_TRUE(hint_queue_push(&q, HINT_INK_REGEN));
+    HintId active = HINT_STROKE;
+    float active_t = 0.0f;
+
+    for (int i = 0; i < 300; ++i) {
+        TEST_ASSERT_EQUAL_INT32(-1, hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, false));
+    }
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, active_t);
+
+    TEST_ASSERT_EQUAL_INT32(HINT_STROKE,
+                            hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, true));
+    TEST_ASSERT_EQUAL_FLOAT(HINT_SHOW_SECONDS, active_t);
+    for (int i = 0; i < 300; ++i) {
+        (void)hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, false);
+    }
+    TEST_ASSERT_EQUAL_FLOAT(HINT_SHOW_SECONDS, active_t);
+
+    int32_t started = -1;
+    for (int i = 0; i < 130 && started < 0; ++i) {
+        started = hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, true);
+    }
+    TEST_ASSERT_EQUAL_INT32(HINT_INK_REGEN, started);
+}
+
+static void test_bgm_interrupted_fade_out_never_swells_back(void)
+{
+    BgmFade f;
+    bgm_fade_reset(&f);
+    BgmFadeActions act = bgm_fade_request(&f, BGM_BATTLE);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, act.play);
+    for (int i = 0; i < 40; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, f.gain_cur);
+
+    act = bgm_fade_request(&f, BGM_NONE);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, act.play);
+    for (int i = 0; i < 15; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    const float battle_gain = f.gain_prev;
+    TEST_ASSERT_TRUE(battle_gain < 0.6f);
+
+    act = bgm_fade_request(&f, BGM_LOBBY);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, act.play);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, act.stop);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, f.gain_cur);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, f.prev);
+    TEST_ASSERT_EQUAL_FLOAT(battle_gain, f.gain_prev);
+    (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    TEST_ASSERT_TRUE(f.gain_prev < battle_gain);
+}
+
+static void test_bgm_returning_to_fading_track_swaps_without_restart(void)
+{
+    BgmFade f;
+    bgm_fade_reset(&f);
+    (void)bgm_fade_request(&f, BGM_BATTLE);
+    for (int i = 0; i < 40; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    (void)bgm_fade_request(&f, BGM_BOSS);
+    for (int i = 0; i < 12; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    const float boss_gain = f.gain_cur;
+    const float battle_gain = f.gain_prev;
+    const BgmFadeActions act = bgm_fade_request(&f, BGM_BATTLE);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, act.play);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, act.stop);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, f.cur);
+    TEST_ASSERT_EQUAL_FLOAT(battle_gain, f.gain_cur);
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, f.prev);
+    TEST_ASSERT_EQUAL_FLOAT(boss_gain, f.gain_prev);
+    BgmTrack finished = BGM_NONE;
+    for (int i = 0; i < 60 && finished == BGM_NONE; ++i) {
+        finished = bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, finished);
+}
+
 static void test_menu_resting_mouse_yields_to_keyboard_until_moved(void)
 {
     UiPointer p = {0};
@@ -446,6 +535,24 @@ static void test_menu_resting_mouse_yields_to_keyboard_until_moved(void)
 
     TEST_ASSERT_TRUE(menu_pointer_track(&p, 140.0f, 100.0f));
     TEST_ASSERT_EQUAL_INT32(1, menu_pointer_visible_hover(&p, 1, true, false));
+}
+
+static void test_menu_new_context_keeps_default_focus_under_resting_mouse(void)
+{
+    UiPointer p = {0};
+    menu_pointer_enter_context(&p, 1);
+    bool moved = menu_pointer_track(&p, 500.0f, 410.0f);
+    TEST_ASSERT_EQUAL_INT32(0, menu_pointer_visible_hover(&p, 0, moved, false));
+
+    menu_pointer_enter_context(&p, 2);
+    moved = menu_pointer_track(&p, 500.0f, 410.0f);
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 0, moved, false));
+    menu_pointer_enter_context(&p, 2);
+    moved = menu_pointer_track(&p, 500.0f, 410.0f);
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 0, moved, false));
+
+    moved = menu_pointer_track(&p, 520.0f, 410.0f);
+    TEST_ASSERT_EQUAL_INT32(0, menu_pointer_visible_hover(&p, 0, moved, false));
 }
 
 static void test_menu_bokuan_grid_navigation(void)
@@ -515,6 +622,24 @@ static void test_menu_transition_frame_skips_gameplay(void)
     TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_RESULT_RETRY));
 }
 
+static void test_latch_anchor_starts_stroke_at_press_but_keeps_skills(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 160.0f, 400.0f);
+    const RawInput queued = {
+        .mouse_x = 160.0f, .mouse_y = 400.0f, .gale_pressed = true, .pick_pressed = -1};
+    input_latch_feed(&l, &queued);
+    input_latch_anchor(&l, 450.0f, 400.0f);
+    const RawInput press = {
+        .mouse_x = 450.0f, .mouse_y = 400.0f, .left_down = true, .pick_pressed = -1};
+    input_latch_feed(&l, &press);
+    const BrushInput in = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(in.paint);
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, in.pmx);
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, in.mx);
+    TEST_ASSERT_TRUE(in.gale);
+}
+
 static void test_latch_resume_reanchors_and_drops_queued_input(void)
 {
     InputLatch l;
@@ -546,11 +671,16 @@ int main(void)
     RUN_TEST(test_latch_confirm_once);
     RUN_TEST(test_latch_ui_transition_suppresses_paint_until_release);
     RUN_TEST(test_latch_endless_crystal_command);
+    RUN_TEST(test_hints_wait_while_hidden_and_never_duplicate);
+    RUN_TEST(test_bgm_interrupted_fade_out_never_swells_back);
+    RUN_TEST(test_bgm_returning_to_fading_track_swaps_without_restart);
     RUN_TEST(test_menu_resting_mouse_yields_to_keyboard_until_moved);
+    RUN_TEST(test_menu_new_context_keeps_default_focus_under_resting_mouse);
     RUN_TEST(test_menu_bokuan_grid_navigation);
     RUN_TEST(test_menu_result_cursor_walks_visible_buttons);
     RUN_TEST(test_menu_lobby_stroke_starts_only_on_open_canvas);
     RUN_TEST(test_menu_transition_frame_skips_gameplay);
+    RUN_TEST(test_latch_anchor_starts_stroke_at_press_but_keeps_skills);
     RUN_TEST(test_latch_resume_reanchors_and_drops_queued_input);
     return UNITY_END();
 }

@@ -416,13 +416,10 @@ int32_t combat_apply_damage(GameState *g, EntityId target, int32_t base_dmg, uin
 
 void combat_damage_shrine(GameState *g, float source_x, float source_y, int32_t dmg)
 {
-    if (g == NULL || g->shrine_count <= 0 || dmg <= 0) {
+    if (dmg <= 0 || !game_shrine_can_be_hit(g)) {
         return;
     }
     ShrineState *sh = &g->shrines[0];
-    if (sh->invuln_t > 0.0f || sh->hp <= 0 || game_wave_goal_met(g)) {
-        return;
-    }
     sh->hp -= dmg;
     if (sh->hp < 0) {
         sh->hp = 0;

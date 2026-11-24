@@ -237,7 +237,7 @@ enum { SPAN_BUF = 512 };
 
 static size_t copy_span(char *buf, const char *text, size_t len)
 {
-    const size_t n = len < SPAN_BUF - 1 ? len : SPAN_BUF - 1;
+    const size_t n = text_utf8_clip(text, len, SPAN_BUF - 1);
     memcpy(buf, text, n);
     buf[n] = '\0';
     return n;
@@ -259,8 +259,9 @@ static void ellipsize_into(const RenderState *r, char *out, const char *text, si
     SpanMeasure m = {.r = r, .size = size, .title_font = title_font};
     const char *ell = ellipsis_for(r);
     const float ell_w = render_measure_text(r, ell, size, title_font).x;
+    const size_t room = text_utf8_clip(text, len, SPAN_BUF - 1 - strlen(ell));
     const size_t keep =
-        text_layout_fit_prefix(text, len, fmaxf(0.0f, max_w - ell_w), measure_span, &m);
+        text_layout_fit_prefix(text, room, fmaxf(0.0f, max_w - ell_w), measure_span, &m);
     snprintf(out, SPAN_BUF, "%.*s%s", (int)keep, text, ell);
 }
 

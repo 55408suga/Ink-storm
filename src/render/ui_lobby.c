@@ -134,10 +134,7 @@ void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
 
     for (int i = 0; i < 4; ++i) {
         const bool sel = (active == i);
-        Rectangle rect = layout.items[i];
-        if (sel) {
-            rect.x += 8.0f;
-        }
+        const Rectangle rect = layout.items[i];
         ink_fill_panel(r, rect, PAL_GOFUN, sel ? 0.96f : 0.86f, sel ? PAL_SHU : PAL_SUMI_DARK,
                        0.92f, 910u + (uint32_t)i);
         render_draw_text_centered(

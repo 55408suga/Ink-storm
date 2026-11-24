@@ -186,6 +186,12 @@ bool game_enemy_is_targetable(const GameState *g, EntityId id)
     return true;
 }
 
+bool game_shrine_can_be_hit(const GameState *g)
+{
+    return g != NULL && g->shrine_count > 0 && g->shrines[0].hp > 0 &&
+           g->shrines[0].invuln_t <= 0.0f && !game_wave_goal_met(g);
+}
+
 bool game_wave_goal_met(const GameState *g)
 {
     if (g == NULL || g->phase != RUN_PHASE_PLAYING) {

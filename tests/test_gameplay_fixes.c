@@ -11,6 +11,7 @@
 #include "roguelike/waves.h"
 #include "unity.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 
@@ -291,6 +292,24 @@ static void test_reroll_refuses_when_no_new_choice_exists(void)
     game_destroy(g);
 }
 
+static void test_autoplay_picks_when_reroll_would_be_refused(void)
+{
+    static const UpgradeId keep3[3] = {UPG_EMBER_TIP, UPG_WILDFIRE, UPG_TAILWIND};
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    max_all_upgrades_except(g, keep3, 3);
+    g->shrines[0].hp = g->shrines[0].max_hp;
+    rewards_generate_offer(g);
+    g->phase = RUN_PHASE_REWARD;
+    g->run.rerolls_left = 1;
+    for (int t = 0; t < 5 && g->phase == RUN_PHASE_REWARD; ++t) {
+        const GameCommand cmd = game_autoplay_command(g);
+        TEST_ASSERT_NOT_EQUAL_INT(CMD_REROLL_REWARD, cmd.type);
+        game_step(g, NULL, &cmd);
+    }
+    TEST_ASSERT_NOT_EQUAL_INT(RUN_PHASE_REWARD, g->phase);
+    game_destroy(g);
+}
+
 static void test_reroll_brings_in_the_unseen_choice(void)
 {
     static const UpgradeId keep4[4] = {UPG_EMBER_TIP, UPG_WILDFIRE, UPG_TAILWIND, UPG_DEEP_INK};
@@ -529,6 +548,27 @@ static void test_stroke_force_keeps_direction_and_scales_cap_with_brush_force(vo
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 10.0f * 0.58f * 1.2f, small.x);
 }
 
+static void test_long_ember_stroke_keeps_every_ember_and_huge_input_stays_finite(void)
+{
+    GameState *g = arena(BRUSH_STYLE_EMBER);
+    g->player.ink = g->player.ink_max;
+    const BrushInput sweep = {
+        .pmx = 140.0f, .pmy = 500.0f, .mx = 1148.0f, .my = 500.0f, .paint = true};
+    player_skills_step(g, &sweep);
+    float dye[FLUID_MAX_CHANNELS] = {0};
+    fluid_sample(&g->fluid, 140.0f + 72.0f * 14.0f, 500.0f, NULL, NULL, dye);
+    TEST_ASSERT_TRUE(dye[1] > 0.10f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, g->internal.ember_tip_dist);
+
+    const BrushInput huge = {
+        .pmx = -FLT_MAX, .pmy = -FLT_MAX, .mx = FLT_MAX, .my = FLT_MAX, .paint = true};
+    game_step(g, &huge, NULL);
+    TEST_ASSERT_TRUE(isfinite(g->internal.ember_tip_dist));
+    TEST_ASSERT_TRUE(isfinite(g->player.ink));
+    TEST_ASSERT_TRUE(fluid_validate_finite(&g->fluid));
+    game_destroy(g);
+}
+
 static void test_lobby_sandbox_paints_with_combat_brush_and_no_waves(void)
 {
     GameState *g = game_create(NULL);
@@ -563,6 +603,16 @@ static void test_lobby_sandbox_paints_with_combat_brush_and_no_waves(void)
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
     TEST_ASSERT_TRUE(fluid_validate_finite(&g->fluid));
 
+    RunConfig bought = meta_run_config_preset(BRUSH_STYLE_QUILL, UINT64_C(1));
+    bought.meta_upgrade_lv[META_UPG_INK_MAX] = 2;
+    const float ink_before =
+        g->fluid.dye[0][(int)(300.0f / FLUID_CELL_PX) * FLUID_W + (int)(360.0f / FLUID_CELL_PX)];
+    game_sandbox_apply_config(g, &bought);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 120.0f, g->player.ink_max);
+    TEST_ASSERT_EQUAL_FLOAT(
+        ink_before,
+        g->fluid.dye[0][(int)(300.0f / FLUID_CELL_PX) * FLUID_W + (int)(360.0f / FLUID_CELL_PX)]);
+
     game_sandbox_set_brush(g, BRUSH_STYLE_EMBER);
     TEST_ASSERT_EQUAL_INT(BRUSH_STYLE_EMBER, g->config.brush_style);
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 72.0f, g->internal.mods.stroke_ember_interval);
@@ -581,6 +631,7 @@ int main(void)
     RUN_TEST(test_barrier_ward_is_kept_while_shrine_is_invulnerable);
     RUN_TEST(test_rich_ink_lv3_drops_orb_on_secondary_kill);
     RUN_TEST(test_reroll_refuses_when_no_new_choice_exists);
+    RUN_TEST(test_autoplay_picks_when_reroll_would_be_refused);
     RUN_TEST(test_reroll_brings_in_the_unseen_choice);
     RUN_TEST(test_nue_knockback_holds_dash_and_stun_bounce_moves);
     RUN_TEST(test_deflected_fireball_deals_fire_damage);
@@ -592,6 +643,7 @@ int main(void)
     RUN_TEST(test_wave_start_clears_lingering_field_state);
     RUN_TEST(test_ryu_orbs_start_on_screen_and_offscreen_parts_are_untargetable);
     RUN_TEST(test_stroke_force_keeps_direction_and_scales_cap_with_brush_force);
+    RUN_TEST(test_long_ember_stroke_keeps_every_ember_and_huge_input_stays_finite);
     RUN_TEST(test_lobby_sandbox_paints_with_combat_brush_and_no_waves);
     return UNITY_END();
 }

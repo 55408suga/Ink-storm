@@ -134,6 +134,7 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         .left_down = left_down,
         .ui_clicked = false,
         .lobby_paint = false,
+        .lobby_stroke_started = false,
         .lobby_cyclone = false,
         .lobby_gale = false,
         .lobby_brush_step = 0,
@@ -147,6 +148,11 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         ui->xray = !ui->xray;
     }
     const bool moved = menu_pointer_track(&ui->pointer, mouse.x, mouse.y);
+    const bool result_open = ui->scene == UI_SCENE_RUN && g != NULL &&
+                             (g->phase == RUN_PHASE_VICTORY || g->phase == RUN_PHASE_GAME_OVER);
+    menu_pointer_enter_context(&ui->pointer, (int32_t)ui->scene * 64 + (result_open ? 32 : 0) +
+                                                 (ui->paused ? 16 : 0) +
+                                                 (int32_t)ui->pause_confirm);
 
     if (ui->scene == UI_SCENE_TITLE_LOBBY) {
         LobbyLayout layout;
@@ -216,6 +222,7 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             out.action = MENU_ACT_LOBBY_QUIT;
         } else {
             out.lobby_paint = stroking;
+            out.lobby_stroke_started = stroking && !was_stroking;
             out.lobby_cyclone = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E);
             out.lobby_gale = IsKeyPressed(KEY_SPACE);
         }

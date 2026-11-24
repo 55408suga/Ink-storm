@@ -322,15 +322,18 @@ static void cast_gale(GameState *g)
  * the stroke vector is capped by magnitude and the cap grows with the brush force multiplier. */
 GameVec2 player_skills_stroke_force(double mdx, double mdy, float force_scale, float max_vel)
 {
-    float fx = (float)(mdx * 0.58 * (double)force_scale);
-    float fy = (float)(mdy * 0.58 * (double)force_scale);
-    const float cap = fminf(46.0f * fmaxf(1.0f, force_scale), max_vel * 0.72f);
-    const float len = hypotf(fx, fy);
-    if (len > cap && len > 1e-6f) {
+    double fx = mdx * 0.58 * (double)force_scale;
+    double fy = mdy * 0.58 * (double)force_scale;
+    const double cap = fmin(46.0 * fmax(1.0, (double)force_scale), (double)max_vel * 0.72);
+    const double len = hypot(fx, fy);
+    if (!isfinite(len)) {
+        return (GameVec2){0.0f, 0.0f};
+    }
+    if (len > cap && len > 1e-6) {
         fx *= cap / len;
         fy *= cap / len;
     }
-    return (GameVec2){fx, fy};
+    return (GameVec2){(float)fx, (float)fy};
 }
 
 void player_skills_emit_ember_trail(GameState *g, float *dist_acc, float interval,
@@ -339,20 +342,26 @@ void player_skills_emit_ember_trail(GameState *g, float *dist_acc, float interva
     if (g == NULL || dist_acc == NULL || interval <= 0.0f) {
         return;
     }
-    const float dx = seg.x - seg.px;
-    const float dy = seg.y - seg.py;
-    const float len = hypotf(dx, dy);
+    const double dx = (double)seg.x - (double)seg.px;
+    const double dy = (double)seg.y - (double)seg.py;
+    const double len = hypot(dx, dy);
+    if (!isfinite(len) || !isfinite(*dist_acc)) {
+        *dist_acc = 0.0f;
+        return;
+    }
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
     const float edye[FLUID_MAX_CHANNELS] = {0.0f, seg.fire_amt, 0.0f, 0.0f};
 
-    float next = interval - *dist_acc;
-    float last = -*dist_acc;
+    /* Enough bursts for a full-screen diagonal at the shortest Ember Tip interval. */
+    const int32_t max_bursts = 64;
+    double next = (double)interval - (double)*dist_acc;
+    double last = -(double)*dist_acc;
     int32_t bursts = 0;
-    while (next <= len && bursts < 8) {
-        const float t = len > 1e-6f ? ink_clampf(next / len, 0.0f, 1.0f) : 1.0f;
-        const float bx = seg.px + dx * t;
-        const float by = seg.py + dy * t;
+    while (next <= len && bursts < max_bursts) {
+        const double t = len > 1e-6 ? fmin(fmax(next / len, 0.0), 1.0) : 1.0;
+        const float bx = (float)((double)seg.px + dx * t);
+        const float by = (float)((double)seg.py + dy * t);
         fluid_splat(&g->fluid, bx, by, seg.rad, seg.vx, seg.vy, edye);
         if (g->internal.mods.twin_brush) {
             fluid_splat(&g->fluid, 2.0f * sx - bx, 2.0f * sy - by, seg.rad, -seg.vx, -seg.vy, edye);
@@ -361,10 +370,7 @@ void player_skills_emit_ember_trail(GameState *g, float *dist_acc, float interva
         next += interval;
         ++bursts;
     }
-    *dist_acc = len - last;
-    if (*dist_acc >= interval) {
-        *dist_acc = fmodf(*dist_acc, interval);
-    }
+    *dist_acc = (float)fmod(len - last, (double)interval);
 }
 
 void player_skills_step(GameState *g, const BrushInput *valid_in)

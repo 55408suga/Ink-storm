@@ -336,7 +336,70 @@ static void write_text(const char *path, const char *text)
     TEST_ASSERT_EQUAL_INT(0, fclose(fp));
 }
 
-static void test_save_backup_keeps_first_unreadable_copy(void)
+static void read_text(const char *path, char *buf, size_t cap)
+{
+    size_t len = 0;
+    read_file_bytes(path, buf, cap - 1, &len);
+    buf[len] = '\0';
+}
+
+static int count_temp_backups(const char *dir)
+{
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof cmd, "ls -a '%s' | grep -c tmpbak", dir);
+    FILE *p = popen(cmd, "r");
+    TEST_ASSERT_NOT_NULL(p);
+    int n = -1;
+    TEST_ASSERT_EQUAL_INT(1, fscanf(p, "%d", &n));
+    (void)pclose(p);
+    return n;
+}
+
+static void test_save_backup_keeps_every_distinct_unreadable_copy(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    char path[PATH_MAX + 64];
+    char bak[PATH_MAX + 64];
+    char bak1[PATH_MAX + 64];
+    join_path(path, sizeof path, dir, "save.txt");
+    join_path(bak, sizeof bak, dir, "save.txt.bak");
+    join_path(bak1, sizeof bak1, dir, "save.txt.bak.1");
+
+    write_text(path, "not a save file\n");
+    MetaState meta;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_CORRUPT, save_load(path, &meta));
+    char kept[PATH_MAX + 64];
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_CREATED, save_backup_unreadable(path, kept, sizeof kept));
+    TEST_ASSERT_EQUAL_STRING(bak, kept);
+    char got[256];
+    read_text(bak, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_ALREADY_KEPT, save_backup_unreadable(path, NULL, 0));
+    struct stat st;
+    TEST_ASSERT_NOT_EQUAL(0, stat(bak1, &st));
+
+    write_text(path, "second corrupt copy\n");
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_CREATED, save_backup_unreadable(path, kept, sizeof kept));
+    TEST_ASSERT_EQUAL_STRING(bak1, kept);
+    read_text(bak1, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("second corrupt copy\n", got);
+    read_text(bak, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+    TEST_ASSERT_EQUAL_INT(0, count_temp_backups(dir));
+
+    TEST_ASSERT_TRUE(save_write(path, &meta, NULL));
+    read_text(bak, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+
+    (void)remove(bak1);
+    (void)remove(bak);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_save_backup_failure_publishes_nothing(void)
 {
     char dir[PATH_MAX];
     TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
@@ -344,27 +407,14 @@ static void test_save_backup_keeps_first_unreadable_copy(void)
     char bak[PATH_MAX + 64];
     join_path(path, sizeof path, dir, "save.txt");
     join_path(bak, sizeof bak, dir, "save.txt.bak");
+    TEST_ASSERT_EQUAL_INT(0, mkdir(path, 0700));
 
-    write_text(path, "not a save file\n");
-    MetaState meta;
-    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_CORRUPT, save_load(path, &meta));
-    TEST_ASSERT_TRUE(save_backup_unreadable(path));
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_FAILED, save_backup_unreadable(path, NULL, 0));
+    struct stat st;
+    TEST_ASSERT_NOT_EQUAL(0, stat(bak, &st));
+    TEST_ASSERT_EQUAL_INT(0, count_temp_backups(dir));
 
-    char got[256];
-    size_t len = 0;
-    read_file_bytes(bak, got, sizeof got - 1, &len);
-    got[len] = '\0';
-    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
-
-    write_text(path, "second corrupt copy\n");
-    TEST_ASSERT_FALSE(save_backup_unreadable(path));
-    TEST_ASSERT_TRUE(save_write(path, &meta, NULL));
-    read_file_bytes(bak, got, sizeof got - 1, &len);
-    got[len] = '\0';
-    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
-
-    (void)remove(bak);
-    (void)remove(path);
+    (void)rmdir(path);
     (void)rmdir(dir);
 }
 
@@ -377,6 +427,7 @@ int main(void)
     RUN_TEST(test_save_fault_injection_preserves_existing);
     RUN_TEST(test_save_permission_denied);
     RUN_TEST(test_save_load_classifications);
-    RUN_TEST(test_save_backup_keeps_first_unreadable_copy);
+    RUN_TEST(test_save_backup_keeps_every_distinct_unreadable_copy);
+    RUN_TEST(test_save_backup_failure_publishes_nothing);
     return UNITY_END();
 }

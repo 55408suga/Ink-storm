@@ -377,7 +377,7 @@ void render_consume_events(RenderState *r, const GameState *g)
                 break;
             }
             push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 900.0f, 0.90f);
-            push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f + 210.0f, 300.0f, 62.0f,
+            push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f + 205.0f, 301.0f, 62.0f,
                       SEAL_HAKUBUN, SEAL_PRIO_MILESTONE, 1.0f);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 12, 260.0f, 8.0f, 0.55f, PAL_GOFUN, true);
             start_clear_banner(r, TEXT_CALLOUT_WAVE_CLEAR);
@@ -389,7 +389,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             push_stroke(r, 2, 0.0f, (float)INK_SCREEN_H * 0.5f, 1.0f, 0.0f, (float)INK_SCREEN_W,
                         1.50f);
             push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 1100.0f, 1.0f);
-            push_seal(r, TEXT_SEAL_SLAY, (float)INK_SCREEN_W * 0.5f + 230.0f, 300.0f, 86.0f,
+            push_seal(r, TEXT_SEAL_SLAY, (float)INK_SCREEN_W * 0.5f + 205.0f, 301.0f, 70.0f,
                       SEAL_HAKUBUN, SEAL_PRIO_MILESTONE, 1.0f);
             start_clear_banner(r, TEXT_CALLOUT_ACT_CLEAR);
             break;
@@ -597,8 +597,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
         r->reward_reroll_t = fmaxf(0.0f, r->reward_reroll_t - dt);
     }
 
-    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f &&
-        (g->phase == RUN_PHASE_PLAYING || g->phase == RUN_PHASE_WAVE_AFTERMATH)) {
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && vfx_enemy_intro_shown_in(g->phase)) {
         r->intro_t += dt;
         if (r->intro_t >= 2.0f) {
             r->intro_head = (r->intro_head + 1) % RENDER_MAX_INTRO_QUEUE;
@@ -687,6 +686,28 @@ Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui)
         sinf(r->vfx_time * 95.0f) * mag,
         cosf(r->vfx_time * 113.0f) * mag,
     };
+}
+
+/* ink_arc_stroke resamples into a fixed 256-point budget and closes any overflow with one long
+ * chord, so screen-sized arcs are drawn as pieces of at most ~900px that each fit the budget. */
+static void draw_long_arc(RenderState *r, Vector2 c, float radius, float a0, float a1,
+                          BrushProfile prof, InkTone tone)
+{
+    const float span = a1 - a0;
+    const float length = fabsf(span) * radius;
+    int pieces = (int)ceilf(length / 900.0f);
+    pieces = pieces < 1 ? 1 : (pieces > 12 ? 12 : pieces);
+    const float step = span / (float)pieces;
+    const float overlap = 0.02f;
+    for (int i = 0; i < pieces; ++i) {
+        BrushProfile p = prof;
+        p.entry = i == 0 ? prof.entry : 0.0f;
+        p.exit = i == pieces - 1 ? prof.exit : 0.0f;
+        p.seed = prof.seed + (uint32_t)i;
+        const float s0 = a0 + step * (float)i - (i > 0 ? overlap : 0.0f);
+        const float s1 = a0 + step * (float)(i + 1);
+        ink_arc_stroke(r, c, radius, s0, s1, p, tone);
+    }
 }
 
 static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, float a)
@@ -853,22 +874,22 @@ void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
             /* Purification shockwave: a pale enso sweeping out from the clear point */
             const float rad = s->radius * (0.08f + 0.92f * sqrtf(u));
             const float gap_a = (float)(s->seed % 360u) * 0.01745f;
-            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.9f,
-                           (BrushProfile){.w_max = 22.0f * (1.0f - 0.6f * u),
-                                          .w_min_ratio = 0.25f,
-                                          .entry = 0.12f,
-                                          .exit = 0.30f,
-                                          .dry = 0.55f,
-                                          .seed = s->seed},
-                           (InkTone){.color = PAL_GOFUN, .alpha = a * 0.85f});
-            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad * 0.94f, gap_a + 0.2f, gap_a + 5.6f,
-                           (BrushProfile){.w_max = 4.0f,
-                                          .w_min_ratio = 0.3f,
-                                          .entry = 0.12f,
-                                          .exit = 0.30f,
-                                          .dry = 0.2f,
-                                          .seed = s->seed + 9u},
-                           (InkTone){.color = PAL_KIN, .alpha = a * 0.75f});
+            draw_long_arc(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.9f,
+                          (BrushProfile){.w_max = 22.0f * (1.0f - 0.6f * u),
+                                         .w_min_ratio = 0.25f,
+                                         .entry = 0.12f,
+                                         .exit = 0.30f,
+                                         .dry = 0.55f,
+                                         .seed = s->seed},
+                          (InkTone){.color = PAL_GOFUN, .alpha = a * 0.85f});
+            draw_long_arc(r, (Vector2){s->x, s->y}, rad * 0.94f, gap_a + 0.2f, gap_a + 5.6f,
+                          (BrushProfile){.w_max = 4.0f,
+                                         .w_min_ratio = 0.3f,
+                                         .entry = 0.12f,
+                                         .exit = 0.30f,
+                                         .dry = 0.2f,
+                                         .seed = s->seed + 9u},
+                          (InkTone){.color = PAL_KIN, .alpha = a * 0.75f});
         } else if (s->kind == 11) {
             const float rad = s->radius * (0.5f + 0.9f * u);
             ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, 0.0f, k_vfx_two_pi * 0.92f,

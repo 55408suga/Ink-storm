@@ -3,8 +3,10 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 enum { SAVE_MAX_BYTES = 8192 };
 
@@ -181,47 +183,148 @@ bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
     return save_write_with_ops(path, meta, &io);
 }
 
-bool save_backup_unreadable(const char *path)
+static bool files_identical(const char *a, const char *b)
 {
-    if (path == NULL || path[0] == '\0') {
+    FILE *fa = fopen(a, "rb");
+    if (fa == NULL) {
         return false;
     }
-    char bak_path[PATH_MAX];
-    const int bak_len = snprintf(bak_path, sizeof bak_path, "%s.bak", path);
-    if (bak_len < 0 || (size_t)bak_len >= sizeof bak_path) {
+    FILE *fb = fopen(b, "rb");
+    if (fb == NULL) {
+        (void)fclose(fa);
         return false;
     }
-    struct stat st;
-    if (stat(bak_path, &st) == 0) {
-        return false;
+    char ba[4096];
+    char bb[4096];
+    bool same = true;
+    for (;;) {
+        const size_t na = fread(ba, 1, sizeof ba, fa);
+        const size_t nb = fread(bb, 1, sizeof bb, fb);
+        if (na != nb || memcmp(ba, bb, na) != 0) {
+            same = false;
+            break;
+        }
+        if (na < sizeof ba) {
+            same = ferror(fa) == 0 && ferror(fb) == 0;
+            break;
+        }
     }
+    const bool closed_a = fclose(fa) == 0;
+    const bool closed_b = fclose(fb) == 0;
+    return same && closed_a && closed_b;
+}
 
+static bool copy_into(FILE *src, FILE *dst)
+{
+    char buf[4096];
+    for (;;) {
+        const size_t n = fread(buf, 1, sizeof buf, src);
+        if (n > 0 && fwrite(buf, 1, n, dst) != n) {
+            return false;
+        }
+        if (n < sizeof buf) {
+            return ferror(src) == 0;
+        }
+    }
+}
+
+/* The copy goes to a private temp file first, so an interrupted or failed copy can never be
+ * mistaken for a finished backup under the final name. */
+static bool copy_to_temp(const char *path, char *tmp_path, size_t cap)
+{
+    const int n = snprintf(tmp_path, cap, "%s.tmpbak.XXXXXX", path);
+    if (n < 0 || (size_t)n >= cap) {
+        return false;
+    }
     FILE *src = fopen(path, "rb");
     if (src == NULL) {
         return false;
     }
-    FILE *dst = fopen(bak_path, "wbx");
-    if (dst == NULL) {
+    const int fd = mkstemp(tmp_path);
+    if (fd < 0) {
         (void)fclose(src);
         return false;
     }
-    char buf[4096];
-    bool ok = true;
-    for (;;) {
-        const size_t n = fread(buf, 1, sizeof buf, src);
-        if (n > 0 && fwrite(buf, 1, n, dst) != n) {
-            ok = false;
-            break;
-        }
-        if (n < sizeof buf) {
-            ok = ferror(src) == 0;
-            break;
-        }
+    FILE *dst = fdopen(fd, "wb");
+    if (dst == NULL) {
+        (void)close(fd);
+        (void)unlink(tmp_path);
+        (void)fclose(src);
+        return false;
     }
-    (void)fclose(src);
+    bool ok = copy_into(src, dst);
+    ok = (fclose(src) == 0) && ok;
+    ok = (fflush(dst) == 0) && ok;
     ok = (fclose(dst) == 0) && ok;
     if (!ok) {
-        (void)remove(bak_path);
+        (void)unlink(tmp_path);
     }
     return ok;
+}
+
+/* link() publishes the finished copy atomically and refuses to replace an existing file. */
+static int publish_without_replacing(const char *tmp_path, const char *final_path)
+{
+    if (link(tmp_path, final_path) == 0) {
+        return 0;
+    }
+    const int err = errno;
+    if (err == EEXIST) {
+        return EEXIST;
+    }
+    struct stat st;
+    if (stat(final_path, &st) == 0) {
+        return EEXIST;
+    }
+    return rename(tmp_path, final_path) == 0 ? 0 : errno;
+}
+
+SaveBackupResult save_backup_unreadable(const char *path, char *out_path, size_t out_cap)
+{
+    if (path == NULL || path[0] == '\0') {
+        return SAVE_BACKUP_FAILED;
+    }
+    char tmp_path[PATH_MAX];
+    bool have_copy = false;
+    SaveBackupResult result = SAVE_BACKUP_FAILED;
+    for (int slot = 0; slot < SAVE_BACKUP_SLOTS && result == SAVE_BACKUP_FAILED; ++slot) {
+        char candidate[PATH_MAX];
+        const int n = slot == 0 ? snprintf(candidate, sizeof candidate, "%s.bak", path)
+                                : snprintf(candidate, sizeof candidate, "%s.bak.%d", path, slot);
+        if (n < 0 || (size_t)n >= sizeof candidate) {
+            break;
+        }
+        struct stat st;
+        if (stat(candidate, &st) == 0) {
+            if (files_identical(path, candidate)) {
+                result = SAVE_BACKUP_ALREADY_KEPT;
+                if (out_path != NULL) {
+                    (void)copy_checked(out_path, out_cap, "%s", candidate);
+                }
+            }
+            continue;
+        }
+        if (errno != ENOENT) {
+            break;
+        }
+        if (!have_copy) {
+            have_copy = copy_to_temp(path, tmp_path, sizeof tmp_path);
+            if (!have_copy) {
+                break;
+            }
+        }
+        const int err = publish_without_replacing(tmp_path, candidate);
+        if (err == 0) {
+            result = SAVE_BACKUP_CREATED;
+            if (out_path != NULL) {
+                (void)copy_checked(out_path, out_cap, "%s", candidate);
+            }
+        } else if (err != EEXIST) {
+            break;
+        }
+    }
+    if (have_copy && access(tmp_path, F_OK) == 0 && unlink(tmp_path) != 0) {
+        fprintf(stderr, "INKSTORM: could not remove temporary backup '%s'\n", tmp_path);
+    }
+    return result;
 }

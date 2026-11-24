@@ -15,6 +15,7 @@ typedef struct {
 } TextLine;
 
 size_t text_utf8_next(const char *s, size_t i, size_t n);
+size_t text_utf8_clip(const char *s, size_t len, size_t max_bytes);
 size_t text_layout_fit_prefix(const char *text, size_t len, float max_w, TextMeasureFn measure,
                               void *ctx);
 int32_t text_layout_wrap(const char *text, float max_w, TextMeasureFn measure, void *ctx,

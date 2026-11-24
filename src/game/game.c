@@ -29,6 +29,25 @@ static bool brush_input_is_finite(const BrushInput *in)
            isfinite(in->pmy);
 }
 
+/* Finite but huge coordinates (e.g. +-FLT_MAX from the API) would overflow stroke lengths into
+ * Inf/NaN downstream; one screen of slack around the arena keeps every real pointer position. */
+static const BrushInput *bounded_brush_input(const BrushInput *in, BrushInput *out)
+{
+    if (!brush_input_is_finite(in)) {
+        return NULL;
+    }
+    const float lo_x = -(float)INK_SCREEN_W;
+    const float hi_x = 2.0f * (float)INK_SCREEN_W;
+    const float lo_y = -(float)INK_SCREEN_H;
+    const float hi_y = 2.0f * (float)INK_SCREEN_H;
+    *out = *in;
+    out->mx = ink_clampf(in->mx, lo_x, hi_x);
+    out->my = ink_clampf(in->my, lo_y, hi_y);
+    out->pmx = ink_clampf(in->pmx, lo_x, hi_x);
+    out->pmy = ink_clampf(in->pmy, lo_y, hi_y);
+    return out;
+}
+
 static void step_dissolving_entities(GameState *g)
 {
     const uint32_t hw = g->ecs.high_water;
@@ -292,13 +311,24 @@ void game_sandbox_set_brush(GameState *g, BrushStyleId brush)
     roguelike_recompute_modifiers(g);
 }
 
+void game_sandbox_apply_config(GameState *g, const RunConfig *cfg)
+{
+    if (g == NULL || cfg == NULL) {
+        return;
+    }
+    g->config = *cfg;
+    g->internal.ember_tip_dist = 0.0f;
+    roguelike_recompute_modifiers(g);
+}
+
 void game_step_sandbox(GameState *g, const BrushInput *in)
 {
     if (g == NULL) {
         return;
     }
     g->event_count = 0;
-    const BrushInput *valid_in = brush_input_is_finite(in) ? in : NULL;
+    BrushInput bounded;
+    const BrushInput *valid_in = bounded_brush_input(in, &bounded);
     step_pending_impulses(g);
     player_skills_step(g, valid_in);
     fluid_step(&g->fluid, INK_FIXED_DT);
@@ -317,7 +347,8 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
 
     /* Step 1: Event clear, input validation, command handling, stopping-phase branch. */
     g->event_count = 0;
-    const BrushInput *valid_in = brush_input_is_finite(in) ? in : NULL;
+    BrushInput bounded;
+    const BrushInput *valid_in = bounded_brush_input(in, &bounded);
     handle_command(g, cmd);
 
     if (g->phase == RUN_PHASE_REWARD || g->phase == RUN_PHASE_VICTORY ||

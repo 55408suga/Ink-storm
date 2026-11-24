@@ -106,14 +106,13 @@ static int pick_voice_slot(const AudioState *audio, AudioVoiceKind kind)
     return victim_tier <= tier ? victim : -1;
 }
 
-void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample, float freq,
-                       float param)
+static AudioVoice *allocate_voice(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample,
+                                  float freq, float param)
 {
     const int slot = pick_voice_slot(audio, kind);
     if (slot < 0) {
-        return;
+        return NULL;
     }
-
     AudioVoice *v = &audio->voices[slot];
     memset(v, 0, sizeof *v);
     v->kind = kind;
@@ -123,6 +122,45 @@ void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sa
     v->env = 1.0f;
     v->freq = freq;
     v->param = param;
+    return v;
+}
+
+/* Voices for later ticks wait here and take a slot only when their start sample is reached, so
+ * per-kind caps and stealing see the same bank whether ticks are rendered one by one or in a
+ * batch. */
+void audio_voice_spawn(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample, float freq,
+                       float param)
+{
+    if (start_sample <= audio->samples_rendered) {
+        (void)allocate_voice(audio, kind, start_sample, freq, param);
+        return;
+    }
+    if (audio->pending_count >= AUDIO_PENDING_VOICE_CAP) {
+        return;
+    }
+    const int32_t tail = (audio->pending_head + audio->pending_count) % AUDIO_PENDING_VOICE_CAP;
+    audio->pending[tail] = (AudioPendingVoice){
+        .kind = kind, .start_sample = start_sample, .freq = freq, .param = param};
+    audio->pending_count++;
+}
+
+void audio_voice_spawn_ui(AudioState *audio, AudioVoiceKind kind, float freq, float param)
+{
+    AudioVoice *v = allocate_voice(audio, kind, audio->samples_rendered, freq, param);
+    if (v != NULL) {
+        v->ui = true;
+    }
+}
+
+static void start_due_voices(AudioState *audio, uint64_t sample_idx)
+{
+    while (audio->pending_count > 0 &&
+           audio->pending[audio->pending_head].start_sample <= sample_idx) {
+        const AudioPendingVoice p = audio->pending[audio->pending_head];
+        audio->pending_head = (audio->pending_head + 1) % AUDIO_PENDING_VOICE_CAP;
+        audio->pending_count--;
+        (void)allocate_voice(audio, p.kind, sample_idx, p.freq, p.param);
+    }
 }
 
 static float step_single_voice(AudioVoice *v, float nz)
@@ -236,11 +274,14 @@ static float step_single_voice(AudioVoice *v, float nz)
         break;
     }
     case AUDIO_VOICE_CYCLONE_SWIRL: {
-        /* param carries the BrushStyleId of the caster. */
-        const int style = (int)lroundf(v->param);
+        /* param carries the caster's BrushStyleId plus AUDIO_SKILL_PARAM_* flags. */
+        const int bits = (int)lroundf(v->param);
+        const int style = bits & 3;
+        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
+        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
         const bool heavy = style == BRUSH_STYLE_HEAVY;
         const bool quill = style == BRUSH_STYLE_QUILL;
-        const float lp_k = heavy ? 0.07f : (quill ? 0.18f : 0.10f);
+        const float lp_k = dry ? 0.30f : (heavy ? 0.07f : (quill ? 0.18f : 0.10f));
         v->lp += lp_k * (nz - v->lp);
         v->bp += 0.045f * (v->lp - v->bp);
         const float f = heavy   ? 105.0f + 190.0f * (1.0f - v->env)
@@ -254,15 +295,21 @@ static float step_single_voice(AudioVoice *v, float nz)
             v->phase2 += (f * 3.01f) / sr;
             body += sinf(v->phase2 * k_two_pi) * 0.14f * v->env;
         }
-        out = body * v->env * (heavy ? 0.60f : 0.52f);
+        if (surge) {
+            body += sinf(v->phase * k_two_pi * 2.0f) * 0.18f * v->env;
+        }
+        out = body * v->env * (dry ? 0.36f : (heavy ? 0.60f : 0.52f));
         v->env *= 0.99968f;
         break;
     }
     case AUDIO_VOICE_GALE_SLASH: {
-        const int style = (int)lroundf(v->param);
+        const int bits = (int)lroundf(v->param);
+        const int style = bits & 3;
+        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
+        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
         const bool heavy = style == BRUSH_STYLE_HEAVY;
         const bool quill = style == BRUSH_STYLE_QUILL;
-        v->lp += (heavy ? 0.10f : (quill ? 0.26f : 0.16f)) * (nz - v->lp);
+        v->lp += (dry ? 0.40f : (heavy ? 0.10f : (quill ? 0.26f : 0.16f))) * (nz - v->lp);
         const float f = heavy   ? 120.0f + 320.0f * v->env
                         : quill ? 260.0f + 640.0f * v->env
                                 : 175.0f + 460.0f * v->env;
@@ -273,7 +320,10 @@ static float step_single_voice(AudioVoice *v, float nz)
         } else if (style == BRUSH_STYLE_EMBER && nz > 0.82f) {
             body += nz * 0.40f * v->env;
         }
-        out = body * v->env * 0.50f;
+        if (surge) {
+            body += sinf(v->phase * k_two_pi * 2.0f) * 0.16f * v->env;
+        }
+        out = body * v->env * (dry ? 0.34f : 0.50f);
         v->env *= quill ? 0.99915f : 0.99935f;
         break;
     }
@@ -503,6 +553,7 @@ static float brush_scrape_sample(AudioState *audio, float nz)
 
 float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
 {
+    start_due_voices(audio, sample_idx);
     float mix = 0.0f;
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
         AudioVoice *v = &audio->voices[i];

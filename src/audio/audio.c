@@ -47,26 +47,22 @@ void audio_init(AudioState *audio, uint64_t seed)
     audio->bgm_duck = 1.0f;
 }
 
-static bool is_ui_voice(AudioVoiceKind kind)
-{
-    return kind == AUDIO_VOICE_REWARD_PICK || kind == AUDIO_VOICE_UI_CLICK ||
-           kind == AUDIO_VOICE_SKILL_DENIED;
-}
-
 /* Scene changes drop queued combat state and fade (rather than cut) voices still ringing, so a
  * run's last gong or scrape never bleeds into the Lobby or into the next run. */
 static void reset_session_audio(AudioState *audio)
 {
     audio->state_q_head = 0;
     audio->state_q_count = 0;
+    audio->pending_head = 0;
+    audio->pending_count = 0;
     audio->next_tick_sample = audio->samples_rendered;
     audio->brush_target = 0.0f;
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
         AudioVoice *v = &audio->voices[i];
-        if (!v->active || is_ui_voice(v->kind)) {
+        if (!v->active || v->ui) {
             continue;
         }
-        if (v->start_sample > audio->samples_rendered) {
+        if (v->age == 0u) {
             v->active = false;
         } else {
             v->releasing = true;
@@ -124,7 +120,7 @@ void audio_trigger_ui_stamp(AudioState *audio)
     if (audio == NULL) {
         return;
     }
-    audio_voice_spawn(audio, AUDIO_VOICE_REWARD_PICK, audio->samples_rendered, 110.0f, 0.0f);
+    audio_voice_spawn_ui(audio, AUDIO_VOICE_REWARD_PICK, 110.0f, 0.0f);
 }
 
 void audio_trigger_ui_cue(AudioState *audio, AudioUiCue cue)
@@ -134,17 +130,17 @@ void audio_trigger_ui_cue(AudioState *audio, AudioUiCue cue)
     }
     switch (cue) {
     case AUDIO_UI_DENY:
-        audio_voice_spawn(audio, AUDIO_VOICE_SKILL_DENIED, audio->samples_rendered, 430.0f, 0.0f);
+        audio_voice_spawn_ui(audio, AUDIO_VOICE_SKILL_DENIED, 430.0f, 0.0f);
         break;
     case AUDIO_UI_BACK:
-        audio_voice_spawn(audio, AUDIO_VOICE_UI_CLICK, audio->samples_rendered, 587.33f, 0.0f);
+        audio_voice_spawn_ui(audio, AUDIO_VOICE_UI_CLICK, 587.33f, 0.0f);
         break;
     case AUDIO_UI_PREVIEW:
-        audio_voice_spawn(audio, AUDIO_VOICE_UI_CLICK, audio->samples_rendered, 987.77f, 1.0f);
+        audio_voice_spawn_ui(audio, AUDIO_VOICE_UI_CLICK, 987.77f, 1.0f);
         break;
     case AUDIO_UI_CLICK:
     default:
-        audio_voice_spawn(audio, AUDIO_VOICE_UI_CLICK, audio->samples_rendered, 783.99f, 0.0f);
+        audio_voice_spawn_ui(audio, AUDIO_VOICE_UI_CLICK, 783.99f, 0.0f);
         break;
     }
 }
@@ -182,11 +178,12 @@ static uint64_t schedule_tick(AudioState *audio)
                 audio->state_q[idx].at_sample -= delta > excess ? excess : delta;
             }
         }
-        for (int32_t i = 0; i < AUDIO_MAX_VOICES; ++i) {
-            if (audio->voices[i].active &&
-                audio->voices[i].start_sample > audio->samples_rendered) {
-                const uint64_t delta = audio->voices[i].start_sample - audio->samples_rendered;
-                audio->voices[i].start_sample -= delta > excess ? excess : delta;
+        for (int32_t i = 0; i < audio->pending_count; ++i) {
+            AudioPendingVoice *p =
+                &audio->pending[(audio->pending_head + i) % AUDIO_PENDING_VOICE_CAP];
+            if (p->start_sample > audio->samples_rendered) {
+                const uint64_t delta = p->start_sample - audio->samples_rendered;
+                p->start_sample -= delta > excess ? excess : delta;
             }
         }
         at_sample = limit;
@@ -205,7 +202,10 @@ static float brush_target_for(const AudioState *audio, const GameState *game)
 static void spawn_event_voices(AudioState *audio, const GameState *game, uint64_t at_sample)
 {
     const int32_t count = game->event_count > GAME_MAX_EVENTS ? GAME_MAX_EVENTS : game->event_count;
-    const float brush_param = (float)game->config.brush_style;
+    const int skill_bits = ((int)game->config.brush_style & 3) |
+                           (game->player.dry ? AUDIO_SKILL_PARAM_DRY : 0) |
+                           (game->player.surge_t > 0.0f ? AUDIO_SKILL_PARAM_SURGE : 0);
+    const float brush_param = (float)skill_bits;
     bool auto_orb_played = false;
     bool purify_played = false;
 

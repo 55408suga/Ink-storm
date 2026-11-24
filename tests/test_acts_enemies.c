@@ -870,6 +870,23 @@ static void test_boss_nue_and_boss_ryu(void)
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f * 0.85f, ren->fire_cd);
 
+    /* The earlier on-screen orb volleys are real fire/storm sources that may legitimately react,
+     * and breaking a third orb in one chain adds chain lightning storm onto its death splash (a
+     * genuine Cataclysm). Clear both so only what the awakening itself injects is under test. */
+    g->run.chain = 0;
+    g->run.chain_t = 0.0f;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId pid = ecs_entity_at(&g->ecs, i);
+        if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+            ecs_destroy(&g->ecs, pid);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    memset(fluid_channel_mut(&g->fluid, 1), 0, sizeof(float) * FLUID_N);
+    memset(fluid_channel_mut(&g->fluid, 2), 0, sizeof(float) * FLUID_N);
+    const int32_t cataclysms_before = g->run.cataclysms;
+    const int32_t thunderbursts_before = g->run.thunderbursts;
+
     /* Destroy Orb 2 (Wind) late in countdown -> Phase 2 Awakening (EV_BOSS_PHASE value=2, head
      * targetable, wind 6s, head fire_cd clamped >= 0.90s so post-invuln attack keeps full warning).
      */
@@ -897,19 +914,8 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_TRUE(saw_ryu_p2);
 
     /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst; mountain wind clamps to
-     * 6s period (wind_timer <= 1.5s). The on-screen orb volleys above are real fire/storm sources
-     * that may legitimately react, so clear them and compare counters across the swirl only. */
-    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
-        const EntityId pid = ecs_entity_at(&g->ecs, i);
-        if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
-            ecs_destroy(&g->ecs, pid);
-        }
-    }
-    ecs_flush_destroy(&g->ecs);
-    memset(fluid_channel_mut(&g->fluid, 1), 0, sizeof(float) * FLUID_N);
-    memset(fluid_channel_mut(&g->fluid, 2), 0, sizeof(float) * FLUID_N);
-    const int32_t cataclysms_before = g->run.cataclysms;
-    const int32_t thunderbursts_before = g->run.thunderbursts;
+     * 6s period (wind_timer <= 1.5s). Counters were sampled before the last orb broke, so any fire
+     * or storm the awakening itself injects is still on the field here. */
     g->internal.wind_timer = 7.0f;
     g->internal.wind_telegraph_t = 0.0f;
     g->internal.wind_active_t = 0.0f;

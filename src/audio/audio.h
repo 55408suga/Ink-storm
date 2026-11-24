@@ -9,6 +9,9 @@
 #define AUDIO_SAMPLES_PER_TICK 735
 #define AUDIO_MAX_VOICES 24
 #define AUDIO_STATE_QUEUE_CAP 32
+#define AUDIO_PENDING_VOICE_CAP 256
+#define AUDIO_SKILL_PARAM_DRY 4
+#define AUDIO_SKILL_PARAM_SURGE 8
 
 typedef enum { BGM_NONE = 0, BGM_LOBBY, BGM_BATTLE, BGM_BOSS, BGM_VICTORY } BgmTrack;
 
@@ -57,7 +60,15 @@ typedef struct {
     float bp;
     uint32_t age;
     bool releasing;
+    bool ui;
 } AudioVoice;
+
+typedef struct {
+    AudioVoiceKind kind;
+    uint64_t start_sample;
+    float freq;
+    float param;
+} AudioPendingVoice;
 
 typedef struct {
     uint64_t at_sample;
@@ -117,6 +128,9 @@ typedef struct {
     int32_t bgm_victory_step;
 
     AudioVoice voices[AUDIO_MAX_VOICES];
+    AudioPendingVoice pending[AUDIO_PENDING_VOICE_CAP];
+    int32_t pending_head;
+    int32_t pending_count;
     AudioTickState state_q[AUDIO_STATE_QUEUE_CAP];
     int32_t state_q_head;
     int32_t state_q_count;

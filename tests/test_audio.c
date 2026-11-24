@@ -513,6 +513,114 @@ static void test_audio_ui_cues_are_audible(void)
     free(a);
 }
 
+static void one_event(GameState *g, GameEventType type)
+{
+    g->phase = RUN_PHASE_PLAYING;
+    g->event_count = 1;
+    memset(&g->events[0], 0, sizeof g->events[0]);
+    g->events[0].type = type;
+}
+
+static void test_audio_batched_same_kind_voices_match_per_tick(void)
+{
+    enum { TOTAL = AUDIO_SAMPLES_PER_TICK * 3 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *b = calloc(1, sizeof *b);
+    int16_t *out_a = calloc(TOTAL, sizeof *out_a);
+    int16_t *out_b = calloc(TOTAL, sizeof *out_b);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(out_a);
+    TEST_ASSERT_NOT_NULL(out_b);
+
+    audio_init(a, UINT64_C(4));
+    for (int t = 0; t < 3; ++t) {
+        one_event(g, EV_SKILL_DENIED);
+        audio_consume_events(a, g);
+        audio_render(a, out_a + (size_t)t * AUDIO_SAMPLES_PER_TICK, AUDIO_SAMPLES_PER_TICK);
+    }
+
+    audio_init(b, UINT64_C(4));
+    for (int t = 0; t < 3; ++t) {
+        one_event(g, EV_SKILL_DENIED);
+        audio_consume_events(b, g);
+    }
+    audio_render(b, out_b, TOTAL);
+    TEST_ASSERT_EQUAL_MEMORY(out_a, out_b, TOTAL * sizeof *out_a);
+
+    free(out_b);
+    free(out_a);
+    free(b);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_scene_change_drops_unplayed_combat_voice_but_keeps_ui(void)
+{
+    enum { N = AUDIO_SAMPLE_RATE / 4 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(N, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+
+    audio_init(a, UINT64_C(5));
+    audio_set_volumes(a, 100, 0, 100);
+    one_event(g, EV_SKILL_DENIED);
+    audio_consume_events(a, g);
+    audio_set_lobby_mode(a, true);
+    audio_render(a, buf, N);
+    TEST_ASSERT_EQUAL_INT32(0, peak_abs(buf, N));
+
+    audio_init(a, UINT64_C(5));
+    audio_set_volumes(a, 100, 0, 100);
+    audio_trigger_ui_cue(a, AUDIO_UI_DENY);
+    audio_set_lobby_mode(a, true);
+    audio_render(a, buf, N);
+    TEST_ASSERT_TRUE(peak_abs(buf, N) >= 1000);
+
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void render_skill(AudioState *a, GameState *g, GameEventType type, bool dry, float surge,
+                         int16_t *buf, size_t n)
+{
+    audio_init(a, UINT64_C(6));
+    audio_set_volumes(a, 100, 0, 100);
+    g->player.dry = dry;
+    g->player.surge_t = surge;
+    one_event(g, type);
+    audio_consume_events(a, g);
+    audio_render(a, buf, n);
+}
+
+static void test_audio_skill_voices_reflect_dry_and_surge(void)
+{
+    enum { N = AUDIO_SAMPLES_PER_TICK * 8 };
+    static const GameEventType k_skills[2] = {EV_CYCLONE, EV_GALE};
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *bufs = calloc((size_t)N * 3, sizeof *bufs);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(bufs);
+    for (int k = 0; k < 2; ++k) {
+        render_skill(a, g, k_skills[k], false, 0.0f, bufs, N);
+        render_skill(a, g, k_skills[k], true, 0.0f, bufs + N, N);
+        render_skill(a, g, k_skills[k], false, 2.0f, bufs + 2 * N, N);
+        TEST_ASSERT_TRUE(memcmp(bufs, bufs + N, N * sizeof *bufs) != 0);
+        TEST_ASSERT_TRUE(memcmp(bufs, bufs + 2 * N, N * sizeof *bufs) != 0);
+    }
+    free(bufs);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -529,5 +637,8 @@ int main(void)
     RUN_TEST(test_audio_brush_scrape_differs_per_brush_and_state);
     RUN_TEST(test_audio_pause_ducks_procedural_bgm);
     RUN_TEST(test_audio_ui_cues_are_audible);
+    RUN_TEST(test_audio_batched_same_kind_voices_match_per_tick);
+    RUN_TEST(test_audio_scene_change_drops_unplayed_combat_voice_but_keeps_ui);
+    RUN_TEST(test_audio_skill_voices_reflect_dry_and_surge);
     return UNITY_END();
 }

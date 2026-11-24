@@ -36,10 +36,18 @@ static void test_seal_ranking_prefers_priority_then_newest(void)
     TEST_ASSERT_EQUAL_INT32(-1, out[1]);
 }
 
+static void test_enemy_intro_only_runs_while_it_can_be_seen(void)
+{
+    for (int p = RUN_PHASE_PLAYING; p <= RUN_PHASE_GAME_OVER; ++p) {
+        TEST_ASSERT_EQUAL(p == RUN_PHASE_PLAYING, vfx_enemy_intro_shown_in((RunPhase)p));
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_only_milestones_bypass_the_major_effect_budget);
     RUN_TEST(test_seal_ranking_prefers_priority_then_newest);
+    RUN_TEST(test_enemy_intro_only_runs_while_it_can_be_seen);
     return UNITY_END();
 }

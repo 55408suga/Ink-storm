@@ -1,14 +1,17 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "vfx_rules.h"
 
 #include "core.h"
 
 #include <math.h>
 #include <stdio.h>
 
-static void draw_clear_banner(RenderState *r)
+/* Drawn before the VFX seals so the 祓/討 stamp lands on top of the band, in its right-hand slot;
+ * the title keeps to the left part of the band. */
+void render_draw_clear_banner(RenderState *r)
 {
-    if (r->clear_banner_t <= 0.0f || r->clear_banner_text == TEXT_NONE) {
+    if (r == NULL || r->clear_banner_t <= 0.0f || r->clear_banner_text == TEXT_NONE) {
         return;
     }
     const float u = 1.0f - r->clear_banner_t;
@@ -19,9 +22,10 @@ static void draw_clear_banner(RenderState *r)
     const Rectangle band = {cx - bw * 0.5f, 262.0f, bw, 78.0f};
     ink_fill_panel(r, band, PAL_GOFUN, 0.90f * a, PAL_KIN, 0.85f * a, 640u);
     if (a > 0.25f) {
+        const float text_w = fmaxf(40.0f, band.width - 120.0f);
         render_draw_text_fit(r, text_get(r->clear_banner_text, r->use_ja),
-                             (Vector2){cx - 24.0f, band.y + band.height * 0.5f},
-                             band.width - 110.0f, 44.0f, 30.0f, PAL_SUMI_SCORCH, a, true);
+                             (Vector2){band.x + 20.0f + text_w * 0.5f, band.y + band.height * 0.5f},
+                             text_w, 44.0f, 30.0f, PAL_SUMI_SCORCH, a, true);
     }
 }
 
@@ -86,7 +90,7 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
 
     /* Enemy intro strip at top (2.0s per queued enemy; waits for boss banner to avoid overlap).
      * Hidden during the purification so it never covers the clear banner. */
-    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && g->phase == RUN_PHASE_PLAYING) {
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && vfx_enemy_intro_shown_in(g->phase)) {
         const EnemyDefId eid = r->intro_queue[r->intro_head];
         const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
                                           : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);
@@ -99,8 +103,6 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
                              (Vector2){cx, box.y + 46.0f}, box.width - 32.0f, 18.0f, 13.0f,
                              PAL_SUMI_HEAVY, a, false);
     }
-
-    draw_clear_banner(r);
 
     /* Game-over falling ink curtains (1.5s) */
     if (r->gameover_drip_active && g->phase == RUN_PHASE_SHRINE_BREAK) {

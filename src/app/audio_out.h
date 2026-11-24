@@ -2,6 +2,7 @@
 #define INK_APP_AUDIO_OUT_H
 
 #include "audio.h"
+#include "bgm_fade.h"
 #include "raylib.h"
 
 #include <stdbool.h>
@@ -18,10 +19,7 @@ typedef struct {
 
     Music bgm[AUDIO_BGM_TRACK_SLOTS];
     bool bgm_loaded[AUDIO_BGM_TRACK_SLOTS];
-    BgmTrack current_ext_track;
-    BgmTrack prev_ext_track;
-    float ext_xfade;
-    float fade_out;
+    BgmFade fade;
 } AudioOut;
 
 void audio_out_init(AudioOut *out);

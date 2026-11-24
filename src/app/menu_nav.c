@@ -17,6 +17,16 @@ bool menu_pointer_track(UiPointer *p, float x, float y)
     return moved;
 }
 
+/* A menu or dialog that opens under a resting mouse must keep its default focus (e.g. "No" in a
+ * confirmation); hover only takes over once the pointer actually moves inside the new context. */
+void menu_pointer_enter_context(UiPointer *p, int32_t context)
+{
+    if (p != NULL && p->context != context) {
+        p->context = context;
+        p->hover_suppressed = true;
+    }
+}
+
 /* A resting mouse keeps re-reporting the same hit every frame; once the keyboard takes over, that
  * stale hover must not snap the cursor back until the mouse actually moves again. */
 int32_t menu_pointer_visible_hover(UiPointer *p, int32_t hit, bool moved, bool nav_key)
