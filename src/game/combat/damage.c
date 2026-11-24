@@ -420,7 +420,7 @@ void combat_damage_shrine(GameState *g, float source_x, float source_y, int32_t 
         return;
     }
     ShrineState *sh = &g->shrines[0];
-    if (sh->invuln_t > 0.0f || sh->hp <= 0) {
+    if (sh->invuln_t > 0.0f || sh->hp <= 0 || game_wave_goal_met(g)) {
         return;
     }
     sh->hp -= dmg;
@@ -448,16 +448,18 @@ void combat_damage_shrine(GameState *g, float source_x, float source_y, int32_t 
                              });
 }
 
-static float slam_damage_for_enemy(const GameState *g, EnemyDefId def_id, MassTier eff_tier,
+/* Oni Tile lightens Heavy foes to Medium for knockback only; the one-shot rule keys off the raw
+ * tier so a Heavy foe is never promoted all the way to a guaranteed kill. */
+static float slam_damage_for_enemy(const GameState *g, EnemyDefId def_id, MassTier raw_tier,
                                    int32_t max_hp)
 {
     if (def_id == ENEMY_BOSS_NUE) {
         return 60.0f;
     }
-    if (eff_tier == MASS_LIGHT || (g->internal.mods.oni_tile && eff_tier == MASS_MEDIUM)) {
+    if (raw_tier == MASS_LIGHT || (g->internal.mods.oni_tile && raw_tier == MASS_MEDIUM)) {
         return (float)(max_hp > 0 ? max_hp * 4 : 1000);
     }
-    switch (eff_tier) {
+    switch (raw_tier) {
     case MASS_MEDIUM:
         return 60.0f;
     case MASS_HEAVY:
@@ -492,11 +494,13 @@ void combat_physics_and_slams_step(GameState *g)
         }
         const bool is_nue = (en->def_id == ENEMY_BOSS_NUE);
         const bool nue_slam_active = (is_nue && en->ai_state == 1 && st->knockback_t > 0.0f);
+        const bool nue_bouncing = (is_nue && en->ai_state == 1 && st->stun_t > 0.0f);
+        const bool nue_moving = nue_slam_active || nue_bouncing;
         if (vel->mass_tier == MASS_TURRET ||
-            ((vel->mass_tier == MASS_BOSS || is_nue) && !nue_slam_active)) {
+            ((vel->mass_tier == MASS_BOSS || is_nue) && !nue_moving)) {
             continue;
         }
-        const MassTier eff_tier = game_effective_mass_tier(g, vel->mass_tier);
+        const MassTier raw_tier = vel->mass_tier;
 
         const float prev_x = tr->x;
         const float prev_y = tr->y;
@@ -532,8 +536,8 @@ void combat_physics_and_slams_step(GameState *g)
             }
 
             if (st->knockback_t > 0.0f && esp > 215.0f) {
-                const float slam_dmg = slam_damage_for_enemy(g, en->def_id, eff_tier, hp->max_hp);
-                if (eff_tier == MASS_HEAVY || nue_slam_active) {
+                const float slam_dmg = slam_damage_for_enemy(g, en->def_id, raw_tier, hp->max_hp);
+                if (raw_tier == MASS_HEAVY || nue_slam_active) {
                     if (st->stun_t < 1.0f) {
                         st->stun_t = 1.0f;
                     }
@@ -589,7 +593,7 @@ void combat_physics_and_slams_step(GameState *g)
             }
         }
 
-        if (nue_slam_active) {
+        if (nue_moving) {
             continue;
         }
 
@@ -615,10 +619,10 @@ void combat_physics_and_slams_step(GameState *g)
                     float dir_y = 0.0f;
                     normalize_vec2(dx, dy, &dir_x, &dir_y);
                     const float slam_dmg =
-                        slam_damage_for_enemy(g, en->def_id, eff_tier, hp->max_hp);
+                        slam_damage_for_enemy(g, en->def_id, raw_tier, hp->max_hp);
                     const float svx = vel->vx;
                     const float svy = vel->vy;
-                    if (eff_tier == MASS_HEAVY && st->stun_t < 1.0f) {
+                    if (raw_tier == MASS_HEAVY && st->stun_t < 1.0f) {
                         st->stun_t = 1.0f;
                     }
                     st->knockback_t = 0.0f;
@@ -757,6 +761,13 @@ void combat_begin_wave_aftermath(GameState *g)
     if (g == NULL) {
         return;
     }
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    const bool boss_clear = g->internal.wave_clear_is_boss;
+    const float ox = boss_clear ? g->internal.last_boss_x : sx;
+    const float oy = boss_clear ? g->internal.last_boss_y : sy;
+    fluid_add_radial_impulse(&g->fluid, ox, oy, 30.0f, 42.0f);
+
     const uint32_t hw = g->ecs.high_water;
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
@@ -768,6 +779,18 @@ void combat_begin_wave_aftermath(GameState *g)
             continue;
         }
         if (ecs_has_mask(&g->ecs, id, COMP_ENEMY) || ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+            const EnemyComp *en = game_enemy(g, id);
+            if (en != NULL && !tr->dissolving) {
+                (void)game_push_event(g, (GameEvent){
+                                             .type = EV_PURIFY,
+                                             .x = tr->x,
+                                             .y = tr->y,
+                                             .x2 = ox,
+                                             .y2 = oy,
+                                             .value = (int32_t)en->def_id,
+                                             .flags = 0,
+                                         });
+            }
             tr->dissolving = true;
             tr->dissolve_t = 0.0f;
         } else if (ecs_has_mask(&g->ecs, id, COMP_INK_ORB)) {

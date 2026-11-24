@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "frame_clock.h"
 #include "input_latch.h"
+#include "menu_nav.h"
 #include "unity.h"
 
 #include <limits.h>
@@ -432,6 +433,104 @@ static void test_latch_endless_crystal_command(void)
     TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
 }
 
+static void test_menu_resting_mouse_yields_to_keyboard_until_moved(void)
+{
+    UiPointer p = {0};
+    TEST_ASSERT_TRUE(menu_pointer_track(&p, 100.0f, 100.0f));
+    TEST_ASSERT_EQUAL_INT32(2, menu_pointer_visible_hover(&p, 2, true, false));
+
+    TEST_ASSERT_FALSE(menu_pointer_track(&p, 100.0f, 100.0f));
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 2, false, true));
+    TEST_ASSERT_FALSE(menu_pointer_track(&p, 100.2f, 100.0f));
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 2, false, false));
+
+    TEST_ASSERT_TRUE(menu_pointer_track(&p, 140.0f, 100.0f));
+    TEST_ASSERT_EQUAL_INT32(1, menu_pointer_visible_hover(&p, 1, true, false));
+}
+
+static void test_menu_bokuan_grid_navigation(void)
+{
+    const int32_t upg = META_UPG_COUNT;
+    const int32_t back = META_UPG_COUNT + META_RELIC_UNLOCK_COUNT;
+    typedef struct {
+        int32_t from;
+        MenuNavKey key;
+        int32_t to;
+    } NavCase;
+    const NavCase cases[] = {
+        {0, MENU_NAV_RIGHT, upg + 0},
+        {1, MENU_NAV_RIGHT, upg + 2},
+        {3, MENU_NAV_RIGHT, upg + 4},
+        {upg + 0, MENU_NAV_RIGHT, upg + 1},
+        {upg + 1, MENU_NAV_RIGHT, upg + 1},
+        {upg + 1, MENU_NAV_LEFT, upg + 0},
+        {upg + 3, MENU_NAV_LEFT, upg + 2},
+        {upg + 2, MENU_NAV_LEFT, 1},
+        {upg + 4, MENU_NAV_LEFT, 2},
+        {upg + 1, MENU_NAV_DOWN, upg + 3},
+        {upg + 5, MENU_NAV_DOWN, back},
+        {upg + 0, MENU_NAV_UP, back},
+        {0, MENU_NAV_UP, back},
+        {upg - 1, MENU_NAV_DOWN, back},
+        {back, MENU_NAV_DOWN, 0},
+        {back, MENU_NAV_UP, upg - 1},
+        {0, MENU_NAV_LEFT, 0},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        TEST_ASSERT_EQUAL_INT32(cases[i].to, menu_nav_bokuan(cases[i].from, cases[i].key));
+    }
+}
+
+static void test_menu_result_cursor_walks_visible_buttons(void)
+{
+    TEST_ASSERT_EQUAL_INT32(MENU_RESULT_RETRY,
+                            menu_nav_result(MENU_RESULT_LOBBY, false, MENU_NAV_RIGHT));
+    TEST_ASSERT_EQUAL_INT32(MENU_RESULT_LOBBY,
+                            menu_nav_result(MENU_RESULT_RETRY, false, MENU_NAV_RIGHT));
+    TEST_ASSERT_EQUAL_INT32(MENU_RESULT_ENDLESS,
+                            menu_nav_result(MENU_RESULT_LOBBY, true, MENU_NAV_LEFT));
+    TEST_ASSERT_EQUAL_INT32(MENU_RESULT_RETRY,
+                            menu_nav_result(MENU_RESULT_ENDLESS, true, MENU_NAV_LEFT));
+    TEST_ASSERT_EQUAL_INT32(MENU_RESULT_LOBBY,
+                            menu_nav_result(MENU_RESULT_ENDLESS, false, MENU_NAV_RIGHT));
+}
+
+static void test_menu_lobby_stroke_starts_only_on_open_canvas(void)
+{
+    bool active = false;
+    TEST_ASSERT_FALSE(menu_lobby_stroke_gate(&active, true, true, true));
+    TEST_ASSERT_FALSE(menu_lobby_stroke_gate(&active, false, true, false));
+    TEST_ASSERT_FALSE(menu_lobby_stroke_gate(&active, false, false, false));
+
+    TEST_ASSERT_TRUE(menu_lobby_stroke_gate(&active, true, true, false));
+    TEST_ASSERT_TRUE(menu_lobby_stroke_gate(&active, false, true, true));
+    TEST_ASSERT_FALSE(menu_lobby_stroke_gate(&active, false, false, true));
+}
+
+static void test_menu_transition_frame_skips_gameplay(void)
+{
+    TEST_ASSERT_FALSE(menu_action_ends_frame(MENU_ACT_NONE));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_PAUSE_RESUME));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_BRUSH_PICK));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_RESULT_RETRY));
+}
+
+static void test_latch_resume_reanchors_and_drops_queued_input(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 10.0f, 10.0f);
+    RawInput raw = {.mouse_x = 600.0f, .mouse_y = 400.0f, .left_down = true, .pick_pressed = 1};
+    raw.cyclone_pressed = true;
+    input_latch_feed(&l, &raw);
+
+    input_latch_reset_for_ui_transition(&l, 600.0f, 400.0f, false);
+    const BrushInput in = input_latch_take_tick(&l);
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, in.pmx);
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, in.mx);
+    TEST_ASSERT_FALSE(in.cyclone);
+    TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -447,5 +546,11 @@ int main(void)
     RUN_TEST(test_latch_confirm_once);
     RUN_TEST(test_latch_ui_transition_suppresses_paint_until_release);
     RUN_TEST(test_latch_endless_crystal_command);
+    RUN_TEST(test_menu_resting_mouse_yields_to_keyboard_until_moved);
+    RUN_TEST(test_menu_bokuan_grid_navigation);
+    RUN_TEST(test_menu_result_cursor_walks_visible_buttons);
+    RUN_TEST(test_menu_lobby_stroke_starts_only_on_open_canvas);
+    RUN_TEST(test_menu_transition_frame_skips_gameplay);
+    RUN_TEST(test_latch_resume_reanchors_and_drops_queued_input);
     return UNITY_END();
 }

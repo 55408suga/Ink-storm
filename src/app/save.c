@@ -180,3 +180,48 @@ bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
     };
     return save_write_with_ops(path, meta, &io);
 }
+
+bool save_backup_unreadable(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+    char bak_path[PATH_MAX];
+    const int bak_len = snprintf(bak_path, sizeof bak_path, "%s.bak", path);
+    if (bak_len < 0 || (size_t)bak_len >= sizeof bak_path) {
+        return false;
+    }
+    struct stat st;
+    if (stat(bak_path, &st) == 0) {
+        return false;
+    }
+
+    FILE *src = fopen(path, "rb");
+    if (src == NULL) {
+        return false;
+    }
+    FILE *dst = fopen(bak_path, "wbx");
+    if (dst == NULL) {
+        (void)fclose(src);
+        return false;
+    }
+    char buf[4096];
+    bool ok = true;
+    for (;;) {
+        const size_t n = fread(buf, 1, sizeof buf, src);
+        if (n > 0 && fwrite(buf, 1, n, dst) != n) {
+            ok = false;
+            break;
+        }
+        if (n < sizeof buf) {
+            ok = ferror(src) == 0;
+            break;
+        }
+    }
+    (void)fclose(src);
+    ok = (fclose(dst) == 0) && ok;
+    if (!ok) {
+        (void)remove(bak_path);
+    }
+    return ok;
+}

@@ -103,23 +103,19 @@ static void handle_command(GameState *g, const GameCommand *cmd)
     }
 }
 
+/* Chain and Surge timers stay frozen here: the purification window is not player time. */
 static void step_aftermath(GameState *g)
 {
     g->player.painting = false;
     g->player.stroke_speed = 0.0f;
 
-    if (g->run.chain_t > 0.0f) {
-        g->run.chain_t -= INK_FIXED_DT;
-        if (g->run.chain_t <= 1e-4f) {
-            g->run.chain_t = 0.0f;
-            g->run.chain = 0;
+    if (g->hitstop_t > 0.0f) {
+        g->hitstop_t -= INK_FIXED_DT;
+        if (g->hitstop_t <= 1e-4f) {
+            g->hitstop_t = 0.0f;
         }
-    }
-    if (g->player.surge_t > 0.0f) {
-        g->player.surge_t -= INK_FIXED_DT;
-        if (g->player.surge_t <= 1e-4f) {
-            g->player.surge_t = 0.0f;
-        }
+        ++g->ticks;
+        return;
     }
 
     fluid_step(&g->fluid, INK_FIXED_DT);
@@ -236,6 +232,45 @@ void game_init(GameState *g, const RunConfig *cfg)
     g->player.gale_max_charges = g->internal.mods.gale_max_charges;
     g->player.gale_charges = g->player.gale_max_charges;
     g->player.ink = g->player.ink_max;
+}
+
+void game_init_sandbox(GameState *g, const RunConfig *cfg)
+{
+    if (g == NULL) {
+        return;
+    }
+    game_init(g, cfg);
+    g->phase = RUN_PHASE_PLAYING;
+    g->phase_t = 0.0f;
+    g->internal.act_prepared = true;
+}
+
+void game_sandbox_set_brush(GameState *g, BrushStyleId brush)
+{
+    if (g == NULL || (unsigned)brush >= (unsigned)BRUSH_STYLE_COUNT ||
+        g->config.brush_style == brush) {
+        return;
+    }
+    g->config.brush_style = brush;
+    g->internal.ember_tip_dist = 0.0f;
+    roguelike_recompute_modifiers(g);
+}
+
+void game_step_sandbox(GameState *g, const BrushInput *in)
+{
+    if (g == NULL) {
+        return;
+    }
+    g->event_count = 0;
+    const BrushInput *valid_in = brush_input_is_finite(in) ? in : NULL;
+    step_pending_impulses(g);
+    player_skills_step(g, valid_in);
+    fluid_step(&g->fluid, INK_FIXED_DT);
+    elements_step(g);
+    fluid_sanitize_channels(&g->fluid);
+    ecs_flush_destroy(&g->ecs);
+    g->phase_t += INK_FIXED_DT;
+    ++g->ticks;
 }
 
 void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)

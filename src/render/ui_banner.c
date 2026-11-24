@@ -6,6 +6,25 @@
 #include <math.h>
 #include <stdio.h>
 
+static void draw_clear_banner(RenderState *r)
+{
+    if (r->clear_banner_t <= 0.0f || r->clear_banner_text == TEXT_NONE) {
+        return;
+    }
+    const float u = 1.0f - r->clear_banner_t;
+    const float open = u < 0.18f ? u / 0.18f : (u > 0.78f ? (1.0f - u) / 0.22f : 1.0f);
+    const float a = ink_clampf(open, 0.0f, 1.0f);
+    const float cx = (float)INK_SCREEN_W * 0.5f;
+    const float bw = 520.0f * ink_clampf(0.35f + 0.65f * open, 0.0f, 1.0f);
+    const Rectangle band = {cx - bw * 0.5f, 262.0f, bw, 78.0f};
+    ink_fill_panel(r, band, PAL_GOFUN, 0.90f * a, PAL_KIN, 0.85f * a, 640u);
+    if (a > 0.25f) {
+        render_draw_text_fit(r, text_get(r->clear_banner_text, r->use_ja),
+                             (Vector2){cx - 24.0f, band.y + band.height * 0.5f},
+                             band.width - 110.0f, 44.0f, 30.0f, PAL_SUMI_SCORCH, a, true);
+    }
+}
+
 void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
 {
     if (r == NULL || g == NULL) {
@@ -60,24 +79,28 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const Rectangle band = {cx - 320.0f, 88.0f, 640.0f, 82.0f};
         ink_fill_panel(r, band, PAL_GOFUN, 0.90f * a, PAL_BENGARA, 0.88f * a, 610u);
         const TextId ep = text_boss_epithet(r->boss_banner_id);
-        render_draw_text_centered(
-            r, text_get(ep != TEXT_NONE ? ep : TEXT_BOSS_TENGU_EPITHET, r->use_ja),
-            (Vector2){cx, 129.0f}, 42.0f, PAL_SUMI_SCORCH, a, true);
+        render_draw_text_fit(r, text_get(ep != TEXT_NONE ? ep : TEXT_BOSS_TENGU_EPITHET, r->use_ja),
+                             (Vector2){cx, 129.0f}, band.width - 40.0f, 42.0f, 28.0f,
+                             PAL_SUMI_SCORCH, a, true);
     }
 
-    /* Enemy intro strip at top (2.0s per queued enemy; waits for boss banner to avoid overlap) */
-    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f &&
-        (g->phase == RUN_PHASE_PLAYING || g->phase == RUN_PHASE_WAVE_AFTERMATH)) {
+    /* Enemy intro strip at top (2.0s per queued enemy; waits for boss banner to avoid overlap).
+     * Hidden during the purification so it never covers the clear banner. */
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && g->phase == RUN_PHASE_PLAYING) {
         const EnemyDefId eid = r->intro_queue[r->intro_head];
         const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
                                           : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);
         const Rectangle box = {cx - 300.0f, 68.0f, 600.0f, 66.0f};
         ink_fill_panel(r, box, PAL_GOFUN, 0.92f * a, PAL_SUMI_DARK, 0.85f * a, 620u);
-        render_draw_text_centered(r, text_get(text_enemy_name(eid), r->use_ja),
-                                  (Vector2){cx, box.y + 22.0f}, 22.0f, PAL_SUMI_SCORCH, a, false);
-        render_draw_text_centered(r, text_get(text_enemy_intro(eid), r->use_ja),
-                                  (Vector2){cx, box.y + 46.0f}, 18.0f, PAL_SUMI_HEAVY, a, false);
+        render_draw_text_fit(r, text_get(text_enemy_name(eid), r->use_ja),
+                             (Vector2){cx, box.y + 22.0f}, box.width - 32.0f, 22.0f, 16.0f,
+                             PAL_SUMI_SCORCH, a, false);
+        render_draw_text_fit(r, text_get(text_enemy_intro(eid), r->use_ja),
+                             (Vector2){cx, box.y + 46.0f}, box.width - 32.0f, 18.0f, 13.0f,
+                             PAL_SUMI_HEAVY, a, false);
     }
+
+    draw_clear_banner(r);
 
     /* Game-over falling ink curtains (1.5s) */
     if (r->gameover_drip_active && g->phase == RUN_PHASE_SHRINE_BREAK) {
@@ -106,7 +129,7 @@ void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui
         return;
     }
     if (g->phase == RUN_PHASE_REWARD || g->phase == RUN_PHASE_VICTORY ||
-        g->phase == RUN_PHASE_GAME_OVER) {
+        g->phase == RUN_PHASE_GAME_OVER || g->phase == RUN_PHASE_WAVE_AFTERMATH) {
         return;
     }
     const TextId tid = text_hint_message(ui->active_hint);
@@ -126,11 +149,11 @@ void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui
     const float a = t > 1.75f ? ((2.0f - t) / 0.25f) : (t < 0.30f ? (t / 0.30f) : 1.0f);
     const char *msg = text_get(tid, r->use_ja);
     const Vector2 m = render_measure_text(r, msg, 18.0f, false);
-    const float bw = fmaxf(360.0f, m.x + 56.0f);
+    const float bw = ink_clampf(m.x + 56.0f, 360.0f, (float)INK_SCREEN_W - 80.0f);
     const Rectangle strip = {cx - bw * 0.5f, y, bw, 40.0f};
     ink_fill_panel(r, strip, PAL_GOFUN, 0.92f * a, PAL_KIN, 0.85f * a, 635u);
-    render_draw_text_centered(r, msg, (Vector2){cx, strip.y + strip.height * 0.5f}, 18.0f,
-                              PAL_SUMI_SCORCH, a, false);
+    render_draw_text_fit(r, msg, (Vector2){cx, strip.y + strip.height * 0.5f}, bw - 32.0f, 18.0f,
+                         13.0f, PAL_SUMI_SCORCH, a, false);
 }
 
 void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiView *ui)

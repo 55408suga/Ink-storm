@@ -1,8 +1,10 @@
 #include "render_internal.h"
 
 #include "core.h"
+#include "text_layout.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +74,7 @@ static int collect_codepoints(int *out, int cap)
         }
     }
 
+    (void)add_unique_codepoint(out, &count, cap, 0x2026);
     if (count > 1) {
         qsort(out, (size_t)count, sizeof out[0], cmp_int);
     }
@@ -90,7 +93,6 @@ void render_fonts_init(RenderState *r, const RenderOptions *opt)
     r->owns_title_font = false;
     r->title_is_brush = false;
     r->use_ja = false;
-    memset(r->text_size_valid, 0, sizeof r->text_size_valid);
 
     const bool force_fault = opt != NULL && (opt->fault_mask & RENDER_FAULT_FONT) != 0;
     char resolved_body[PATH_MAX];
@@ -207,11 +209,7 @@ void render_set_lang_mode(RenderState *r, UiLangMode mode)
     if (r == NULL) {
         return;
     }
-    const bool want_ja = (mode == UI_LANG_EN) ? false : r->custom_fonts;
-    if (r->use_ja != want_ja) {
-        r->use_ja = want_ja;
-        memset(r->text_size_valid, 0, sizeof r->text_size_valid);
-    }
+    r->use_ja = (mode == UI_LANG_EN) ? false : r->custom_fonts;
 }
 
 static Font pick_font(const RenderState *r, bool title_font)
@@ -229,24 +227,103 @@ Vector2 render_measure_text(const RenderState *r, const char *text, float size, 
     return MeasureTextEx(pick_font(r, title_font), text, size, spacing_for_size(size));
 }
 
-Vector2 render_measure_text_id(RenderState *r, TextId id, float size, bool title_font)
+typedef struct {
+    const RenderState *r;
+    float size;
+    bool title_font;
+} SpanMeasure;
+
+enum { SPAN_BUF = 512 };
+
+static size_t copy_span(char *buf, const char *text, size_t len)
 {
-    if (r == NULL || (unsigned)id >= (unsigned)TEXT_COUNT) {
-        return (Vector2){0.0f, size};
+    const size_t n = len < SPAN_BUF - 1 ? len : SPAN_BUF - 1;
+    memcpy(buf, text, n);
+    buf[n] = '\0';
+    return n;
+}
+
+static float measure_span(void *ctx, const char *text, size_t len)
+{
+    const SpanMeasure *m = ctx;
+    char buf[SPAN_BUF];
+    (void)copy_span(buf, text, len);
+    return render_measure_text(m->r, buf, m->size, m->title_font).x;
+}
+
+static const char *ellipsis_for(const RenderState *r) { return r->use_ja ? "\xE2\x80\xA6" : "..."; }
+
+static void ellipsize_into(const RenderState *r, char *out, const char *text, size_t len,
+                           float max_w, float size, bool title_font)
+{
+    SpanMeasure m = {.r = r, .size = size, .title_font = title_font};
+    const char *ell = ellipsis_for(r);
+    const float ell_w = render_measure_text(r, ell, size, title_font).x;
+    const size_t keep =
+        text_layout_fit_prefix(text, len, fmaxf(0.0f, max_w - ell_w), measure_span, &m);
+    snprintf(out, SPAN_BUF, "%.*s%s", (int)keep, text, ell);
+}
+
+void render_draw_text_fit(const RenderState *r, const char *text, Vector2 center, float max_w,
+                          float size, float min_size, PaletteId color, float alpha, bool title_font)
+{
+    if (r == NULL || text == NULL || text[0] == '\0') {
+        return;
     }
-    const int slot = title_font ? 1 : 0;
-    const float base_px = title_font ? (float)FONT_TITLE_PX : (float)FONT_BODY_PX;
-    if (!r->text_size_valid[id][slot]) {
-        const char *txt = text_get(id, r->use_ja);
-        r->text_size_cache[id][slot] =
-            MeasureTextEx(pick_font(r, title_font), txt, base_px, spacing_for_size(base_px));
-        r->text_size_valid[id][slot] = true;
+    float s = size;
+    while (s > min_size && render_measure_text(r, text, s, title_font).x > max_w) {
+        s -= 1.0f;
     }
-    const float ratio = size / base_px;
-    return (Vector2){
-        r->text_size_cache[id][slot].x * ratio,
-        r->text_size_cache[id][slot].y * ratio,
-    };
+    if (render_measure_text(r, text, s, title_font).x <= max_w) {
+        render_draw_text_centered(r, text, center, s, color, alpha, title_font);
+        return;
+    }
+    char buf[SPAN_BUF];
+    ellipsize_into(r, buf, text, strlen(text), max_w, s, title_font);
+    render_draw_text_centered(r, buf, center, s, color, alpha, title_font);
+}
+
+float render_draw_text_wrapped(const RenderState *r, const char *text, Rectangle box, float size,
+                               float min_size, PaletteId color, float alpha, bool title_font,
+                               bool center)
+{
+    if (r == NULL || text == NULL || text[0] == '\0' || box.width <= 1.0f) {
+        return 0.0f;
+    }
+    TextLine lines[TEXT_LAYOUT_MAX_LINES];
+    SpanMeasure m = {.r = r, .size = size, .title_font = title_font};
+    int32_t n = 0;
+    bool truncated = false;
+    float line_h = size * 1.2f;
+    for (;;) {
+        m.size = size;
+        int32_t max_lines = (int32_t)(box.height / line_h);
+        max_lines = max_lines < 1
+                        ? 1
+                        : (max_lines > TEXT_LAYOUT_MAX_LINES ? TEXT_LAYOUT_MAX_LINES : max_lines);
+        n = text_layout_wrap(text, box.width, measure_span, &m, lines, max_lines, &truncated);
+        if (!truncated || size <= min_size) {
+            break;
+        }
+        size -= 1.0f;
+        line_h = size * 1.2f;
+    }
+    const float total_h = (float)n * line_h;
+    float y = box.y + fmaxf(0.0f, (box.height - total_h) * 0.5f);
+    for (int32_t i = 0; i < n; ++i) {
+        char buf[SPAN_BUF];
+        if (truncated && i == n - 1) {
+            ellipsize_into(r, buf, text + lines[i].start, lines[i].len, box.width, size,
+                           title_font);
+        } else {
+            (void)copy_span(buf, text + lines[i].start, lines[i].len);
+        }
+        const float w = render_measure_text(r, buf, size, title_font).x;
+        const float x = center ? box.x + (box.width - w) * 0.5f : box.x;
+        render_draw_text(r, buf, (Vector2){x, y}, size, color, alpha, title_font);
+        y += line_h;
+    }
+    return total_h;
 }
 
 void render_draw_text(const RenderState *r, const char *text, Vector2 pos, float size,
@@ -279,6 +356,29 @@ void render_draw_text_centered(const RenderState *r, const char *text, Vector2 c
                      alpha, title_font);
 }
 
+static float fixed_digit_cell(Font font, float size)
+{
+    return MeasureTextEx(font, "0", size, 0.0f).x + 1.0f;
+}
+
+float render_measure_number_fixed(const RenderState *r, const char *digits, float size)
+{
+    if (r == NULL || digits == NULL) {
+        return 0.0f;
+    }
+    const float cell_w = fixed_digit_cell(r->font_body, size);
+    float w = 0.0f;
+    for (const char *p = digits; *p != '\0'; ++p) {
+        if (*p >= '0' && *p <= '9') {
+            w += cell_w;
+        } else {
+            const char ch[2] = {*p, '\0'};
+            w += MeasureTextEx(r->font_body, ch, size, 0.0f).x + 1.0f;
+        }
+    }
+    return w;
+}
+
 void render_draw_number_fixed(const RenderState *r, const char *digits, Vector2 pos, float size,
                               PaletteId color, float alpha)
 {
@@ -286,7 +386,7 @@ void render_draw_number_fixed(const RenderState *r, const char *digits, Vector2 
         return;
     }
     const Font font = r->font_body;
-    const float cell_w = MeasureTextEx(font, "0", size, 0.0f).x + 1.0f;
+    const float cell_w = fixed_digit_cell(font, size);
     const Color c = pal_color_alpha(color, alpha);
     float x = pos.x;
     for (const char *p = digits; *p != '\0'; ++p) {

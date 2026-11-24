@@ -103,12 +103,14 @@ void render_draw_bokuan_ui(RenderState *r, const GameState *g, const UiView *ui)
         ink_fill_panel(r, rect, PAL_GOFUN, maxed ? 0.88f : 0.96f, border, 0.92f,
                        1020u + (uint32_t)i);
 
-        render_draw_text_id(r, text_shop_upgrade_name(kind),
-                            (Vector2){rect.x + 18.0f, rect.y + 14.0f}, 22.0f, PAL_SUMI_SCORCH,
-                            0.98f, false);
-        render_draw_text_id(r, text_shop_upgrade_desc(kind),
-                            (Vector2){rect.x + 18.0f, rect.y + 52.0f}, 18.0f, PAL_SUMI_HEAVY, 0.92f,
-                            false);
+        render_draw_text_wrapped(
+            r, text_get(text_shop_upgrade_name(kind), r->use_ja),
+            (Rectangle){rect.x + 18.0f, rect.y + 8.0f, rect.width - 170.0f, 30.0f}, 22.0f, 16.0f,
+            PAL_SUMI_SCORCH, 0.98f, false, false);
+        render_draw_text_wrapped(
+            r, text_get(text_shop_upgrade_desc(kind), r->use_ja),
+            (Rectangle){rect.x + 18.0f, rect.y + 42.0f, rect.width - 170.0f, 44.0f}, 18.0f, 13.0f,
+            PAL_SUMI_HEAVY, 0.92f, false, false);
 
         char lv_buf[32];
         snprintf(lv_buf, sizeof lv_buf, "%s %u/%u", text_get(TEXT_REWARD_LV, r->use_ja),
@@ -140,10 +142,14 @@ void render_draw_bokuan_ui(RenderState *r, const GameState *g, const UiView *ui)
         const PaletteId border = sel ? PAL_SHU : (unlocked ? PAL_KIN : PAL_SUMI_DARK);
         ink_fill_panel(r, rect, PAL_GOFUN, unlocked ? 0.88f : 0.96f, border, 0.92f, 1040u + s);
 
-        render_draw_text_id(r, text_shop_relic_name(s), (Vector2){rect.x + 14.0f, rect.y + 14.0f},
-                            20.0f, PAL_SUMI_SCORCH, 0.98f, false);
-        render_draw_text_id(r, text_shop_relic_desc(s), (Vector2){rect.x + 14.0f, rect.y + 48.0f},
-                            18.0f, PAL_SUMI_HEAVY, 0.90f, false);
+        render_draw_text_wrapped(
+            r, text_get(text_shop_relic_name(s), r->use_ja),
+            (Rectangle){rect.x + 14.0f, rect.y + 8.0f, rect.width - 28.0f, 28.0f}, 20.0f, 14.0f,
+            PAL_SUMI_SCORCH, 0.98f, false, false);
+        render_draw_text_wrapped(
+            r, text_get(text_shop_relic_desc(s), r->use_ja),
+            (Rectangle){rect.x + 14.0f, rect.y + 40.0f, rect.width - 28.0f, 46.0f}, 18.0f, 13.0f,
+            PAL_SUMI_HEAVY, 0.90f, false, false);
 
         if (unlocked) {
             render_draw_text_id(r, TEXT_BOKUAN_UNLOCKED, (Vector2){rect.x + 14.0f, rect.y + 92.0f},

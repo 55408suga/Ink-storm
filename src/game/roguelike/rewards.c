@@ -26,20 +26,58 @@ static void copy_pool(UpgradeId dst[UPG_COUNT], const UpgradeId src[UPG_COUNT], 
     }
 }
 
-void rewards_generate_offer(GameState *g)
+static bool id_in_list(const int32_t *ids, int32_t n, int32_t id)
 {
-    if (g == NULL) {
-        return;
-    }
-    RewardOffer *offer = &g->run.reward;
-    UpgradeId base[UPG_COUNT];
-    int32_t base_count = 0;
-    for (int32_t i = 0; i < (int32_t)UPG_COUNT; ++i) {
-        const UpgradeId id = (UpgradeId)i;
-        if (game_upgrade_level(g, id) < game_upgrade_max_level(id)) {
-            base[base_count++] = id;
+    for (int32_t i = 0; i < n; ++i) {
+        if (ids[i] == id) {
+            return true;
         }
     }
+    return false;
+}
+
+static bool upgrade_offerable(const GameState *g, UpgradeId id)
+{
+    return game_upgrade_level(g, id) < game_upgrade_max_level(id);
+}
+
+static bool relic_offerable(const GameState *g, RelicId id)
+{
+    return game_is_relic_unlocked(g, id) && !game_has_relic(g, id);
+}
+
+/* Builds the candidate pool, leaving out `exclude` unless that would shrink the pool below a
+ * full offer; excluded ids are then restored in order so a reroll still fills every slot. */
+static int32_t build_upgrade_pool(const GameState *g, const int32_t *exclude, int32_t n_exclude,
+                                  UpgradeId out[UPG_COUNT])
+{
+    int32_t count = 0;
+    int32_t eligible = 0;
+    for (int32_t i = 0; i < (int32_t)UPG_COUNT; ++i) {
+        const UpgradeId id = (UpgradeId)i;
+        if (!upgrade_offerable(g, id)) {
+            continue;
+        }
+        ++eligible;
+        if (!id_in_list(exclude, n_exclude, i)) {
+            out[count++] = id;
+        }
+    }
+    const int32_t want = eligible < GAME_MAX_REWARD_CHOICES ? eligible : GAME_MAX_REWARD_CHOICES;
+    for (int32_t k = 0; k < n_exclude && count < want; ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)UPG_COUNT && upgrade_offerable(g, (UpgradeId)id)) {
+            out[count++] = (UpgradeId)id;
+        }
+    }
+    return count;
+}
+
+static void generate_upgrade_offer(GameState *g, const int32_t *exclude, int32_t n_exclude)
+{
+    RewardOffer *offer = &g->run.reward;
+    UpgradeId base[UPG_COUNT];
+    const int32_t base_count = build_upgrade_pool(g, exclude, n_exclude, base);
 
     memset(offer->choice_ids, 0, sizeof offer->choice_ids);
     memset(offer->choice_next_level, 0, sizeof offer->choice_next_level);
@@ -156,6 +194,14 @@ void rewards_generate_offer(GameState *g)
     g->internal.first_reward_offered = true;
 }
 
+void rewards_generate_offer(GameState *g)
+{
+    if (g == NULL) {
+        return;
+    }
+    generate_upgrade_offer(g, NULL, 0);
+}
+
 static void clear_reward_and_advance_act(GameState *g)
 {
     g->run.reward.kind = REWARD_KIND_NONE;
@@ -172,18 +218,27 @@ static void clear_reward_and_advance_act(GameState *g)
     g->phase_t = 0.0f;
 }
 
-void rewards_generate_relic_offer(GameState *g)
+static void generate_relic_offer(GameState *g, const int32_t *exclude, int32_t n_exclude)
 {
-    if (g == NULL) {
-        return;
-    }
     RewardOffer *offer = &g->run.reward;
     RelicId pool[RELIC_COUNT];
     int32_t pool_count = 0;
+    int32_t eligible = 0;
     for (int32_t i = 0; i < (int32_t)RELIC_COUNT; ++i) {
         const RelicId id = (RelicId)i;
-        if (game_is_relic_unlocked(g, id) && !game_has_relic(g, id)) {
+        if (!relic_offerable(g, id)) {
+            continue;
+        }
+        ++eligible;
+        if (!id_in_list(exclude, n_exclude, i)) {
             pool[pool_count++] = id;
+        }
+    }
+    const int32_t want = eligible < GAME_MAX_REWARD_CHOICES ? eligible : GAME_MAX_REWARD_CHOICES;
+    for (int32_t k = 0; k < n_exclude && pool_count < want; ++k) {
+        const int32_t id = exclude[k];
+        if (id >= 0 && id < (int32_t)RELIC_COUNT && relic_offerable(g, (RelicId)id)) {
+            pool[pool_count++] = (RelicId)id;
         }
     }
 
@@ -216,6 +271,29 @@ void rewards_generate_relic_offer(GameState *g)
         --pool_count;
     }
     ++offer->serial;
+}
+
+void rewards_generate_relic_offer(GameState *g)
+{
+    if (g == NULL) {
+        return;
+    }
+    generate_relic_offer(g, NULL, 0);
+}
+
+static int32_t count_offerable(const GameState *g, RewardKind kind)
+{
+    int32_t n = 0;
+    if (kind == REWARD_KIND_RELIC) {
+        for (int32_t i = 0; i < (int32_t)RELIC_COUNT; ++i) {
+            n += relic_offerable(g, (RelicId)i) ? 1 : 0;
+        }
+    } else {
+        for (int32_t i = 0; i < (int32_t)UPG_COUNT; ++i) {
+            n += upgrade_offerable(g, (UpgradeId)i) ? 1 : 0;
+        }
+    }
+    return n;
 }
 
 bool rewards_pick_reward(GameState *g, int32_t choice_index)
@@ -265,11 +343,22 @@ bool rewards_reroll(GameState *g)
         return false;
     }
     const RewardKind kind = g->run.reward.kind;
+    int32_t shown = g->run.reward.choice_count;
+    if (shown < 0) {
+        shown = 0;
+    } else if (shown > GAME_MAX_REWARD_CHOICES) {
+        shown = GAME_MAX_REWARD_CHOICES;
+    }
+    if (count_offerable(g, kind) <= shown) {
+        return false;
+    }
+    int32_t previous[GAME_MAX_REWARD_CHOICES];
+    memcpy(previous, g->run.reward.choice_ids, sizeof previous);
     --g->run.rerolls_left;
     if (kind == REWARD_KIND_RELIC) {
-        rewards_generate_relic_offer(g);
+        generate_relic_offer(g, previous, shown);
     } else {
-        rewards_generate_offer(g);
+        generate_upgrade_offer(g, previous, shown);
     }
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_REWARD_REROLL,

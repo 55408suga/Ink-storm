@@ -14,6 +14,13 @@ static int32_t ryu_popcount3(uint8_t mask)
     return (int32_t)((mask & 1u) + ((mask >> 1) & 1u) + ((mask >> 2) & 1u));
 }
 
+static bool ryu_orb_on_screen(const GameState *g, EntityId oid)
+{
+    const TransformComp *tr = game_transform(g, oid);
+    return tr != NULL && tr->x >= 0.0f && tr->x <= (float)INK_SCREEN_W && tr->y >= 0.0f &&
+           tr->y <= (float)INK_SCREEN_H;
+}
+
 static int32_t ryu_next_alive_orb(const GameState *g, int32_t start_slot)
 {
     const int32_t base = (start_slot >= 0 && start_slot < GAME_RYU_ORB_COUNT) ? start_slot : 0;
@@ -201,16 +208,21 @@ void boss_ryu_spawn(GameState *g, EntityId id)
     boss->telegraph_pattern = 0;
     boss->telegraph = 0.0f;
 
-    /* Initialize 80-point trail extending leftward at 12px spacing from the spawn head position. */
+    /* The spawn body used to trail off-screen to the left; it now runs rightward along the upper
+     * arena so all three Dragon Orbs (up to 900px of arc behind the head) start on screen. */
     memset(&g->ryu_body, 0, sizeof g->ryu_body);
     g->ryu_body.head_id = id;
     g->ryu_body.orb_broken_mask = 0u;
     g->ryu_body.active_orb_slot = 0;
     const int32_t init_pts = 80;
+    const float span_x = ink_clampf(1170.0f - tr->x, 0.0f, 1060.0f);
+    const float step_x = fminf(12.0f, span_x / (float)(init_pts - 1));
+    const float body_y = ink_clampf(tr->y, 96.0f, 220.0f);
     for (int32_t i = 0; i < init_pts; ++i) {
-        const float back = (float)(init_pts - 1 - i) * 12.0f;
-        g->ryu_body.trail[i] = (GameVec2){tr->x - back, tr->y};
+        const float back = (float)(init_pts - 1 - i);
+        g->ryu_body.trail[i] = (GameVec2){tr->x + back * step_x, body_y};
     }
+    g->ryu_body.trail[init_pts - 1] = (GameVec2){tr->x, tr->y};
     g->ryu_body.trail_head = init_pts - 1;
     g->ryu_body.trail_count = init_pts;
 
@@ -410,6 +422,18 @@ void boss_ryu_step(GameState *g, EntityId id)
             g->ryu_body.active_orb_slot = slot;
         }
         if (slot < 0) {
+            return;
+        }
+        if (!ryu_orb_on_screen(g, g->ryu_body.orb_ids[slot])) {
+            /* Hold the volley until the orb is visible; an off-screen attacker is unanswerable. */
+            const EntityId held = g->ryu_body.orb_ids[slot];
+            BossComp *held_boss = game_boss_mut(g, held);
+            if (held_boss != NULL) {
+                held_boss->telegraph = 0.0f;
+            }
+            if (en->fire_cd < 0.75f) {
+                en->fire_cd = 0.75f;
+            }
             return;
         }
 

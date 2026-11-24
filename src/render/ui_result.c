@@ -34,8 +34,15 @@ static void draw_ledger_row(const RenderState *r, float x, float y, float w, Tex
                             const char *val_str, PaletteId val_pal)
 {
     render_draw_text_id(r, label, (Vector2){x, y}, 20.0f, PAL_SUMI_HEAVY, 0.95f, false);
-    const Vector2 m = render_measure_text(r, val_str, 20.0f, false);
-    render_draw_number_fixed(r, val_str, (Vector2){x + w - m.x, y}, 20.0f, val_pal, 0.96f);
+    const float vw = render_measure_number_fixed(r, val_str, 20.0f);
+    render_draw_number_fixed(r, val_str, (Vector2){x + w - vw, y}, 20.0f, val_pal, 0.96f);
+}
+
+static void draw_list_item(const RenderState *r, const char *text, float x, float y, float w,
+                           PaletteId pal)
+{
+    render_draw_text_wrapped(r, text, (Rectangle){x, y, w, 20.0f}, 18.0f, 12.0f, pal, 0.95f, false,
+                             false);
 }
 
 static void draw_ledger_text_row(const RenderState *r, float x, float y, float w, TextId label,
@@ -44,6 +51,22 @@ static void draw_ledger_text_row(const RenderState *r, float x, float y, float w
     render_draw_text_id(r, label, (Vector2){x, y}, 20.0f, PAL_SUMI_HEAVY, 0.95f, false);
     const Vector2 m = render_measure_text(r, val_str, 20.0f, false);
     render_draw_text(r, val_str, (Vector2){x + w - m.x, y}, 20.0f, val_pal, 0.96f, false);
+}
+
+static void draw_result_button(RenderState *r, Rectangle rect, TextId label, bool focused,
+                               PaletteId text_pal, uint32_t seed)
+{
+    ink_fill_panel(r, rect, focused ? PAL_PAPER_ACT1 : PAL_GOFUN, 0.98f,
+                   focused ? PAL_SHU : PAL_SUMI_DARK, 0.94f, seed);
+    if (focused) {
+        ink_teardrop(r, (Vector2){rect.x + 22.0f, rect.y + rect.height * 0.5f},
+                     (Vector2){1.0f, 0.0f}, 9.0f, 6.0f, pal_color_alpha(PAL_SHU, 0.92f));
+    }
+    render_draw_text_fit(r, text_get(label, r->use_ja),
+                         (Vector2){rect.x + rect.width * 0.5f + (focused ? 8.0f : 0.0f),
+                                   rect.y + rect.height * 0.5f},
+                         rect.width - 52.0f, 20.0f, 14.0f, focused ? PAL_SHU : text_pal, 0.97f,
+                         false);
 }
 
 void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
@@ -60,9 +83,14 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
                              {0.0f, (float)INK_SCREEN_H}};
     ink_fill_poly(r, full, 4, pal_color_alpha(pal_paper_for_act(g->run.act_index), 0.78f));
 
-    const float scroll_w = 1040.0f * open;
-    const float scroll_x = ((float)INK_SCREEN_W - 1040.0f) * 0.5f + (1040.0f - scroll_w);
+    /* The scroll unrolls from the center and every column is anchored to the fully open sheet,
+     * clipped to the visible paper, so text never slides across the divider mid-unfurl. */
+    const float scroll_full_w = 1040.0f;
+    const float scroll_w = scroll_full_w * open;
+    const float scroll_x = ((float)INK_SCREEN_W - scroll_w) * 0.5f;
     const Rectangle scroll = {scroll_x, 60.0f, scroll_w, 600.0f};
+    const Rectangle sheet = {((float)INK_SCREEN_W - scroll_full_w) * 0.5f, 60.0f, scroll_full_w,
+                             600.0f};
     ink_fill_panel(r, scroll, PAL_GOFUN, 0.96f, PAL_SUMI_DARK, 0.92f, 500u);
 
     const Rectangle left_rod = {scroll.x - 14.0f, scroll.y - 10.0f, 16.0f, scroll.height + 20.0f};
@@ -74,6 +102,8 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
     if (open < 0.75f) {
         return;
     }
+    render_reset_blend(r);
+    BeginScissorMode((int)scroll.x, (int)scroll.y, (int)scroll.width, (int)scroll.height);
 
     const bool win = (g->phase == RUN_PHASE_VICTORY);
     const float cx = (float)INK_SCREEN_W * 0.5f;
@@ -82,10 +112,10 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
         (Vector2){cx, 110.0f}, 42.0f, win ? PAL_SUMI_SCORCH : PAL_BENGARA, 0.98f, true);
 
     seal_stamp(r, win ? TEXT_SEAL_SLAY : TEXT_SEAL_PURIFY,
-               (Vector2){scroll.x + scroll.width - 78.0f, 114.0f}, 58.0f, SEAL_HAKUBUN, open);
+               (Vector2){sheet.x + sheet.width - 78.0f, 114.0f}, 58.0f, SEAL_HAKUBUN, open);
 
     /* Left column: Run statistics */
-    const float lx = scroll.x + 56.0f;
+    const float lx = sheet.x + 56.0f;
     const float lw = 420.0f;
     float y = 162.0f;
     char buf[96];
@@ -216,8 +246,8 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
         const int row = i / 2;
         snprintf(buf, sizeof buf, "%s %s%u", text_get(text_upgrade_name(ou->id), r->use_ja),
                  text_get(TEXT_REWARD_LV, r->use_ja), (unsigned)ou->level);
-        render_draw_text(r, buf, (Vector2){rx + (float)col * 218.0f, ry + (float)row * upg_step},
-                         18.0f, pal_axis_color(game_upgrade_axis(ou->id)), 0.94f, false);
+        draw_list_item(r, buf, rx + (float)col * 218.0f, ry + (float)row * upg_step, 210.0f,
+                       pal_axis_color(game_upgrade_axis(ou->id)));
     }
     const int upg_rows = (shown_upgs + 1) / 2;
     ry += (float)(upg_rows > 0 ? upg_rows : 1) * upg_step + 8.0f;
@@ -234,9 +264,8 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
         for (int32_t i = 0; i < shown_rel; ++i) {
             const int col = i % 2;
             const int row = i / 2;
-            render_draw_text_id(r, text_relic_name(g->run.relics[i]),
-                                (Vector2){rx + (float)col * 218.0f, ry + (float)row * 20.0f}, 18.0f,
-                                PAL_KIN, 0.96f, false);
+            draw_list_item(r, text_get(text_relic_name(g->run.relics[i]), r->use_ja),
+                           rx + (float)col * 218.0f, ry + (float)row * 20.0f, 210.0f, PAL_KIN);
         }
     }
 
@@ -245,30 +274,20 @@ void render_draw_result_ui(RenderState *r, const GameState *g, const UiView *ui)
         (g->phase == RUN_PHASE_VICTORY && !g->run.run_settled && g->run.endless_loop == 0);
     ResultLayout layout;
     render_result_layout(show_endless, &layout);
-    const int32_t hov = ui != NULL ? ui->hover_choice : UI_HOVER_NONE;
-
-    if (layout.has_endless) {
-        const bool ehov = (hov == 2);
-        ink_fill_panel(r, layout.endless_rect, ehov ? PAL_PAPER_ACT1 : PAL_GOFUN, 0.98f, PAL_SHU,
-                       0.98f, 519u);
-        render_draw_text_centered(
-            r, text_get(TEXT_RESULT_ENDLESS, r->use_ja),
-            (Vector2){layout.endless_rect.x + layout.endless_rect.width * 0.5f,
-                      layout.endless_rect.y + layout.endless_rect.height * 0.5f},
-            20.0f, PAL_SHU, 0.98f, false);
+    int32_t hov = UI_HOVER_NONE;
+    if (ui != NULL) {
+        hov = ui->hover_choice >= 0 ? ui->hover_choice : ui->result_cursor;
+    }
+    if (!layout.has_endless && hov == 2) {
+        hov = 0;
     }
 
-    ink_fill_panel(r, layout.lobby_rect, PAL_GOFUN, 0.96f, hov == 0 ? PAL_SHU : PAL_SUMI_DARK,
-                   0.94f, 520u);
-    render_draw_text_centered(r, text_get(TEXT_RESULT_TO_LOBBY, r->use_ja),
-                              (Vector2){layout.lobby_rect.x + layout.lobby_rect.width * 0.5f,
-                                        layout.lobby_rect.y + layout.lobby_rect.height * 0.5f},
-                              20.0f, hov == 0 ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
-
-    ink_fill_panel(r, layout.retry_rect, PAL_GOFUN, 0.96f, hov == 1 ? PAL_SHU : PAL_SUMI_DARK,
-                   0.94f, 521u);
-    render_draw_text_centered(r, text_get(TEXT_RESULT_PLAY_AGAIN, r->use_ja),
-                              (Vector2){layout.retry_rect.x + layout.retry_rect.width * 0.5f,
-                                        layout.retry_rect.y + layout.retry_rect.height * 0.5f},
-                              20.0f, hov == 1 ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
+    if (layout.has_endless) {
+        draw_result_button(r, layout.endless_rect, TEXT_RESULT_ENDLESS, hov == 2, PAL_SHU, 519u);
+    }
+    draw_result_button(r, layout.lobby_rect, TEXT_RESULT_TO_LOBBY, hov == 0, PAL_SUMI_SCORCH, 520u);
+    draw_result_button(r, layout.retry_rect, TEXT_RESULT_PLAY_AGAIN, hov == 1, PAL_SUMI_SCORCH,
+                       521u);
+    render_reset_blend(r);
+    EndScissorMode();
 }

@@ -29,5 +29,6 @@ bool save_resolve_path(const char *explicit_path, const char *xdg_data_home, con
                        const char *exe_dir, char *out, size_t size);
 SaveLoadResult save_load(const char *path, MetaState *meta);
 bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops);
+bool save_backup_unreadable(const char *path);
 
 #endif

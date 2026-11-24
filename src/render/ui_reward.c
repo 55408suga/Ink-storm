@@ -336,9 +336,10 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     render_draw_text_centered(r, text_get(heading, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 76.0f}, 42.0f, PAL_SUMI_SCORCH,
                               0.96f, true);
-    const TextId hint_id = (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal)
-                               ? TEXT_REWARD_FALLBACK_HINT
-                               : TEXT_REWARD_HINT;
+    TextId hint_id = TEXT_REWARD_HINT;
+    if (rw->kind == REWARD_KIND_FALLBACK) {
+        hint_id = layout.has_crystal ? TEXT_REWARD_FALLBACK_HINT : TEXT_REWARD_FALLBACK_SINGLE_HINT;
+    }
     render_draw_text_centered(r, text_get(hint_id, r->use_ja),
                               (Vector2){(float)INK_SCREEN_W * 0.5f, 116.0f}, 18.0f, PAL_SUMI_HEAVY,
                               0.88f, false);
@@ -371,9 +372,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
             snprintf(hdr, sizeof hdr, "[%d]", i + 1);
             render_draw_text_centered(r, hdr, (Vector2){cx, vis.y + 108.0f}, 18.0f, PAL_KIN,
                                       0.94f * text_a, false);
-            render_draw_text_centered(r, text_get(text_relic_name(rid), r->use_ja),
-                                      (Vector2){cx, vis.y + 146.0f}, 26.0f, PAL_SUMI_SCORCH,
-                                      0.98f * text_a, false);
+            render_draw_text_fit(r, text_get(text_relic_name(rid), r->use_ja),
+                                 (Vector2){cx, vis.y + 146.0f}, vis.width - 32.0f, 26.0f, 18.0f,
+                                 PAL_SUMI_SCORCH, 0.98f * text_a, false);
 
             const Vector2 div_pts[2] = {{vis.x + 28.0f, vis.y + 180.0f},
                                         {vis.x + vis.width - 28.0f, vis.y + 180.0f}};
@@ -386,17 +387,19 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                                       .seed = 460u + (uint32_t)i},
                        (InkTone){.color = PAL_KIN, .alpha = 0.72f * text_a}, 1.0f);
 
-            render_draw_text_centered(r, text_get(text_relic_effect(rid), r->use_ja),
-                                      (Vector2){cx, vis.y + 226.0f}, 18.0f, PAL_SUMI_DARK,
-                                      0.94f * text_a, false);
+            render_draw_text_wrapped(
+                r, text_get(text_relic_effect(rid), r->use_ja),
+                (Rectangle){vis.x + 18.0f, vis.y + 192.0f, vis.width - 36.0f, 64.0f}, 18.0f, 13.0f,
+                PAL_SUMI_DARK, 0.94f * text_a, false, true);
 
             const TextId tr_id = text_relic_tradeoff(rid);
             if (tr_id != TEXT_NONE) {
-                char tr_buf[96];
+                char tr_buf[160];
                 snprintf(tr_buf, sizeof tr_buf, "%s%s", text_get(TEXT_REWARD_TRADEOFF, r->use_ja),
                          text_get(tr_id, r->use_ja));
-                render_draw_text_centered(r, tr_buf, (Vector2){cx, vis.y + 276.0f}, 18.0f, PAL_SHU,
-                                          0.96f * text_a, false);
+                render_draw_text_wrapped(
+                    r, tr_buf, (Rectangle){vis.x + 18.0f, vis.y + 260.0f, vis.width - 36.0f, 52.0f},
+                    18.0f, 13.0f, PAL_SHU, 0.96f * text_a, false, true);
             }
         } else {
             const UpgradeId uid = (UpgradeId)rw->choice_ids[i];
@@ -416,8 +419,8 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                                       pal_axis_color(axis), 0.94f * text_a, false);
 
             const char *name = text_get(text_upgrade_name(uid), r->use_ja);
-            render_draw_text_centered(r, name, (Vector2){cx, vis.y + 124.0f}, 26.0f,
-                                      PAL_SUMI_SCORCH, 0.98f * text_a, false);
+            render_draw_text_fit(r, name, (Vector2){cx, vis.y + 124.0f}, vis.width - 32.0f, 26.0f,
+                                 18.0f, PAL_SUMI_SCORCH, 0.98f * text_a, false);
 
             const uint8_t cur_lv = game_upgrade_level(g, uid);
             const uint8_t next_lv = rw->choice_next_level[i] > 0 ? rw->choice_next_level[i] : 1;
@@ -439,8 +442,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                        (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f * text_a}, 1.0f);
 
             const char *eff = text_get(text_upgrade_effect(uid, (int)next_lv), r->use_ja);
-            render_draw_text_centered(r, eff, (Vector2){cx, vis.y + 248.0f}, 18.0f, PAL_SUMI_DARK,
-                                      0.94f * text_a, false);
+            render_draw_text_wrapped(
+                r, eff, (Rectangle){vis.x + 18.0f, vis.y + 210.0f, vis.width - 36.0f, 96.0f}, 18.0f,
+                13.0f, PAL_SUMI_DARK, 0.94f * text_a, false, true);
         }
 
         if (is_hover) {
@@ -461,11 +465,11 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         char rb[64];
         snprintf(rb, sizeof rb, "%s (%d)", text_get(TEXT_REWARD_REROLL, r->use_ja),
                  g->run.rerolls_left);
-        render_draw_text_centered(
-            r, rb,
-            (Vector2){layout.reroll_rect.x + layout.reroll_rect.width * 0.5f,
-                      layout.reroll_rect.y + layout.reroll_rect.height * 0.5f},
-            20.0f, can_reroll ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
+        render_draw_text_fit(r, rb,
+                             (Vector2){layout.reroll_rect.x + layout.reroll_rect.width * 0.5f,
+                                       layout.reroll_rect.y + layout.reroll_rect.height * 0.5f},
+                             layout.reroll_rect.width - 24.0f, 20.0f, 14.0f,
+                             can_reroll ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
     }
 
     if (layout.has_repair) {
@@ -488,9 +492,9 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                      text_get(TEXT_REWARD_REPAIR_SHORT, r->use_ja), rep_amt);
             render_draw_text_centered(r, rep_buf, (Vector2){rcx, card.y + 150.0f}, 26.0f,
                                       can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.98f, false);
-            render_draw_text_centered(r, text_get(TEXT_REWARD_REPAIR_EXCESS, r->use_ja),
-                                      (Vector2){rcx, card.y + 206.0f}, 18.0f, PAL_KIN, 0.94f,
-                                      false);
+            render_draw_text_fit(r, text_get(TEXT_REWARD_REPAIR_EXCESS, r->use_ja),
+                                 (Vector2){rcx, card.y + 206.0f}, card.width - 32.0f, 18.0f, 13.0f,
+                                 PAL_KIN, 0.94f, false);
             if (hov) {
                 seal_stamp(r, TEXT_SEAL_DONE,
                            (Vector2){card.x + card.width - 32.0f, card.y + card.height - 32.0f},
@@ -505,11 +509,12 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                 (Vector2){layout.repair_rect.x + 30.0f,
                           layout.repair_rect.y + layout.repair_rect.height * 0.5f},
                 can_rep);
-            render_draw_text_centered(
+            render_draw_text_fit(
                 r, text_get(TEXT_REWARD_REPAIR, r->use_ja),
-                (Vector2){layout.repair_rect.x + layout.repair_rect.width * 0.5f + 14.0f,
+                (Vector2){layout.repair_rect.x + layout.repair_rect.width * 0.5f + 18.0f,
                           layout.repair_rect.y + layout.repair_rect.height * 0.5f},
-                19.0f, can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
+                layout.repair_rect.width - 76.0f, 19.0f, 13.0f,
+                can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.95f, false);
         }
     }
 

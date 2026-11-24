@@ -1,5 +1,7 @@
 #include "game.h"
 
+#include "core.h"
+
 #include <stddef.h>
 #include <string.h>
 
@@ -177,7 +179,23 @@ bool game_enemy_is_targetable(const GameState *g, EntityId id)
             return false;
         }
     }
+    if (game_is_boss_part(en->def_id) && (tr->x < 0.0f || tr->x > (float)INK_SCREEN_W ||
+                                          tr->y < 0.0f || tr->y > (float)INK_SCREEN_H)) {
+        return false;
+    }
     return true;
+}
+
+bool game_wave_goal_met(const GameState *g)
+{
+    if (g == NULL || g->phase != RUN_PHASE_PLAYING) {
+        return false;
+    }
+    if (g->run.wave_index == GAME_BOSS_WAVE_INDEX) {
+        return g->run.boss_id.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, g->run.boss_id);
+    }
+    return g->run.wave_index >= 0 && g->run.wave_quota > 0 &&
+           g->run.wave_kills >= g->run.wave_quota;
 }
 
 int32_t game_relic_unlock_slot(RelicId id)

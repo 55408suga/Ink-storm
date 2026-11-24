@@ -212,7 +212,10 @@ void boss_nue_step(GameState *g, EntityId id)
             }
         }
 
-        en->fire_cd -= INK_FIXED_DT * slow;
+        /* Re-arming the dash mid-knockback would zero the gale velocity before the wall slam. */
+        if (st->knockback_t <= 0.0f) {
+            en->fire_cd -= INK_FIXED_DT * slow;
+        }
         if (en->fire_cd <= 0.0f) {
             const int32_t jump = 2 + (int32_t)(ink_rng_next(&g->rng) % UINT64_C(3));
             en->phase = (wp_idx + jump) & 7;

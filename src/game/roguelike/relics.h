@@ -10,7 +10,8 @@ bool roguelike_grant_relic(GameState *g, RelicId id);
 void relics_apply_modifiers_add(const GameState *g, RunModifiers *mods);
 void relics_apply_modifiers_mul(const GameState *g, RunModifiers *mods);
 
-void relics_fire_on_stroke(GameState *g, float x, float y, float vx, float vy, float dist);
+void relics_fire_on_stroke(GameState *g, float px, float py, float x, float y, float vx, float vy,
+                           float dist);
 void relics_fire_on_cyclone(GameState *g, float x, float y, float *storm_add,
                             float *storm_sustain_add);
 void relics_fire_on_gale(GameState *g, float x, float y, float dx, float dy);

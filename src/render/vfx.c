@@ -99,7 +99,7 @@ static void push_bolt(RenderState *r, float x1, float y1, float x2, float y2, fl
 }
 
 static void push_seal(RenderState *r, TextId glyph, float x, float y, float size, SealStyle style,
-                      float life)
+                      SealPriority priority, float life)
 {
     r->seals[r->seal_cursor] = (VfxSeal){
         .active = true,
@@ -108,6 +108,7 @@ static void push_seal(RenderState *r, TextId glyph, float x, float y, float size
         .y = y,
         .size = size,
         .style = (int32_t)style,
+        .priority = (int32_t)priority,
         .age = 0.0f,
         .life = life,
     };
@@ -131,12 +132,13 @@ static void push_callout(RenderState *r, TextId text_id, int32_t count_arg, floa
     r->callout_cursor = (r->callout_cursor + 1) % RENDER_MAX_CALLOUTS;
 }
 
-static void push_stroke(RenderState *r, int32_t kind, float x, float y, float dx, float dy,
-                        float radius, float life)
+static void push_styled_stroke(RenderState *r, int32_t kind, int32_t style, float x, float y,
+                               float dx, float dy, float radius, float life)
 {
     r->strokes[r->stroke_cursor] = (VfxStroke){
         .active = true,
         .kind = kind,
+        .style = style,
         .x = x,
         .y = y,
         .dx = dx,
@@ -147,6 +149,18 @@ static void push_stroke(RenderState *r, int32_t kind, float x, float y, float dx
         .seed = (uint32_t)(ink_rng_next(&r->vfx_rng) & 0xffffffffu),
     };
     r->stroke_cursor = (r->stroke_cursor + 1) % RENDER_MAX_STROKES;
+}
+
+static void push_stroke(RenderState *r, int32_t kind, float x, float y, float dx, float dy,
+                        float radius, float life)
+{
+    push_styled_stroke(r, kind, -1, x, y, dx, dy, radius, life);
+}
+
+static void start_clear_banner(RenderState *r, TextId text)
+{
+    r->clear_banner_t = 1.0f;
+    r->clear_banner_text = text;
 }
 
 static void enqueue_intro(RenderState *r, EnemyDefId def_id)
@@ -178,6 +192,8 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->flash_t = 0.0f;
     r->flash_count = 0;
     r->boss_banner_t = 0.0f;
+    r->clear_banner_t = 0.0f;
+    r->clear_banner_text = TEXT_NONE;
     r->gameover_drip_t = 0.0f;
     r->gameover_drip_active = false;
     r->victory_scroll_t = 0.0f;
@@ -267,7 +283,8 @@ void render_consume_events(RenderState *r, const GameState *g)
                 push_stroke(r, 6, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 96.0f, 0.60f);
                 r->major_fx_active++;
             }
-            push_seal(r, TEXT_SEAL_SANGEN, ev->x, ev->y, 70.0f, SEAL_HAKUBUN, 0.65f);
+            push_seal(r, TEXT_SEAL_SANGEN, ev->x, ev->y, 70.0f, SEAL_HAKUBUN, SEAL_PRIO_REACTION,
+                      0.65f);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 14, 290.0f, 10.0f, 0.60f, PAL_KIN_HOT, true);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 220.0f, 8.0f, 0.50f, PAL_SHU, false);
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 240.0f, 8.0f, 0.50f, PAL_AO_HOT, false);
@@ -280,12 +297,12 @@ void render_consume_events(RenderState *r, const GameState *g)
             r->wind_telegraph_dir = ev->value;
             break;
         case EV_CYCLONE:
-            push_stroke(r, 0, ev->x, ev->y, 0.0f, 0.0f, ev->value > 0 ? (float)ev->value : 110.0f,
-                        0.72f);
-            push_seal(r, TEXT_NONE, ev->x, ev->y, 26.0f, SEAL_SHUBUN, 0.65f);
+            push_styled_stroke(r, 0, (int32_t)g->config.brush_style, ev->x, ev->y, 0.0f, 0.0f,
+                               ev->value > 0 ? (float)ev->value : 110.0f, 0.72f);
             break;
         case EV_GALE:
-            push_stroke(r, 1, ev->x, ev->y, ev->x2, ev->y2, 240.0f, 0.36f);
+            push_styled_stroke(r, 1, (int32_t)g->config.brush_style, ev->x, ev->y, ev->x2, ev->y2,
+                               240.0f, 0.36f);
             break;
         case EV_ORB_PICKUP:
             push_stroke(r, 3, ev->x, ev->y, g->player.cursor_x, g->player.cursor_y,
@@ -293,6 +310,12 @@ void render_consume_events(RenderState *r, const GameState *g)
             spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 3, 60.0f, 4.0f, 0.20f, PAL_KIN_HOT, false);
             break;
         case EV_SHRINE_HIT:
+            if ((ev->flags & EVF_SHRINE_BLOCKED) != 0) {
+                push_stroke(r, 12, ev->x, ev->y, ev->x2, ev->y2, 46.0f, 0.45f);
+                spawn_burst(r, ev->x + ev->x2 * 34.0f, ev->y + ev->y2 * 34.0f, ev->x2, ev->y2, 6,
+                            120.0f, 5.0f, 0.30f, PAL_KIN_HOT, false);
+                break;
+            }
             r->shrine_flicker_t = 0.45f;
             r->cracks[r->crack_cursor] = (VfxCrack){
                 .active = true,
@@ -312,11 +335,8 @@ void render_consume_events(RenderState *r, const GameState *g)
             push_callout(r, TEXT_CALLOUT_SURGE, 0, ev->x, ev->y - 34.0f, PAL_KIN, false, 0.95f);
             break;
         case EV_BOSS_ENTER:
-            if (r->major_fx_active < 2) {
-                r->boss_banner_t = 2.0f;
-                r->boss_banner_id = (EnemyDefId)ev->value;
-                r->major_fx_active++;
-            }
+            r->boss_banner_t = 2.0f;
+            r->boss_banner_id = (EnemyDefId)ev->value;
             add_shake(r, 5.0f, 0.24f);
             break;
         case EV_BOSS_PHASE: {
@@ -344,22 +364,36 @@ void render_consume_events(RenderState *r, const GameState *g)
             add_shake(r, 5.0f, 0.20f);
             break;
         }
+        /* Milestones bypass the major-effect budget: a busy screen must never swallow the
+         * moment that tells the player the wave or act is won. */
         case EV_WAVE_CLEAR:
-            push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f, 128.0f, 54.0f, SEAL_HAKUBUN,
-                      1.10f);
+            push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 900.0f, 0.90f);
+            push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f + 210.0f, 300.0f, 62.0f,
+                      SEAL_HAKUBUN, SEAL_PRIO_MILESTONE, 1.0f);
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 12, 260.0f, 8.0f, 0.55f, PAL_GOFUN, true);
+            start_clear_banner(r, TEXT_CALLOUT_WAVE_CLEAR);
             break;
         case EV_ACT_CLEAR:
-            if (r->major_fx_active < 2) {
-                push_stroke(r, 2, 0.0f, (float)INK_SCREEN_H * 0.5f, 1.0f, 0.0f, (float)INK_SCREEN_W,
-                            1.50f);
-                push_seal(r, TEXT_SEAL_SLAY, (float)INK_SCREEN_W * 0.5f,
-                          (float)INK_SCREEN_H * 0.42f, 86.0f, SEAL_HAKUBUN, 1.50f);
-                r->major_fx_active++;
-            }
+            push_stroke(r, 2, 0.0f, (float)INK_SCREEN_H * 0.5f, 1.0f, 0.0f, (float)INK_SCREEN_W,
+                        1.50f);
+            push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 1100.0f, 1.0f);
+            push_seal(r, TEXT_SEAL_SLAY, (float)INK_SCREEN_W * 0.5f + 230.0f, 300.0f, 86.0f,
+                      SEAL_HAKUBUN, SEAL_PRIO_MILESTONE, 1.0f);
+            start_clear_banner(r, TEXT_CALLOUT_ACT_CLEAR);
             break;
+        case EV_PURIFY: {
+            float dx = ev->x - ev->x2;
+            float dy = ev->y - ev->y2;
+            const float d = sqrtf(dx * dx + dy * dy);
+            dx = d > 1e-3f ? dx / d : 0.0f;
+            dy = d > 1e-3f ? dy / d : -1.0f;
+            spawn_burst(r, ev->x, ev->y, dx, dy, 6, 150.0f, 7.5f, 0.70f, PAL_GOFUN, true);
+            spawn_burst(r, ev->x, ev->y, 0.0f, -1.0f, 4, 110.0f, 4.0f, 0.55f, PAL_KIN_HOT, false);
+            break;
+        }
         case EV_REWARD_PICK:
             push_seal(r, TEXT_SEAL_DONE, (float)INK_SCREEN_W * 0.5f, (float)INK_SCREEN_H * 0.52f,
-                      62.0f, SEAL_HAKUBUN, 0.60f);
+                      62.0f, SEAL_HAKUBUN, SEAL_PRIO_STAMP, 0.60f);
             break;
         case EV_REWARD_REROLL:
             r->reward_reroll_t = 0.40f;
@@ -382,6 +416,45 @@ void render_consume_events(RenderState *r, const GameState *g)
         default:
             break;
         }
+    }
+}
+
+static void spawn_brush_flavor(RenderState *r, const GameState *g)
+{
+    if (!g->player.painting || g->player.dry || g->player.stroke_speed <= 80.0f) {
+        return;
+    }
+    const float cx = g->player.cursor_x;
+    const float cy = g->player.cursor_y;
+    const float ax = g->player.aim_x;
+    const float ay = g->player.aim_y;
+    const uint64_t t = g->ticks;
+    switch (g->config.brush_style) {
+    case BRUSH_STYLE_EMBER:
+        if (t % 3u == 0u) {
+            spawn_burst(r, cx, cy, 0.0f, -1.0f, 2, 70.0f, 4.8f, 0.34f, PAL_SHU_HOT, false);
+            spawn_burst(r, cx - ax * 10.0f, cy - ay * 10.0f, -ax, -ay, 1, 40.0f, 3.2f, 0.42f,
+                        PAL_KIN_HOT, false);
+        }
+        break;
+    case BRUSH_STYLE_QUILL:
+        if (t % 4u == 0u) {
+            spawn_burst(r, cx, cy, 0.0f, 0.0f, 1, 80.0f, 3.0f, 0.20f, PAL_AO_HOT, false);
+        }
+        if (t % 10u == 0u) {
+            const float a = ink_rng_f01(&r->vfx_rng) * k_vfx_two_pi;
+            push_bolt(r, cx, cy, cx + cosf(a) * 22.0f, cy + sinf(a) * 22.0f, 0.12f);
+        }
+        break;
+    case BRUSH_STYLE_HEAVY:
+    default:
+        if (t % 3u == 0u) {
+            spawn_burst(r, cx, cy, -ax, -ay, 2, 60.0f, 6.5f, 0.40f, PAL_SUMI_DARK, false);
+        }
+        if (t % 12u == 0u) {
+            push_styled_stroke(r, 11, BRUSH_STYLE_HEAVY, cx, cy, ax, ay, 30.0f, 0.35f);
+        }
+        break;
     }
 }
 
@@ -451,17 +524,7 @@ static void track_ryu_and_bounces(RenderState *r, const GameState *g)
         r->prev_proj_bounces[i] = pr->bounces_left;
     }
 
-    /* Brush-style stroke flavor particles */
-    if (g->player.painting && !g->player.dry && g->player.stroke_speed > 80.0f &&
-        (g->ticks % 4u) == 0u) {
-        if (g->config.brush_style == BRUSH_STYLE_EMBER) {
-            spawn_burst(r, g->player.cursor_x, g->player.cursor_y, 0.0f, -1.0f, 1, 55.0f, 4.5f,
-                        0.28f, PAL_SHU_HOT, false);
-        } else if (g->config.brush_style == BRUSH_STYLE_QUILL) {
-            spawn_burst(r, g->player.cursor_x, g->player.cursor_y, 0.0f, 0.0f, 1, 65.0f, 4.0f,
-                        0.22f, PAL_AO_HOT, false);
-        }
-    }
+    spawn_brush_flavor(r, g);
 }
 
 void render_update_vfx(RenderState *r, const GameState *g, float dt)
@@ -496,6 +559,9 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
     }
     if (r->boss_banner_t > 0.0f) {
         r->boss_banner_t = fmaxf(0.0f, r->boss_banner_t - dt);
+    }
+    if (r->clear_banner_t > 0.0f) {
+        r->clear_banner_t = fmaxf(0.0f, r->clear_banner_t - dt);
     }
     if (r->gameover_drip_active) {
         r->gameover_drip_t = fminf(1.5f, r->gameover_drip_t + dt);
@@ -611,6 +677,127 @@ Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui)
     };
 }
 
+static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, float a)
+{
+    const bool heavy = s->style == BRUSH_STYLE_HEAVY;
+    const bool ember = s->style == BRUSH_STYLE_EMBER;
+    const bool quill = s->style == BRUSH_STYLE_QUILL;
+    const float arm_w = heavy ? 10.5f : (quill ? 4.0f : 6.5f);
+    for (int arm = 0; arm < 2; ++arm) {
+        Vector2 pts[14];
+        const float base_a = (float)arm * 3.14159f + u * 5.2f;
+        for (int k = 0; k < 14; ++k) {
+            const float ku = (float)k / 13.0f;
+            const float ang = base_a + ku * 4.4f;
+            const float rad = s->radius * (0.18f + 0.82f * ku) * (0.75f + 0.25f * u);
+            pts[k] = (Vector2){s->x + cosf(ang) * rad, s->y + sinf(ang) * rad};
+        }
+        ink_stroke(r, pts, 14,
+                   (BrushProfile){.w_max = arm_w,
+                                  .w_min_ratio = 0.25f,
+                                  .entry = 0.18f,
+                                  .exit = 0.35f,
+                                  .dry = heavy ? 0.70f : 0.4f,
+                                  .seed = s->seed + (uint32_t)arm},
+                   (InkTone){.color = heavy ? PAL_SUMI_SCORCH : PAL_SUMI_DARK, .alpha = a},
+                   ink_clampf(u * 3.5f, 0.15f, 1.0f));
+    }
+    if (heavy) {
+        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.9f + 0.25f * u), u * 2.0f,
+                       u * 2.0f + 4.6f,
+                       (BrushProfile){.w_max = 7.0f,
+                                      .w_min_ratio = 0.2f,
+                                      .entry = 0.2f,
+                                      .exit = 0.4f,
+                                      .dry = 0.8f,
+                                      .seed = s->seed + 7u},
+                       (InkTone){.color = PAL_SUMI_HEAVY, .alpha = a * 0.6f});
+    } else if (ember) {
+        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.45f + 0.35f * u), -u * 6.0f,
+                       -u * 6.0f + 5.2f,
+                       (BrushProfile){.w_max = 5.0f,
+                                      .w_min_ratio = 0.3f,
+                                      .entry = 0.15f,
+                                      .exit = 0.35f,
+                                      .dry = 0.3f,
+                                      .seed = s->seed + 11u},
+                       (InkTone){.color = PAL_SHU, .alpha = a * 0.9f});
+    } else if (quill) {
+        uint64_t rng = (uint64_t)s->seed ^ UINT64_C(0x51554c4c41524353);
+        for (int k = 0; k < 3; ++k) {
+            const float ang = u * 7.0f + (float)k * 2.094f;
+            const float r0 = s->radius * 0.55f;
+            const float r1 = s->radius * (0.85f + 0.15f * ink_rng_f01(&rng));
+            const Vector2 zig[3] = {
+                {s->x + cosf(ang) * r0, s->y + sinf(ang) * r0},
+                {s->x + cosf(ang + 0.18f) * (r0 + r1) * 0.5f,
+                 s->y + sinf(ang + 0.18f) * (r0 + r1) * 0.5f},
+                {s->x + cosf(ang - 0.05f) * r1, s->y + sinf(ang - 0.05f) * r1},
+            };
+            ink_stroke(r, zig, 3,
+                       (BrushProfile){.w_max = 2.4f,
+                                      .w_min_ratio = 0.4f,
+                                      .entry = 0.05f,
+                                      .exit = 0.2f,
+                                      .dry = 0.0f,
+                                      .seed = s->seed + 20u + (uint32_t)k},
+                       (InkTone){.color = PAL_AO_HOT, .alpha = a}, 1.0f);
+        }
+    }
+    const float mark = 5.0f * (1.0f - 0.5f * u);
+    ink_teardrop(r, (Vector2){s->x, s->y}, (Vector2){0.0f, -1.0f}, mark * 1.3f, mark,
+                 pal_color_alpha(PAL_SHU, a));
+}
+
+static void draw_gale_stroke(RenderState *r, const VfxStroke *s, float u, float a)
+{
+    const bool heavy = s->style == BRUSH_STYLE_HEAVY;
+    const bool ember = s->style == BRUSH_STYLE_EMBER;
+    const bool quill = s->style == BRUSH_STYLE_QUILL;
+    const Vector2 pts[3] = {
+        {s->x, s->y},
+        {s->x + s->dx * s->radius * 0.5f - s->dy * 12.0f,
+         s->y + s->dy * s->radius * 0.5f + s->dx * 12.0f},
+        {s->x + s->dx * s->radius, s->y + s->dy * s->radius},
+    };
+    const float reveal = ink_clampf(u * 4.0f, 0.2f, 1.0f);
+    ink_stroke(r, pts, 3,
+               (BrushProfile){.w_max = heavy ? 20.0f : (quill ? 8.0f : 14.0f),
+                              .w_min_ratio = 0.18f,
+                              .entry = 0.08f,
+                              .exit = 0.55f,
+                              .dry = heavy ? 0.80f : (quill ? 0.25f : 0.65f),
+                              .seed = s->seed},
+               (InkTone){.color = heavy ? PAL_SUMI_SCORCH : PAL_SUMI_DARK, .alpha = a}, reveal);
+    if (ember) {
+        ink_stroke(r, pts, 3,
+                   (BrushProfile){.w_max = 6.0f,
+                                  .w_min_ratio = 0.2f,
+                                  .entry = 0.1f,
+                                  .exit = 0.5f,
+                                  .dry = 0.4f,
+                                  .seed = s->seed + 3u},
+                   (InkTone){.color = PAL_SHU, .alpha = a * 0.9f}, reveal);
+    } else if (quill) {
+        for (int side = -1; side <= 1; side += 2) {
+            const float off = (float)side * 14.0f;
+            const Vector2 rail[2] = {
+                {s->x - s->dy * off, s->y + s->dx * off},
+                {s->x + s->dx * s->radius * 0.8f - s->dy * off,
+                 s->y + s->dy * s->radius * 0.8f + s->dx * off},
+            };
+            ink_stroke(r, rail, 2,
+                       (BrushProfile){.w_max = 2.2f,
+                                      .w_min_ratio = 0.4f,
+                                      .entry = 0.1f,
+                                      .exit = 0.5f,
+                                      .dry = 0.0f,
+                                      .seed = s->seed + 5u + (uint32_t)(side + 1)},
+                       (InkTone){.color = PAL_AO_HOT, .alpha = a * 0.85f}, reveal);
+        }
+    }
+}
+
 void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
 {
     if (r == NULL || g == NULL) {
@@ -647,41 +834,50 @@ void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
         const float a = (1.0f - u * u) * 0.88f;
 
         if (s->kind == 0) {
-            for (int arm = 0; arm < 2; ++arm) {
-                Vector2 pts[14];
-                const float base_a = (float)arm * 3.14159f + u * 5.2f;
-                for (int k = 0; k < 14; ++k) {
-                    const float ku = (float)k / 13.0f;
-                    const float ang = base_a + ku * 4.4f;
-                    const float rad = s->radius * (0.18f + 0.82f * ku) * (0.75f + 0.25f * u);
-                    pts[k] = (Vector2){s->x + cosf(ang) * rad, s->y + sinf(ang) * rad};
-                }
-                ink_stroke(r, pts, 14,
-                           (BrushProfile){.w_max = 6.5f,
-                                          .w_min_ratio = 0.25f,
-                                          .entry = 0.18f,
-                                          .exit = 0.35f,
-                                          .dry = 0.4f,
-                                          .seed = s->seed + (uint32_t)arm},
-                           (InkTone){.color = PAL_SUMI_DARK, .alpha = a},
-                           ink_clampf(u * 3.5f, 0.15f, 1.0f));
-            }
+            draw_cyclone_stroke(r, s, u, a);
         } else if (s->kind == 1) {
-            const Vector2 pts[3] = {
-                {s->x, s->y},
-                {s->x + s->dx * s->radius * 0.5f - s->dy * 12.0f,
-                 s->y + s->dy * s->radius * 0.5f + s->dx * 12.0f},
-                {s->x + s->dx * s->radius, s->y + s->dy * s->radius},
-            };
-            ink_stroke(r, pts, 3,
-                       (BrushProfile){.w_max = 14.0f,
-                                      .w_min_ratio = 0.18f,
-                                      .entry = 0.08f,
-                                      .exit = 0.55f,
-                                      .dry = 0.65f,
-                                      .seed = s->seed},
-                       (InkTone){.color = PAL_SUMI_DARK, .alpha = a},
-                       ink_clampf(u * 4.0f, 0.2f, 1.0f));
+            draw_gale_stroke(r, s, u, a);
+        } else if (s->kind == 10) {
+            /* Purification shockwave: a pale enso sweeping out from the clear point */
+            const float rad = s->radius * (0.08f + 0.92f * sqrtf(u));
+            const float gap_a = (float)(s->seed % 360u) * 0.01745f;
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, gap_a, gap_a + 5.9f,
+                           (BrushProfile){.w_max = 22.0f * (1.0f - 0.6f * u),
+                                          .w_min_ratio = 0.25f,
+                                          .entry = 0.12f,
+                                          .exit = 0.30f,
+                                          .dry = 0.55f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_GOFUN, .alpha = a * 0.85f});
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad * 0.94f, gap_a + 0.2f, gap_a + 5.6f,
+                           (BrushProfile){.w_max = 4.0f,
+                                          .w_min_ratio = 0.3f,
+                                          .entry = 0.12f,
+                                          .exit = 0.30f,
+                                          .dry = 0.2f,
+                                          .seed = s->seed + 9u},
+                           (InkTone){.color = PAL_KIN, .alpha = a * 0.75f});
+        } else if (s->kind == 11) {
+            const float rad = s->radius * (0.5f + 0.9f * u);
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, 0.0f, k_vfx_two_pi * 0.92f,
+                           (BrushProfile){.w_max = 3.2f,
+                                          .w_min_ratio = 0.3f,
+                                          .entry = 0.15f,
+                                          .exit = 0.35f,
+                                          .dry = 0.6f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_SUMI_HEAVY, .alpha = a * 0.55f});
+        } else if (s->kind == 12) {
+            const float rad = s->radius * (0.85f + 0.35f * u);
+            const float mid = atan2f(s->dy, s->dx);
+            ink_arc_stroke(r, (Vector2){s->x, s->y}, rad, mid - 1.1f, mid + 1.1f,
+                           (BrushProfile){.w_max = 6.0f,
+                                          .w_min_ratio = 0.3f,
+                                          .entry = 0.15f,
+                                          .exit = 0.15f,
+                                          .dry = 0.1f,
+                                          .seed = s->seed},
+                           (InkTone){.color = PAL_KIN, .alpha = a});
         } else if (s->kind == 2) {
             const float wx = u * (float)INK_SCREEN_W;
             const Vector2 pts[3] = {{wx - 180.0f, 60.0f}, {wx, 360.0f}, {wx - 120.0f, 660.0f}};
@@ -936,14 +1132,47 @@ void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui)
         render_set_blend(r, BLEND_ALPHA);
     }
 
+    (void)ui;
+}
+
+void render_vfx_draw_flash(RenderState *r, const UiView *ui)
+{
     const bool suppress_flash = (ui != NULL && ui->reduce_flash);
-    if (r->flash_t > 0.0f && !suppress_flash) {
-        const Vector2 screen[4] = {{0.0f, 0.0f},
-                                   {(float)INK_SCREEN_W, 0.0f},
-                                   {(float)INK_SCREEN_W, (float)INK_SCREEN_H},
-                                   {0.0f, (float)INK_SCREEN_H}};
-        ink_fill_poly(r, screen, 4, pal_color_alpha(PAL_GOFUN, r->flash_t * 3.0f));
+    if (r == NULL || r->flash_t <= 0.0f || suppress_flash) {
+        return;
     }
+    const Vector2 screen[4] = {{0.0f, 0.0f},
+                               {(float)INK_SCREEN_W, 0.0f},
+                               {(float)INK_SCREEN_W, (float)INK_SCREEN_H},
+                               {0.0f, (float)INK_SCREEN_H}};
+    ink_fill_poly(r, screen, 4, pal_color_alpha(PAL_GOFUN, r->flash_t * 3.0f));
+}
+
+/* Only two seals fit on screen at once; milestone seals outrank reaction and UI stamps, and the
+ * newest wins within a tier, instead of whichever happened to sit at the lowest array slot. */
+int32_t render_vfx_pick_seals(const RenderState *r, int32_t out[2])
+{
+    out[0] = -1;
+    out[1] = -1;
+    for (int32_t i = 0; i < RENDER_MAX_SEALS; ++i) {
+        const VfxSeal *s = &r->seals[i];
+        if (!s->active || s->life <= 0.0f) {
+            continue;
+        }
+        for (int32_t slot = 0; slot < 2; ++slot) {
+            const VfxSeal *cur = out[slot] >= 0 ? &r->seals[out[slot]] : NULL;
+            const bool better = cur == NULL || s->priority > cur->priority ||
+                                (s->priority == cur->priority && s->age < cur->age);
+            if (better) {
+                if (slot == 0) {
+                    out[1] = out[0];
+                }
+                out[slot] = i;
+                break;
+            }
+        }
+    }
+    return (out[0] >= 0 ? 1 : 0) + (out[1] >= 0 ? 1 : 0);
 }
 
 void render_vfx_draw_ui(RenderState *r, const GameState *g)
@@ -952,15 +1181,12 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
         return;
     }
 
-    int seals_drawn = 0;
-    for (int i = 0; i < RENDER_MAX_SEALS && seals_drawn < 2; ++i) {
-        const VfxSeal *s = &r->seals[i];
-        if (!s->active || s->life <= 0.0f) {
-            continue;
-        }
+    int32_t picked[2];
+    const int32_t seal_n = render_vfx_pick_seals(r, picked);
+    for (int32_t k = seal_n - 1; k >= 0; --k) {
+        const VfxSeal *s = &r->seals[picked[k]];
         const float u = ink_clampf(s->age / s->life, 0.0f, 1.0f);
         seal_stamp(r, s->glyph, (Vector2){s->x, s->y}, s->size, (SealStyle)s->style, u);
-        seals_drawn++;
     }
 
     /* Callouts: brush title font strictly >= 40px (art-direction §9.6) */
@@ -980,10 +1206,13 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
             snprintf(buf, sizeof buf, "%s", text_get(c->text_id, r->use_ja));
         }
         const Vector2 m = render_measure_text(r, buf, fsize, c->large);
-        const Rectangle backing = {c->x - m.x * 0.5f - 10.0f, c->y - m.y * 0.5f - 4.0f, m.x + 20.0f,
-                                   m.y + 8.0f};
+        const float half_w = m.x * 0.5f + 10.0f;
+        const float half_h = m.y * 0.5f + 4.0f;
+        const float x = ink_clampf(c->x, 8.0f + half_w, (float)INK_SCREEN_W - 8.0f - half_w);
+        const float y = ink_clampf(c->y, 78.0f + half_h, (float)INK_SCREEN_H - 8.0f - half_h);
+        const Rectangle backing = {x - half_w, y - half_h, half_w * 2.0f, half_h * 2.0f};
         ink_fill_panel(r, backing, PAL_GOFUN, 0.80f * a, PAL_SUMI_CLEAR, 0.0f, 700u + (uint32_t)i);
-        render_draw_text_centered(r, buf, (Vector2){c->x, c->y}, fsize, (PaletteId)c->color_id, a,
+        render_draw_text_centered(r, buf, (Vector2){x, y}, fsize, (PaletteId)c->color_id, a,
                                   c->large);
     }
 }

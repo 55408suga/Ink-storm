@@ -864,7 +864,7 @@ static void test_brush_styles_and_stacking(void)
         game_destroy(g);
     }
 
-    /* 2. Ember Brush: 120px ember (non-dry only), gale fire +0.35, Ember Tip stacking without
+    /* 2. Ember Brush: 72px ember (non-dry only), gale fire +0.35, Ember Tip stacking without
      * double injection. */
     {
         const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_EMBER, UINT64_C(12));
@@ -874,15 +874,20 @@ static void test_brush_styles_and_stacking(void)
         clear_test_entities(g);
         fluid_reset(&g->fluid);
 
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.stroke_cost_mul);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.12f, g->internal.mods.stroke_cost_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 72.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3.0f, g->internal.mods.stroke_ember_rad);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.64f, g->internal.mods.stroke_ember_amt);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.35f, g->internal.mods.gale_fire_add);
 
-        /* Non-dry stroke of 125px injects fire at brush position. */
+        /* A 160px stroke lays embers where the 72px marks fall along the segment (272, 344), not
+         * in one blob at the brush tip. */
         const BrushInput stroke1 = {
-            .pmx = 200.0f, .pmy = 300.0f, .mx = 325.0f, .my = 300.0f, .paint = true};
+            .pmx = 200.0f, .pmy = 300.0f, .mx = 360.0f, .my = 300.0f, .paint = true};
         player_skills_step(g, &stroke1);
-        TEST_ASSERT_TRUE(sample_channel(g, 1, 325.0f, 300.0f) > 0.10f);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 272.0f, 300.0f) > 0.10f);
+        TEST_ASSERT_TRUE(sample_channel(g, 1, 344.0f, 300.0f) > 0.10f);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 16.0f, g->internal.ember_tip_dist);
 
         /* Dry stroke of 150px must NOT inject fire. */
         fluid_reset(&g->fluid);
@@ -904,23 +909,23 @@ static void test_brush_styles_and_stacking(void)
         player_skills_step(g, &gale_in);
         TEST_ASSERT_TRUE(sample_channel(g, 1, 460.0f, 300.0f) > 0.10f);
 
-        /* Ember Brush x Ember Tip Lv1/2/3: 90 / 67.5 / 50.625px, no double injection. */
+        /* Ember Brush x Ember Tip Lv1/2/3: 54 / 40.5 / 30.375px, no double injection. */
         TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
-        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 90.0f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 54.0f, g->internal.mods.stroke_ember_interval);
         fluid_reset(&g->fluid);
         g->internal.ember_tip_dist = 0.0f;
         g->player.ink = 100.0f;
         const BrushInput st95 = {
             .pmx = 200.0f, .pmy = 200.0f, .mx = 295.0f, .my = 200.0f, .paint = true};
         player_skills_step(g, &st95);
-        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 5.0f, g->internal.ember_tip_dist);
-        const float fire_once = sample_channel(g, 1, 295.0f, 200.0f);
-        TEST_ASSERT_TRUE(fire_once > 0.10f && fire_once < 0.70f);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 41.0f, g->internal.ember_tip_dist);
+        const float fire_once = sample_channel(g, 1, 254.0f, 200.0f);
+        TEST_ASSERT_TRUE(fire_once > 0.10f && fire_once < 0.80f);
 
         TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
-        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 67.5f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 40.5f, g->internal.mods.stroke_ember_interval);
         TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_EMBER_TIP));
-        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 50.625f, g->internal.mods.stroke_ember_interval);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 30.375f, g->internal.mods.stroke_ember_interval);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->internal.mods.stroke_ember_mul);
 
         /* Ember Brush x Flame Gale: 0.35 + 0.25 / 0.35 / 0.50 */
@@ -933,7 +938,8 @@ static void test_brush_styles_and_stacking(void)
         game_destroy(g);
     }
 
-    /* 3. Quill Brush: CD 1.1s, storm 0.55, Charged Seal +0.15/lv + Lv3 sustain, Ink Magnet x1.3. */
+    /* 3. Quill Brush: CD 1.1s, storm 0.72 + sustain 0.18, Charged Seal at its normal strength,
+     * Ink Magnet x1.3. */
     {
         const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_QUILL, UINT64_C(13));
         GameState *g = game_create(&cfg);
@@ -946,7 +952,8 @@ static void test_brush_styles_and_stacking(void)
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.90f, g->internal.mods.brush_force_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.70f, g->internal.mods.stroke_cost_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.10f, g->internal.mods.cyclone_cd);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.55f, g->internal.mods.cyclone_storm_add);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.72f, g->internal.mods.cyclone_storm_add);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.18f, g->internal.mods.cyclone_storm_sustain);
         TEST_ASSERT_FLOAT_WITHIN(1e-4f, 169.0f, g->internal.mods.orb_pull_radius);
 
         const BrushInput cyc_in = {
@@ -955,15 +962,15 @@ static void test_brush_styles_and_stacking(void)
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.10f, g->player.cyclone_cd);
         TEST_ASSERT_TRUE(sample_channel(g, 2, 420.0f, 300.0f) > 0.05f);
 
-        /* Quill x Charged Seal Lv1/2/3: 0.70 / 0.85 / 1.00 + Lv3 sustain 0.60 */
-        const float expected_storm[3] = {0.70f, 0.85f, 1.00f};
+        /* Quill x Charged Seal Lv1/2/3: 1.02 / 1.17 / 1.32 + Lv3 sustain +0.60 */
+        const float expected_storm[3] = {1.02f, 1.17f, 1.32f};
         for (int lv = 1; lv <= 3; ++lv) {
             TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, UPG_CHARGED_SEAL));
             float storm_add = g->internal.mods.cyclone_storm_add;
             float storm_sustain = g->internal.mods.cyclone_storm_sustain;
             upgrades_fire_on_cyclone(g, 400.0f, 300.0f, &storm_add, &storm_sustain);
             TEST_ASSERT_FLOAT_WITHIN(1e-5f, expected_storm[lv - 1], storm_add);
-            TEST_ASSERT_FLOAT_WITHIN(1e-5f, lv >= 3 ? 0.60f : 0.0f, storm_sustain);
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, lv >= 3 ? 0.78f : 0.18f, storm_sustain);
         }
 
         /* Quill x Ink Magnet Lv1/2/3: 221 / 273 / 325px */
@@ -1282,8 +1289,9 @@ static void test_p1_relics_all_9(void)
         player_skills_step(g, &gin);
         TEST_ASSERT_EQUAL_INT(3, count_ev(g, EV_GALE));
         TEST_ASSERT_FLOAT_WITHIN(1e-4f, 78.0f, g->player.ink);
-        /* Heavy gale_impulse_mul = 1.25 -> 560 * 0.6 * 1.0 * 1.25 = 420 px/s (applied ONCE). */
-        TEST_ASSERT_FLOAT_WITHIN(1.0f, 420.0f, game_velocity(g, e)->vx);
+        /* Fan knockback keeps 0.78 of the shove: 560 * 0.78 * 1.0 * 1.25 = 546 px/s (applied ONCE).
+         */
+        TEST_ASSERT_FLOAT_WITHIN(1.0f, 546.0f, game_velocity(g, e)->vx);
         game_destroy(g);
     }
 
@@ -1808,7 +1816,7 @@ static void test_p2_upgrades_new_4(void)
 static void test_p2_relics_unlockable_and_mask(void)
 {
     /* 1. Oni Tile: Stone Oni gale at MASS_MEDIUM (0.6x), explosion (0.75x), Maelstrom Bind Lv2,
-     * and Kamaitachi/Stone Oni instant slam kill (stopped Nue remains 60 dmg). */
+     * Kamaitachi instant slam kill, Stone Oni slammed for 80 + stun (stopped Nue remains 60). */
     {
         GameState *g = game_create(NULL);
         TEST_ASSERT_NOT_NULL(g);
@@ -1862,7 +1870,8 @@ static void test_p2_relics_unlockable_and_mask(void)
         elements_step(g);
         TEST_ASSERT_FLOAT_WITHIN(1.0f, 390.0f, game_velocity(g, oni_tb)->vx);
 
-        /* Wall slam instant kills Kamaitachi and Stone Oni; stopped Nue takes 60 dmg. */
+        /* Wall slam instant kills Kamaitachi; Stone Oni keeps its raw Heavy slam (80 + stun);
+         * stopped Nue takes 60 dmg. */
         clear_test_entities(g);
         const EntityId kama = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 48.0f, 200.0f);
         const EntityId oni_slam = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 48.0f, 340.0f);
@@ -1878,7 +1887,9 @@ static void test_p2_relics_unlockable_and_mask(void)
         combat_physics_and_slams_step(g);
         ecs_flush_destroy(&g->ecs);
         TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, kama));
-        TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, oni_slam));
+        TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, oni_slam));
+        TEST_ASSERT_EQUAL_INT32(10, game_health(g, oni_slam)->hp);
+        TEST_ASSERT_TRUE(game_status(g, oni_slam)->stun_t >= 1.0f - 1e-5f);
         TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, nue));
         TEST_ASSERT_EQUAL_INT32(640, game_health(g, nue)->hp);
         TEST_ASSERT_TRUE(game_status(g, nue)->stun_t >= 1.0f - 1e-5f);

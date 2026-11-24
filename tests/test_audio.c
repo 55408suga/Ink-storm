@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "game.h"
+#include "synth_voices.h"
 #include "unity.h"
 
 #include <stdlib.h>
@@ -49,6 +50,7 @@ static void test_audio_se_events_audible(void)
         EV_THUNDERBURST, EV_CATACLYSM,  EV_WIND_TELEGRAPH, EV_CYCLONE,       EV_GALE,
         EV_ORB_PICKUP,   EV_SHRINE_HIT, EV_SURGE_START,    EV_BOSS_ENTER,    EV_BOSS_PHASE,
         EV_WAVE_CLEAR,   EV_ACT_CLEAR,  EV_REWARD_PICK,    EV_REWARD_REROLL, EV_BOSS_PART_BREAK,
+        EV_SKILL_DENIED, EV_GAME_OVER,  EV_PURIFY,
     };
 
     GameState *g = game_create(NULL);
@@ -328,6 +330,189 @@ static void test_audio_determinism(void)
     game_destroy(g);
 }
 
+static void test_audio_ticks_keep_subtick_offsets_after_renderer_runs_ahead(void)
+{
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(AUDIO_SAMPLE_RATE, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+    audio_init(a, UINT64_C(5));
+    g->phase = RUN_PHASE_PLAYING;
+    g->event_count = 0;
+
+    const size_t ahead = AUDIO_SAMPLES_PER_TICK * 10u + 100u;
+    audio_render(a, buf, ahead);
+    for (int t = 0; t < 3; ++t) {
+        audio_consume_events(a, g);
+    }
+    TEST_ASSERT_EQUAL_INT32(3, a->state_q_count);
+    for (int t = 0; t < 3; ++t) {
+        const AudioTickState *st = &a->state_q[(a->state_q_head + t) % AUDIO_STATE_QUEUE_CAP];
+        TEST_ASSERT_EQUAL_UINT64(ahead + (uint64_t)t * AUDIO_SAMPLES_PER_TICK, st->at_sample);
+    }
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_lobby_entry_drops_stale_combat_state(void)
+{
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t buf[AUDIO_SAMPLES_PER_TICK * 4];
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(6));
+
+    g->phase = RUN_PHASE_PLAYING;
+    g->player.painting = true;
+    g->player.stroke_speed = 900.0f;
+    g->event_count = 1;
+    memset(&g->events[0], 0, sizeof g->events[0]);
+    g->events[0].type = EV_SHRINE_HIT;
+    for (int t = 0; t < 4; ++t) {
+        audio_consume_events(a, g);
+    }
+    audio_render(a, buf, 10);
+    TEST_ASSERT_TRUE(a->state_q_count > 0);
+
+    audio_set_lobby_mode(a, true);
+    TEST_ASSERT_EQUAL_INT32(0, a->state_q_count);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, a->brush_target);
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        TEST_ASSERT_TRUE(!a->voices[i].active || a->voices[i].releasing);
+    }
+    audio_render(a, buf, sizeof buf / sizeof buf[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, a->brush_target);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, a->active_bgm);
+
+    g->event_count = 0;
+    g->config.brush_style = BRUSH_STYLE_QUILL;
+    audio_consume_lobby_events(a, g);
+    audio_render(a, buf, AUDIO_SAMPLES_PER_TICK * 2);
+    TEST_ASSERT_TRUE(a->lobby_mode);
+    TEST_ASSERT_TRUE(a->brush_target > 0.5f);
+    TEST_ASSERT_EQUAL_INT32(BRUSH_STYLE_QUILL, a->brush_style);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, a->active_bgm);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_spam_never_steals_milestone_voices(void)
+{
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(9));
+    audio_voice_spawn(a, AUDIO_VOICE_WAVE_CLEAR, 0, 392.0f, 0.0f);
+    audio_voice_spawn(a, AUDIO_VOICE_SHRINE_GONG, 0, 152.0f, 0.0f);
+    for (int i = 0; i < 60; ++i) {
+        audio_voice_spawn(a, AUDIO_VOICE_STORM_ZAP, 0, 1320.0f, 0.0f);
+        audio_voice_spawn(a, AUDIO_VOICE_KILL_TAIKO, 0, 135.0f, 0.0f);
+        audio_voice_spawn(a, AUDIO_VOICE_CYCLONE_SWIRL, 0, 145.0f, 0.0f);
+    }
+    int wave_clear = 0;
+    int gong = 0;
+    int zaps = 0;
+    int kills = 0;
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        if (!a->voices[i].active) {
+            continue;
+        }
+        wave_clear += a->voices[i].kind == AUDIO_VOICE_WAVE_CLEAR ? 1 : 0;
+        gong += a->voices[i].kind == AUDIO_VOICE_SHRINE_GONG ? 1 : 0;
+        zaps += a->voices[i].kind == AUDIO_VOICE_STORM_ZAP ? 1 : 0;
+        kills += a->voices[i].kind == AUDIO_VOICE_KILL_TAIKO ? 1 : 0;
+    }
+    TEST_ASSERT_EQUAL_INT(1, wave_clear);
+    TEST_ASSERT_EQUAL_INT(1, gong);
+    TEST_ASSERT_TRUE(zaps <= 3);
+    TEST_ASSERT_TRUE(kills <= 4);
+    free(a);
+}
+
+static void render_brush(AudioState *a, int32_t style, bool dry, bool surge, int16_t *buf, size_t n)
+{
+    audio_init(a, UINT64_C(21));
+    audio_set_volumes(a, 100, 0, 100);
+    a->brush_target = 0.9f;
+    a->brush_env = 0.9f;
+    a->brush_style = style;
+    a->brush_dry = dry;
+    a->brush_surge = surge;
+    audio_render(a, buf, n);
+}
+
+static void test_audio_brush_scrape_differs_per_brush_and_state(void)
+{
+    enum { N = AUDIO_SAMPLES_PER_TICK * 6 };
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t (*bufs)[N] = calloc(5, sizeof *bufs);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(bufs);
+    render_brush(a, BRUSH_STYLE_HEAVY, false, false, bufs[0], N);
+    render_brush(a, BRUSH_STYLE_EMBER, false, false, bufs[1], N);
+    render_brush(a, BRUSH_STYLE_QUILL, false, false, bufs[2], N);
+    render_brush(a, BRUSH_STYLE_HEAVY, true, false, bufs[3], N);
+    render_brush(a, BRUSH_STYLE_HEAVY, false, true, bufs[4], N);
+    for (int i = 0; i < 5; ++i) {
+        TEST_ASSERT_TRUE(peak_abs(bufs[i], N) > 200);
+        for (int j = i + 1; j < 5; ++j) {
+            TEST_ASSERT_TRUE(memcmp(bufs[i], bufs[j], sizeof bufs[i]) != 0);
+        }
+    }
+    free(bufs);
+    free(a);
+}
+
+static void test_audio_pause_ducks_procedural_bgm(void)
+{
+    enum { N = AUDIO_SAMPLE_RATE };
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *loud = calloc(N, sizeof *loud);
+    int16_t *ducked = calloc(N, sizeof *ducked);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(loud);
+    TEST_ASSERT_NOT_NULL(ducked);
+    audio_init(a, UINT64_C(31));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    audio_render(a, loud, N);
+    audio_render(a, loud, N);
+
+    audio_init(a, UINT64_C(31));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    audio_set_paused(a, true);
+    audio_render(a, ducked, N);
+    audio_render(a, ducked, N);
+    TEST_ASSERT_TRUE(peak_abs(ducked, N) * 2 < peak_abs(loud, N));
+    TEST_ASSERT_TRUE(peak_abs(ducked, N) > 0);
+    free(ducked);
+    free(loud);
+    free(a);
+}
+
+static void test_audio_ui_cues_are_audible(void)
+{
+    static const AudioUiCue cues[] = {AUDIO_UI_CLICK, AUDIO_UI_BACK, AUDIO_UI_DENY,
+                                      AUDIO_UI_PREVIEW};
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(AUDIO_SAMPLE_RATE / 4, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+    for (size_t i = 0; i < sizeof cues / sizeof cues[0]; ++i) {
+        audio_init(a, UINT64_C(3));
+        audio_set_volumes(a, 100, 0, 100);
+        audio_trigger_ui_cue(a, cues[i]);
+        audio_render(a, buf, AUDIO_SAMPLE_RATE / 4);
+        TEST_ASSERT_TRUE(peak_abs(buf, AUDIO_SAMPLE_RATE / 4) >= 1000);
+    }
+    free(buf);
+    free(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -338,5 +523,11 @@ int main(void)
     RUN_TEST(test_audio_bgm_tracks);
     RUN_TEST(test_audio_volumes);
     RUN_TEST(test_audio_determinism);
+    RUN_TEST(test_audio_ticks_keep_subtick_offsets_after_renderer_runs_ahead);
+    RUN_TEST(test_audio_lobby_entry_drops_stale_combat_state);
+    RUN_TEST(test_audio_spam_never_steals_milestone_voices);
+    RUN_TEST(test_audio_brush_scrape_differs_per_brush_and_state);
+    RUN_TEST(test_audio_pause_ducks_procedural_bgm);
+    RUN_TEST(test_audio_ui_cues_are_audible);
     return UNITY_END();
 }

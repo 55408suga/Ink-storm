@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #define AUDIO_STREAM_FRAMES 1024
+#define AUDIO_MUSIC_STREAM_FRAMES 4096
 #define AUDIO_BGM_TRACK_SLOTS 5
 
 typedef struct {
@@ -20,6 +21,7 @@ typedef struct {
     BgmTrack current_ext_track;
     BgmTrack prev_ext_track;
     float ext_xfade;
+    float fade_out;
 } AudioOut;
 
 void audio_out_init(AudioOut *out);

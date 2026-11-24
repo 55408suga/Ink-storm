@@ -142,7 +142,8 @@ static int run_demo_snap_mode(GameState *game, AudioState *audio, RenderState *r
                               const char *snap_dir)
 {
     RenderTexture2D target = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
-    if (target.id == 0 || target.id == render->scene.id) {
+    if (!IsRenderTextureValid(target) || target.id == render->scene.id ||
+        target.id == render->bg_cache.id) {
         fputs("INKSTORM: failed to create offscreen render texture for --snap\n", stderr);
         if (target.id != 0) {
             UnloadRenderTexture(target);

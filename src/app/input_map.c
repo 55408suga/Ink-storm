@@ -1,11 +1,26 @@
 #include "input_map.h"
 
+#include "menu_nav.h"
 #include "raylib.h"
 #include "render.h"
 
 #include <stddef.h>
 
 static bool is_enter_pressed(void) { return IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER); }
+
+static bool any_nav_key_pressed(void)
+{
+    return IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_LEFT) ||
+           IsKeyPressed(KEY_RIGHT);
+}
+
+static int32_t pick_hover(UiView *ui, int32_t hit, bool moved)
+{
+    const int32_t hover =
+        menu_pointer_visible_hover(&ui->pointer, hit, moved, any_nav_key_pressed());
+    ui->hover_choice = hover;
+    return hover;
+}
 
 RawInput input_map_read(const GameState *g, UiView *ui)
 {
@@ -20,12 +35,15 @@ RawInput input_map_read(const GameState *g, UiView *ui)
         .pick_pressed = -1,
     };
 
-    if (ui != NULL) {
-        ui->hover_choice = UI_HOVER_NONE;
-    }
-
     if (g == NULL) {
         return raw;
+    }
+    /* The Result screen hover belongs to input_map_read_menu; clearing it here hid every hover. */
+    if (g->phase == RUN_PHASE_VICTORY || g->phase == RUN_PHASE_GAME_OVER) {
+        return raw;
+    }
+    if (ui != NULL) {
+        ui->hover_choice = UI_HOVER_NONE;
     }
 
     if (g->phase == RUN_PHASE_REWARD) {
@@ -92,10 +110,6 @@ RawInput input_map_read(const GameState *g, UiView *ui)
         return raw;
     }
 
-    if (g->phase == RUN_PHASE_VICTORY || g->phase == RUN_PHASE_GAME_OVER) {
-        return raw;
-    }
-
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E)) {
         raw.cyclone_pressed = true;
     }
@@ -120,6 +134,9 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         .left_down = left_down,
         .ui_clicked = false,
         .lobby_paint = false,
+        .lobby_cyclone = false,
+        .lobby_gale = false,
+        .lobby_brush_step = 0,
     };
 
     if (ui == NULL) {
@@ -129,18 +146,31 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
     if (IsKeyPressed(KEY_F1)) {
         ui->xray = !ui->xray;
     }
+    const bool moved = menu_pointer_track(&ui->pointer, mouse.x, mouse.y);
 
     if (ui->scene == UI_SCENE_TITLE_LOBBY) {
         LobbyLayout layout;
         render_lobby_layout(&layout);
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         for (int32_t i = 0; i < 4; ++i) {
             if (CheckCollisionPointRec(mouse, layout.items[i])) {
-                hover = i;
+                hit = i;
                 break;
             }
         }
-        ui->hover_choice = hover;
+        const bool on_brush = CheckCollisionPointRec(mouse, layout.brush_rect);
+        const bool on_ui = hit >= 0 || on_brush ||
+                           CheckCollisionPointRec(mouse, layout.title_rect) ||
+                           CheckCollisionPointRec(mouse, layout.footer_rect) ||
+                           CheckCollisionPointRec(mouse, layout.hint_rect);
+        const bool was_stroking = ui->lobby_stroke_active;
+        const bool stroking =
+            menu_lobby_stroke_gate(&ui->lobby_stroke_active, left_pressed, left_down, on_ui);
+        if (stroking || was_stroking) {
+            hit = UI_HOVER_NONE;
+        }
+        ui->lobby_canvas_hover = !on_ui || stroking;
+        const int32_t hover = pick_hover(ui, hit, moved);
         if (hover >= 0) {
             ui->lobby_cursor = hover;
         }
@@ -150,10 +180,19 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         } else if (IsKeyPressed(KEY_DOWN)) {
             ui->lobby_cursor = (ui->lobby_cursor + 1) % 4;
         }
+        if (IsKeyPressed(KEY_LEFT)) {
+            out.lobby_brush_step = -1;
+        } else if (IsKeyPressed(KEY_RIGHT)) {
+            out.lobby_brush_step = 1;
+        } else if (left_pressed && on_brush && !stroking) {
+            const bool left_half = mouse.x < layout.brush_rect.x + layout.brush_rect.width * 0.5f;
+            out.lobby_brush_step = left_half ? -1 : 1;
+            out.ui_clicked = true;
+        }
 
         int32_t pick = -1;
-        if (left_pressed && hover >= 0) {
-            pick = hover;
+        if (left_pressed && hit >= 0 && !stroking) {
+            pick = hit;
             out.ui_clicked = true;
         } else if (is_enter_pressed()) {
             pick = ui->lobby_cursor;
@@ -175,8 +214,10 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             out.action = MENU_ACT_LOBBY_SETTINGS;
         } else if (pick == 3) {
             out.action = MENU_ACT_LOBBY_QUIT;
-        } else if (left_down && hover == UI_HOVER_NONE) {
-            out.lobby_paint = true;
+        } else {
+            out.lobby_paint = stroking;
+            out.lobby_cyclone = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E);
+            out.lobby_gale = IsKeyPressed(KEY_SPACE);
         }
         return out;
     }
@@ -184,17 +225,17 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
     if (ui->scene == UI_SCENE_BRUSH_SELECT) {
         BrushSelectLayout layout;
         render_brush_select_layout(&layout);
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         for (int32_t i = 0; i < BRUSH_STYLE_COUNT; ++i) {
             if (CheckCollisionPointRec(mouse, layout.cards[i])) {
-                hover = i;
+                hit = i;
                 break;
             }
         }
-        if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
-            hover = BRUSH_STYLE_COUNT;
+        if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
+            hit = BRUSH_STYLE_COUNT;
         }
-        ui->hover_choice = hover;
+        const int32_t hover = pick_hover(ui, hit, moved);
         if (hover >= 0 && hover < BRUSH_STYLE_COUNT) {
             ui->selected_brush = (BrushStyleId)hover;
         }
@@ -206,12 +247,12 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             ui->selected_brush = (BrushStyleId)(((int)ui->selected_brush + 1) % BRUSH_STYLE_COUNT);
         }
 
-        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == BRUSH_STYLE_COUNT)) {
+        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hit == BRUSH_STYLE_COUNT)) {
             out.action = MENU_ACT_BACK;
             out.ui_clicked = left_pressed;
-        } else if (left_pressed && hover >= 0 && hover < BRUSH_STYLE_COUNT) {
+        } else if (left_pressed && hit >= 0 && hit < BRUSH_STYLE_COUNT) {
             out.action = MENU_ACT_BRUSH_PICK;
-            out.arg = hover;
+            out.arg = hit;
             out.ui_clicked = true;
         } else if (IsKeyPressed(KEY_ONE)) {
             out.action = MENU_ACT_BRUSH_PICK;
@@ -233,51 +274,47 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         BokuanLayout layout;
         render_bokuan_layout(&layout);
         const int32_t total = META_UPG_COUNT + META_RELIC_UNLOCK_COUNT;
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         for (int32_t i = 0; i < META_UPG_COUNT; ++i) {
             if (CheckCollisionPointRec(mouse, layout.upgrades[i])) {
-                hover = i;
+                hit = i;
                 break;
             }
         }
-        if (hover == UI_HOVER_NONE) {
+        if (hit == UI_HOVER_NONE) {
             for (int32_t s = 0; s < META_RELIC_UNLOCK_COUNT; ++s) {
                 if (CheckCollisionPointRec(mouse, layout.relics[s])) {
-                    hover = META_UPG_COUNT + s;
+                    hit = META_UPG_COUNT + s;
                     break;
                 }
             }
         }
-        if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
-            hover = total;
+        if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
+            hit = total;
         }
-        ui->hover_choice = hover;
+        const int32_t hover = pick_hover(ui, hit, moved);
         if (hover >= 0) {
             ui->shop_cursor = hover;
         }
 
         if (IsKeyPressed(KEY_UP)) {
-            ui->shop_cursor = (ui->shop_cursor + total) % (total + 1);
+            ui->shop_cursor = menu_nav_bokuan(ui->shop_cursor, MENU_NAV_UP);
         } else if (IsKeyPressed(KEY_DOWN)) {
-            ui->shop_cursor = (ui->shop_cursor + 1) % (total + 1);
+            ui->shop_cursor = menu_nav_bokuan(ui->shop_cursor, MENU_NAV_DOWN);
         } else if (IsKeyPressed(KEY_LEFT)) {
-            if (ui->shop_cursor >= META_UPG_COUNT && ui->shop_cursor < total) {
-                ui->shop_cursor = (ui->shop_cursor - META_UPG_COUNT) % META_UPG_COUNT;
-            }
+            ui->shop_cursor = menu_nav_bokuan(ui->shop_cursor, MENU_NAV_LEFT);
         } else if (IsKeyPressed(KEY_RIGHT)) {
-            if (ui->shop_cursor < META_UPG_COUNT) {
-                ui->shop_cursor = META_UPG_COUNT + (ui->shop_cursor < 3 ? ui->shop_cursor * 2 : 4);
-            }
+            ui->shop_cursor = menu_nav_bokuan(ui->shop_cursor, MENU_NAV_RIGHT);
         }
 
-        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == total)) {
+        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hit == total)) {
             out.action = MENU_ACT_BACK;
             out.ui_clicked = left_pressed;
             return out;
         }
         int32_t act_idx = -1;
-        if (left_pressed && hover >= 0 && hover < total) {
-            act_idx = hover;
+        if (left_pressed && hit >= 0 && hit < total) {
+            act_idx = hit;
             out.ui_clicked = true;
         } else if (is_enter_pressed()) {
             if (ui->shop_cursor == total) {
@@ -305,22 +342,22 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         const int32_t idx_defaults = SETTINGS_ROW_COUNT + 1;
         const int32_t idx_back = SETTINGS_ROW_COUNT + 2;
 
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         for (int32_t i = 0; i < SETTINGS_ROW_COUNT; ++i) {
             if (CheckCollisionPointRec(mouse, layout.rows[i])) {
-                hover = i;
+                hit = i;
                 break;
             }
         }
-        if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.reset_hints_rect)) {
-            hover = idx_hints;
-        } else if (hover == UI_HOVER_NONE &&
+        if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.reset_hints_rect)) {
+            hit = idx_hints;
+        } else if (hit == UI_HOVER_NONE &&
                    CheckCollisionPointRec(mouse, layout.reset_defaults_rect)) {
-            hover = idx_defaults;
-        } else if (hover == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
-            hover = idx_back;
+            hit = idx_defaults;
+        } else if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.back_rect)) {
+            hit = idx_back;
         }
-        ui->hover_choice = hover;
+        const int32_t hover = pick_hover(ui, hit, moved);
         if (hover >= 0) {
             ui->settings_cursor = hover;
         }
@@ -335,34 +372,35 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             ui->settings_cursor = idx_hints;
         }
 
-        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == idx_back) ||
+        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hit == idx_back) ||
             (is_enter_pressed() && ui->settings_cursor == idx_back)) {
             out.action = MENU_ACT_BACK;
             out.ui_clicked = left_pressed;
             return out;
         }
-        if ((left_pressed && hover == idx_hints) ||
+        if ((left_pressed && hit == idx_hints) ||
             (is_enter_pressed() && ui->settings_cursor == idx_hints)) {
             out.action = MENU_ACT_SETTINGS_RESET_HINTS;
             out.ui_clicked = left_pressed;
             return out;
         }
-        if ((left_pressed && hover == idx_defaults) ||
+        if ((left_pressed && hit == idx_defaults) ||
             (is_enter_pressed() && ui->settings_cursor == idx_defaults)) {
             out.action = MENU_ACT_SETTINGS_RESET_DEFAULTS;
             out.ui_clicked = left_pressed;
             return out;
         }
 
-        if (left_pressed && hover >= 0 && hover < SETTINGS_ROW_COUNT) {
+        if (left_pressed && hit >= 0 && hit < SETTINGS_ROW_COUNT) {
             out.ui_clicked = true;
-            if (CheckCollisionPointRec(mouse, layout.minus_rects[hover])) {
+            ui->settings_cursor = hit;
+            if (CheckCollisionPointRec(mouse, layout.minus_rects[hit])) {
                 out.action = MENU_ACT_SETTINGS_CHANGE;
-                out.arg = hover;
+                out.arg = hit;
                 out.delta = -1;
-            } else if (CheckCollisionPointRec(mouse, layout.plus_rects[hover]) || hover >= 3) {
+            } else if (CheckCollisionPointRec(mouse, layout.plus_rects[hit]) || hit >= 3) {
                 out.action = MENU_ACT_SETTINGS_CHANGE;
-                out.arg = hover;
+                out.arg = hit;
                 out.delta = 1;
             }
             return out;
@@ -388,25 +426,43 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             (g->phase == RUN_PHASE_VICTORY && !g->run.run_settled && g->run.endless_loop == 0);
         ResultLayout layout;
         render_result_layout(show_endless, &layout);
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         if (layout.has_endless && CheckCollisionPointRec(mouse, layout.endless_rect)) {
-            hover = 2;
+            hit = MENU_RESULT_ENDLESS;
         } else if (CheckCollisionPointRec(mouse, layout.lobby_rect)) {
-            hover = 0;
+            hit = MENU_RESULT_LOBBY;
         } else if (CheckCollisionPointRec(mouse, layout.retry_rect)) {
-            hover = 1;
+            hit = MENU_RESULT_RETRY;
         }
-        ui->hover_choice = hover;
-        if (left_pressed && hover == 2 && layout.has_endless) {
+        if (!layout.has_endless && ui->result_cursor == MENU_RESULT_ENDLESS) {
+            ui->result_cursor = MENU_RESULT_LOBBY;
+        }
+        const int32_t hover = pick_hover(ui, hit, moved);
+        if (hover >= 0) {
+            ui->result_cursor = hover;
+        }
+        if (IsKeyPressed(KEY_LEFT)) {
+            ui->result_cursor =
+                menu_nav_result(ui->result_cursor, layout.has_endless, MENU_NAV_LEFT);
+        } else if (IsKeyPressed(KEY_RIGHT)) {
+            ui->result_cursor =
+                menu_nav_result(ui->result_cursor, layout.has_endless, MENU_NAV_RIGHT);
+        }
+
+        int32_t pick = -1;
+        if (left_pressed && hit >= 0) {
+            pick = hit;
+            out.ui_clicked = true;
+        } else if (is_enter_pressed()) {
+            pick = ui->result_cursor;
+        } else if (IsKeyPressed(KEY_ESCAPE)) {
+            pick = MENU_RESULT_LOBBY;
+        }
+        if (pick == MENU_RESULT_ENDLESS && layout.has_endless) {
             out.action = MENU_ACT_RESULT_ENDLESS;
-            out.ui_clicked = true;
-        } else if (left_pressed && hover == 0) {
-            out.action = MENU_ACT_RESULT_LOBBY;
-            out.ui_clicked = true;
-        } else if (left_pressed && hover == 1) {
+        } else if (pick == MENU_RESULT_RETRY) {
             out.action = MENU_ACT_RESULT_RETRY;
-            out.ui_clicked = true;
-        } else if (is_enter_pressed() || IsKeyPressed(KEY_ESCAPE)) {
+        } else if (pick == MENU_RESULT_LOBBY) {
             out.action = MENU_ACT_RESULT_LOBBY;
         }
         return out;
@@ -416,23 +472,23 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         PauseLayout layout;
         render_pause_layout(&layout);
         if (ui->pause_confirm != PAUSE_CONFIRM_NONE) {
-            int32_t hover = UI_HOVER_NONE;
+            int32_t hit = UI_HOVER_NONE;
             if (CheckCollisionPointRec(mouse, layout.confirm_yes)) {
-                hover = 0;
+                hit = 0;
             } else if (CheckCollisionPointRec(mouse, layout.confirm_no)) {
-                hover = 1;
+                hit = 1;
             }
-            ui->hover_choice = hover;
+            const int32_t hover = pick_hover(ui, hit, moved);
             if (hover >= 0) {
                 ui->confirm_cursor = hover;
             }
             if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_RIGHT)) {
                 ui->confirm_cursor = 1 - ui->confirm_cursor;
             }
-            if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hover == 1)) {
+            if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hit == 1)) {
                 out.action = MENU_ACT_CONFIRM_NO;
                 out.ui_clicked = left_pressed;
-            } else if (left_pressed && hover == 0) {
+            } else if (left_pressed && hit == 0) {
                 out.action = MENU_ACT_CONFIRM_YES;
                 out.ui_clicked = true;
             } else if (is_enter_pressed()) {
@@ -441,14 +497,14 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             return out;
         }
 
-        int32_t hover = UI_HOVER_NONE;
+        int32_t hit = UI_HOVER_NONE;
         for (int32_t i = 0; i < 4; ++i) {
             if (CheckCollisionPointRec(mouse, layout.items[i])) {
-                hover = i;
+                hit = i;
                 break;
             }
         }
-        ui->hover_choice = hover;
+        const int32_t hover = pick_hover(ui, hit, moved);
         if (hover >= 0) {
             ui->pause_cursor = hover;
         }
@@ -461,8 +517,8 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         int32_t pick = -1;
         if (IsKeyPressed(KEY_ESCAPE)) {
             pick = 0;
-        } else if (left_pressed && hover >= 0) {
-            pick = hover;
+        } else if (left_pressed && hit >= 0) {
+            pick = hit;
             out.ui_clicked = true;
         } else if (is_enter_pressed()) {
             pick = ui->pause_cursor;

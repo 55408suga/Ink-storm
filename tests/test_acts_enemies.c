@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 void setUp(void) {}
 
@@ -888,15 +889,27 @@ static void test_boss_nue_and_boss_ryu(void)
     TEST_ASSERT_TRUE(saw_ryu_p2);
 
     /* Boss awakening swirl must not self-trigger Cataclysm or Thunderburst; mountain wind clamps to
-     * 6s period (wind_timer <= 1.5s). */
+     * 6s period (wind_timer <= 1.5s). The on-screen orb volleys above are real fire/storm sources
+     * that may legitimately react, so clear them and compare counters across the swirl only. */
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId pid = ecs_entity_at(&g->ecs, i);
+        if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+            ecs_destroy(&g->ecs, pid);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    memset(fluid_channel_mut(&g->fluid, 1), 0, sizeof(float) * FLUID_N);
+    memset(fluid_channel_mut(&g->fluid, 2), 0, sizeof(float) * FLUID_N);
+    const int32_t cataclysms_before = g->run.cataclysms;
+    const int32_t thunderbursts_before = g->run.thunderbursts;
     g->internal.wind_timer = 7.0f;
     g->internal.wind_telegraph_t = 0.0f;
     g->internal.wind_active_t = 0.0f;
     for (int t = 0; t < 6; ++t) {
         game_step(g, NULL, NULL);
     }
-    TEST_ASSERT_EQUAL_INT32(0, g->run.cataclysms);
-    TEST_ASSERT_EQUAL_INT32(0, g->run.thunderbursts);
+    TEST_ASSERT_EQUAL_INT32(cataclysms_before, g->run.cataclysms);
+    TEST_ASSERT_EQUAL_INT32(thunderbursts_before, g->run.thunderbursts);
     TEST_ASSERT_TRUE(g->internal.wind_timer <= 1.5f);
 
     /* Let the full 1.5s Phase 2 invuln expire naturally, then verify the head counts down from

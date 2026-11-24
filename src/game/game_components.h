@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #define PROJ_TRAIL_LEN 20
+#define PROJ_MAX_HIT_IDS 6
 
 #define COMP_TRANSFORM (UINT64_C(1) << 0)
 #define COMP_VELOCITY (UINT64_C(1) << 1)
@@ -68,10 +69,13 @@ typedef struct {
 typedef struct {
     ProjKind kind;
     bool deflected, burning, electrified, accelerated;
+    bool fluid_pushed;
     int32_t pierce, bounces_left;
     float age;
     GameVec2 trail[PROJ_TRAIL_LEN];
     int32_t trail_n;
+    EntityId hit_ids[PROJ_MAX_HIT_IDS];
+    int32_t hit_n;
 } ProjComp;
 
 typedef struct {

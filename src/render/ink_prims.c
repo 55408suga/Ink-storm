@@ -1,10 +1,13 @@
 #include "ink_prims.h"
 
+#include "text_layout.h"
+
 #include "core.h"
 #include "rlgl.h"
 
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 enum { INK_MAX_SAMPLES = 256 };
 
@@ -476,6 +479,35 @@ void ink_knockout(RenderState *r, const Vector2 *ctrl, int n, float pad_px, int 
     ink_fill_poly(r, expanded, count, ko);
 }
 
+/* Two-character seals (e.g. 墨嵐, 三元) overflowed the stamp when drawn on one line; carved seals
+ * stack them vertically, and anything longer is shrunk to fit the square. */
+static void draw_seal_glyphs(const RenderState *r, TextId glyph, Vector2 at, float size,
+                             PaletteId pal, float alpha)
+{
+    if (!r->use_ja || glyph == TEXT_NONE) {
+        return;
+    }
+    const char *txt = text_get(glyph, true);
+    const size_t len = strlen(txt);
+    const size_t first = text_utf8_next(txt, 0, len);
+    const size_t second = text_utf8_next(txt, first, len);
+    if (first < len && second == len && first < 8 && len - first < 8) {
+        char top[8];
+        char bottom[8];
+        memcpy(top, txt, first);
+        top[first] = '\0';
+        memcpy(bottom, txt + first, len - first);
+        bottom[len - first] = '\0';
+        const float gs = size * 0.42f;
+        render_draw_text_centered(r, top, (Vector2){at.x, at.y - size * 0.215f}, gs, pal, alpha,
+                                  true);
+        render_draw_text_centered(r, bottom, (Vector2){at.x, at.y + size * 0.215f}, gs, pal, alpha,
+                                  true);
+        return;
+    }
+    render_draw_text_fit(r, txt, at, size * 0.80f, size * 0.62f, size * 0.25f, pal, alpha, true);
+}
+
 void seal_stamp(RenderState *r, TextId glyph, Vector2 at, float size, SealStyle style, float t)
 {
     if (r == NULL || size <= 2.0f) {
@@ -524,18 +556,12 @@ void seal_stamp(RenderState *r, TextId glyph, Vector2 at, float size, SealStyle 
             ink_teardrop(r, hp, (Vector2){1.0f, 0.4f}, size * 0.08f, size * 0.05f,
                          pal_color_alpha(PAL_GOFUN, 0.45f));
         }
-        if (r->use_ja && glyph != TEXT_NONE) {
-            const char *txt = text_get(glyph, true);
-            render_draw_text_centered(r, txt, at, size * 0.62f * scale, PAL_GOFUN, 0.96f, true);
-        }
+        draw_seal_glyphs(r, glyph, at, size * scale, PAL_GOFUN, 0.96f);
     } else {
         ink_fill_poly(r, poly, 12, pal_color_alpha(PAL_GOFUN, 0.90f));
         ink_outline_tone(r, poly, 12, true, 3.0f, (Vector2){0.7f, 0.7f},
                          (InkTone){.color = PAL_SHU, .alpha = 0.92f}, seed);
-        if (r->use_ja && glyph != TEXT_NONE) {
-            const char *txt = text_get(glyph, true);
-            render_draw_text_centered(r, txt, at, size * 0.62f * scale, PAL_SHU, 0.94f, true);
-        }
+        draw_seal_glyphs(r, glyph, at, size * scale, PAL_SHU, 0.94f);
     }
 }
 

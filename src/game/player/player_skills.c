@@ -61,7 +61,7 @@ static float mass_gale_multiplier(MassTier tier)
     case MASS_MEDIUM:
         return 0.6f;
     case MASS_HEAVY:
-        return 0.35f;
+        return 0.50f;
     default:
         return 0.0f;
     }
@@ -138,7 +138,9 @@ static void execute_gale(GameState *g, float origin_x, float origin_y, float bas
 {
     const RunModifiers *mods = &g->internal.mods;
     const int32_t dir_count = mods->tengu_fan ? 3 : 1;
+    /* The fan splits fluid force three ways but keeps enough shove for Medium wall slams. */
     const float scale = mods->tengu_fan ? 0.6f : 1.0f;
+    const float knock_scale = mods->tengu_fan ? 0.78f : 1.0f;
     static const float k_angles[3] = {0.0f, -0.4363323f, 0.4363323f};
 
     uint8_t hit_enemy[ECS_MAX_ENTITIES] = {0};
@@ -201,7 +203,7 @@ static void execute_gale(GameState *g, float origin_x, float origin_y, float bas
                 const float kb_t = is_stopped_nue ? 0.90f : 1.15f;
                 StatusComp *st = game_status_mut(g, id);
                 if (mass_mul > 0.0f && st != NULL && dot > 0.35f) {
-                    const float imp = 560.0f * scale * mass_mul * mods->gale_impulse_mul;
+                    const float imp = 560.0f * knock_scale * mass_mul * mods->gale_impulse_mul;
                     vel->vx += gx * imp;
                     vel->vy += gy * imp;
                     if (st->knockback_t < kb_t) {
@@ -316,6 +318,55 @@ static void cast_gale(GameState *g)
     execute_gale(g, g->player.cursor_x, g->player.cursor_y, gx, gy);
 }
 
+/* A per-axis clamp bent diagonal strokes toward 45 degrees and flattened every force bonus, so
+ * the stroke vector is capped by magnitude and the cap grows with the brush force multiplier. */
+GameVec2 player_skills_stroke_force(double mdx, double mdy, float force_scale, float max_vel)
+{
+    float fx = (float)(mdx * 0.58 * (double)force_scale);
+    float fy = (float)(mdy * 0.58 * (double)force_scale);
+    const float cap = fminf(46.0f * fmaxf(1.0f, force_scale), max_vel * 0.72f);
+    const float len = hypotf(fx, fy);
+    if (len > cap && len > 1e-6f) {
+        fx *= cap / len;
+        fy *= cap / len;
+    }
+    return (GameVec2){fx, fy};
+}
+
+void player_skills_emit_ember_trail(GameState *g, float *dist_acc, float interval,
+                                    EmberTrailSegment seg)
+{
+    if (g == NULL || dist_acc == NULL || interval <= 0.0f) {
+        return;
+    }
+    const float dx = seg.x - seg.px;
+    const float dy = seg.y - seg.py;
+    const float len = hypotf(dx, dy);
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    const float edye[FLUID_MAX_CHANNELS] = {0.0f, seg.fire_amt, 0.0f, 0.0f};
+
+    float next = interval - *dist_acc;
+    float last = -*dist_acc;
+    int32_t bursts = 0;
+    while (next <= len && bursts < 8) {
+        const float t = len > 1e-6f ? ink_clampf(next / len, 0.0f, 1.0f) : 1.0f;
+        const float bx = seg.px + dx * t;
+        const float by = seg.py + dy * t;
+        fluid_splat(&g->fluid, bx, by, seg.rad, seg.vx, seg.vy, edye);
+        if (g->internal.mods.twin_brush) {
+            fluid_splat(&g->fluid, 2.0f * sx - bx, 2.0f * sy - by, seg.rad, -seg.vx, -seg.vy, edye);
+        }
+        last = next;
+        next += interval;
+        ++bursts;
+    }
+    *dist_acc = len - last;
+    if (*dist_acc >= interval) {
+        *dist_acc = fmodf(*dist_acc, interval);
+    }
+}
+
 void player_skills_step(GameState *g, const BrushInput *valid_in)
 {
     if (g == NULL) {
@@ -416,10 +467,10 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                 const float rad = base_rad * mods->brush_radius_mul;
 
                 const int steps = (int)ink_clampf(mdist / 5.0f, 1.0f, 18.0f);
-                const float fx =
-                    ink_clampf((float)(mdx * 0.58 * (double)force_scale), -46.0f, 46.0f);
-                const float fy =
-                    ink_clampf((float)(mdy * 0.58 * (double)force_scale), -46.0f, 46.0f);
+                const GameVec2 force =
+                    player_skills_stroke_force(mdx, mdy, force_scale, g->fluid.cfg.max_vel);
+                const float fx = force.x;
+                const float fy = force.y;
                 const float ink_amt = ink_clampf(0.26f + mdist * 0.011f, 0.26f, 0.65f) /
                                       (float)steps * 2.35f * ink_scale;
                 const float storm_amt =
@@ -445,26 +496,22 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                 g->player.painting = true;
 
                 if (!dry && mods->stroke_ember_interval > 0.0f) {
-                    const float interval = mods->stroke_ember_interval;
-                    const float fire_amt = 0.5f * mods->stroke_ember_mul;
-                    const float edye[FLUID_MAX_CHANNELS] = {0.0f, fire_amt, 0.0f, 0.0f};
-                    g->internal.ember_tip_dist += mdist;
-                    int32_t bursts = 0;
-                    while (g->internal.ember_tip_dist >= interval && bursts < 8) {
-                        g->internal.ember_tip_dist -= interval;
-                        fluid_splat(&g->fluid, valid_in->mx, valid_in->my, 2.5f, 0.0f, 0.0f, edye);
-                        if (mods->twin_brush) {
-                            fluid_splat(&g->fluid, 2.0f * sx - valid_in->mx,
-                                        2.0f * sy - valid_in->my, 2.5f, 0.0f, 0.0f, edye);
-                        }
-                        ++bursts;
-                    }
-                    if (g->internal.ember_tip_dist >= interval) {
-                        g->internal.ember_tip_dist = fmodf(g->internal.ember_tip_dist, interval);
-                    }
+                    player_skills_emit_ember_trail(
+                        g, &g->internal.ember_tip_dist, mods->stroke_ember_interval,
+                        (EmberTrailSegment){
+                            .px = valid_in->pmx,
+                            .py = valid_in->pmy,
+                            .x = valid_in->mx,
+                            .y = valid_in->my,
+                            .vx = fx * 0.35f,
+                            .vy = fy * 0.35f,
+                            .rad = mods->stroke_ember_rad,
+                            .fire_amt = mods->stroke_ember_amt * mods->stroke_ember_mul,
+                        });
                 }
 
-                upgrades_fire_on_stroke(g, valid_in->mx, valid_in->my, fx, fy, mdist);
+                upgrades_fire_on_stroke(g, valid_in->pmx, valid_in->pmy, valid_in->mx, valid_in->my,
+                                        fx, fy, mdist);
             } else {
                 g->player.dry = true;
             }

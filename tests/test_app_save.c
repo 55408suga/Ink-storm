@@ -328,6 +328,46 @@ static void test_save_load_classifications(void)
     rmdir(dir);
 }
 
+static void write_text(const char *path, const char *text)
+{
+    FILE *fp = fopen(path, "wb");
+    TEST_ASSERT_NOT_NULL(fp);
+    TEST_ASSERT_EQUAL_size_t(strlen(text), fwrite(text, 1, strlen(text), fp));
+    TEST_ASSERT_EQUAL_INT(0, fclose(fp));
+}
+
+static void test_save_backup_keeps_first_unreadable_copy(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    char path[PATH_MAX + 64];
+    char bak[PATH_MAX + 64];
+    join_path(path, sizeof path, dir, "save.txt");
+    join_path(bak, sizeof bak, dir, "save.txt.bak");
+
+    write_text(path, "not a save file\n");
+    MetaState meta;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_CORRUPT, save_load(path, &meta));
+    TEST_ASSERT_TRUE(save_backup_unreadable(path));
+
+    char got[256];
+    size_t len = 0;
+    read_file_bytes(bak, got, sizeof got - 1, &len);
+    got[len] = '\0';
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+
+    write_text(path, "second corrupt copy\n");
+    TEST_ASSERT_FALSE(save_backup_unreadable(path));
+    TEST_ASSERT_TRUE(save_write(path, &meta, NULL));
+    read_file_bytes(bak, got, sizeof got - 1, &len);
+    got[len] = '\0';
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+
+    (void)remove(bak);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -337,5 +377,6 @@ int main(void)
     RUN_TEST(test_save_fault_injection_preserves_existing);
     RUN_TEST(test_save_permission_denied);
     RUN_TEST(test_save_load_classifications);
+    RUN_TEST(test_save_backup_keeps_first_unreadable_copy);
     return UNITY_END();
 }

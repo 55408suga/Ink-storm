@@ -622,7 +622,8 @@ static int run_showcase_snap_mode(GameState *game, RenderState *render, UiView *
     static const int k_snap_sub[6] = {0, 1, 0, 0, 2, 0};
 
     RenderTexture2D target = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
-    if (target.id == 0 || target.id == render->scene.id) {
+    if (!IsRenderTextureValid(target) || target.id == render->scene.id ||
+        target.id == render->bg_cache.id) {
         fputs("INKSTORM: failed to create offscreen render texture for showcase --snap\n", stderr);
         if (target.id != 0) {
             UnloadRenderTexture(target);
