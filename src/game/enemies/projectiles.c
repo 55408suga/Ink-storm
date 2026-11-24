@@ -297,7 +297,8 @@ void projectiles_step(GameState *g)
             EntityId best = {ECS_INVALID_INDEX, 0};
             for (uint32_t j = 0; j < hw; ++j) {
                 const EntityId eid = ecs_entity_at(&g->ecs, j);
-                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
+                if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid) ||
+                    proj_already_hit(proj, eid)) {
                     continue;
                 }
                 const TransformComp *etr = game_transform(g, eid);
@@ -428,7 +429,7 @@ void projectiles_step(GameState *g)
 
         if (!proj->deflected && hypotf(sx - tr->x, sy - tr->y) < shrine_proj_r) {
             const bool shrine_invuln = g->shrine_count > 0 && g->shrines[0].invuln_t > 0.0f;
-            if (g->internal.barrier_shield_ready && !shrine_invuln) {
+            if (g->internal.barrier_shield_ready && !shrine_invuln && !game_wave_goal_met(g)) {
                 block_with_barrier(g, tr->x, tr->y);
             } else {
                 combat_damage_shrine(g, tr->x, tr->y, 1);

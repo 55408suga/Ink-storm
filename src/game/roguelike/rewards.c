@@ -336,22 +336,31 @@ bool rewards_pick_reward(GameState *g, int32_t choice_index)
     return false;
 }
 
-bool rewards_reroll(GameState *g)
+static int32_t shown_choice_count(const GameState *g)
+{
+    const int32_t shown = g->run.reward.choice_count;
+    if (shown < 0) {
+        return 0;
+    }
+    return shown > GAME_MAX_REWARD_CHOICES ? GAME_MAX_REWARD_CHOICES : shown;
+}
+
+bool rewards_can_reroll(const GameState *g)
 {
     if (g == NULL || g->phase != RUN_PHASE_REWARD || g->run.rerolls_left <= 0 ||
         (g->run.reward.kind != REWARD_KIND_UPGRADE && g->run.reward.kind != REWARD_KIND_RELIC)) {
         return false;
     }
-    const RewardKind kind = g->run.reward.kind;
-    int32_t shown = g->run.reward.choice_count;
-    if (shown < 0) {
-        shown = 0;
-    } else if (shown > GAME_MAX_REWARD_CHOICES) {
-        shown = GAME_MAX_REWARD_CHOICES;
-    }
-    if (count_offerable(g, kind) <= shown) {
+    return count_offerable(g, g->run.reward.kind) > shown_choice_count(g);
+}
+
+bool rewards_reroll(GameState *g)
+{
+    if (!rewards_can_reroll(g)) {
         return false;
     }
+    const RewardKind kind = g->run.reward.kind;
+    const int32_t shown = shown_choice_count(g);
     int32_t previous[GAME_MAX_REWARD_CHOICES];
     memcpy(previous, g->run.reward.choice_ids, sizeof previous);
     --g->run.rerolls_left;

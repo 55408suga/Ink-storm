@@ -109,15 +109,6 @@ static void step_aftermath(GameState *g)
     g->player.painting = false;
     g->player.stroke_speed = 0.0f;
 
-    if (g->hitstop_t > 0.0f) {
-        g->hitstop_t -= INK_FIXED_DT;
-        if (g->hitstop_t <= 1e-4f) {
-            g->hitstop_t = 0.0f;
-        }
-        ++g->ticks;
-        return;
-    }
-
     fluid_step(&g->fluid, INK_FIXED_DT);
     fluid_sanitize_channels(&g->fluid);
     step_dissolving_entities(g);
@@ -149,6 +140,51 @@ static void step_aftermath(GameState *g)
         }
     }
     ++g->ticks;
+}
+
+/* Shrine break has already been ruled out by the caller. A winning tick that also started a
+ * hitstop (e.g. a final wall slam) defers this until the freeze ends, so the clear banner,
+ * purification and its sound play after the impact instead of during it. */
+static void finish_wave_if_won(GameState *g)
+{
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    if (g->run.wave_index == GAME_BOSS_WAVE_INDEX && g->run.boss_id.index == ECS_INVALID_INDEX) {
+        if (g->run.act_index < GAME_MAIN_ACT_COUNT) {
+            ++g->run.acts_cleared;
+        } else if (g->run.endless_acts_cleared < META_MAX_ENDLESS_ACTS) {
+            ++g->run.endless_acts_cleared;
+        }
+        g->internal.wave_clear_is_boss = true;
+        if ((g->run.act_index + 1 < g->run.act_count || g->run.endless_loop > 0) &&
+            g->shrine_count > 0) {
+            ShrineState *sh = &g->shrines[0];
+            sh->hp += 3;
+            if (sh->hp > sh->max_hp) {
+                sh->hp = sh->max_hp;
+            }
+        }
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_ACT_CLEAR,
+                                     .x = g->internal.last_boss_x,
+                                     .y = g->internal.last_boss_y,
+                                     .value = g->run.act_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+        return;
+    }
+    if (g->run.wave_index < GAME_BOSS_WAVE_INDEX && g->run.wave_kills >= g->run.wave_quota) {
+        g->internal.wave_clear_is_boss = false;
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_WAVE_CLEAR,
+                                     .x = sx,
+                                     .y = sy,
+                                     .value = g->run.wave_index,
+                                     .flags = 0,
+                                 });
+        combat_begin_wave_aftermath(g);
+    }
 }
 
 static void step_pending_impulses(GameState *g)
@@ -317,12 +353,16 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
         return;
     }
 
-    /* Step 2: Hitstop (ticks and phase_t advance; steps 3..8 skipped while active). */
+    /* Step 2: Hitstop (ticks and phase_t advance; steps 3..8 skipped while active). A clear that
+     * was deferred by the hitstop resolves on the tick the freeze ends. */
     g->phase_t += INK_FIXED_DT;
     if (g->hitstop_t > 0.0f) {
         g->hitstop_t -= INK_FIXED_DT;
         if (g->hitstop_t <= 1e-4f) {
             g->hitstop_t = 0.0f;
+            if (game_wave_goal_met(g)) {
+                finish_wave_if_won(g);
+            }
         }
         ++g->ticks;
         return;
@@ -370,40 +410,8 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
                                      .value = 0,
                                      .flags = 0,
                                  });
-    } else if (g->run.wave_index == GAME_BOSS_WAVE_INDEX &&
-               g->run.boss_id.index == ECS_INVALID_INDEX) {
-        if (g->run.act_index < GAME_MAIN_ACT_COUNT) {
-            ++g->run.acts_cleared;
-        } else if (g->run.endless_acts_cleared < META_MAX_ENDLESS_ACTS) {
-            ++g->run.endless_acts_cleared;
-        }
-        g->internal.wave_clear_is_boss = true;
-        if ((g->run.act_index + 1 < g->run.act_count || g->run.endless_loop > 0) &&
-            g->shrine_count > 0) {
-            ShrineState *sh = &g->shrines[0];
-            sh->hp += 3;
-            if (sh->hp > sh->max_hp) {
-                sh->hp = sh->max_hp;
-            }
-        }
-        (void)game_push_event(g, (GameEvent){
-                                     .type = EV_ACT_CLEAR,
-                                     .x = g->internal.last_boss_x,
-                                     .y = g->internal.last_boss_y,
-                                     .value = g->run.act_index,
-                                     .flags = 0,
-                                 });
-        combat_begin_wave_aftermath(g);
-    } else if (g->run.wave_index < GAME_BOSS_WAVE_INDEX && g->run.wave_kills >= g->run.wave_quota) {
-        g->internal.wave_clear_is_boss = false;
-        (void)game_push_event(g, (GameEvent){
-                                     .type = EV_WAVE_CLEAR,
-                                     .x = sx,
-                                     .y = sy,
-                                     .value = g->run.wave_index,
-                                     .flags = 0,
-                                 });
-        combat_begin_wave_aftermath(g);
+    } else if (g->hitstop_t <= 0.0f) {
+        finish_wave_if_won(g);
     }
 
     ++g->ticks;

@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "vfx_rules.h"
 
 #include "core.h"
 
@@ -157,6 +158,11 @@ static void push_stroke(RenderState *r, int32_t kind, float x, float y, float dx
     push_styled_stroke(r, kind, -1, x, y, dx, dy, radius, life);
 }
 
+static bool fx_budget_allows(const RenderState *r, GameEventType type)
+{
+    return vfx_event_bypasses_fx_budget(type) || r->major_fx_active < 2;
+}
+
 static void start_clear_banner(RenderState *r, TextId text)
 {
     r->clear_banner_t = 1.0f;
@@ -268,7 +274,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             push_bolt(r, ev->x, ev->y, ev->x2, ev->y2, 0.22f);
             break;
         case EV_THUNDERBURST:
-            if (r->major_fx_active < 2) {
+            if (fx_budget_allows(r, ev->type)) {
                 push_stroke(r, 5, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 72.0f, 0.40f);
                 r->major_fx_active++;
             }
@@ -279,7 +285,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             add_shake(r, 5.5f, 0.22f);
             break;
         case EV_CATACLYSM:
-            if (r->major_fx_active < 2) {
+            if (fx_budget_allows(r, ev->type)) {
                 push_stroke(r, 6, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 96.0f, 0.60f);
                 r->major_fx_active++;
             }
@@ -335,8 +341,10 @@ void render_consume_events(RenderState *r, const GameState *g)
             push_callout(r, TEXT_CALLOUT_SURGE, 0, ev->x, ev->y - 34.0f, PAL_KIN, false, 0.95f);
             break;
         case EV_BOSS_ENTER:
-            r->boss_banner_t = 2.0f;
-            r->boss_banner_id = (EnemyDefId)ev->value;
+            if (fx_budget_allows(r, ev->type)) {
+                r->boss_banner_t = 2.0f;
+                r->boss_banner_id = (EnemyDefId)ev->value;
+            }
             add_shake(r, 5.0f, 0.24f);
             break;
         case EV_BOSS_PHASE: {
@@ -344,7 +352,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             if (ben != NULL && ben->def_id == ENEMY_BOSS_RYU) {
                 r->ryu_awaken_t = 1.5f;
             }
-            if (r->major_fx_active < 2) {
+            if (fx_budget_allows(r, ev->type)) {
                 push_stroke(r, 4, ev->x, ev->y, 0.0f, 0.0f, 130.0f, 1.50f);
                 spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 18, 260.0f, 12.0f, 0.85f, PAL_SUMI_DARK,
                             true);
@@ -364,9 +372,10 @@ void render_consume_events(RenderState *r, const GameState *g)
             add_shake(r, 5.0f, 0.20f);
             break;
         }
-        /* Milestones bypass the major-effect budget: a busy screen must never swallow the
-         * moment that tells the player the wave or act is won. */
         case EV_WAVE_CLEAR:
+            if (!fx_budget_allows(r, ev->type)) {
+                break;
+            }
             push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 900.0f, 0.90f);
             push_seal(r, TEXT_SEAL_PURIFY, (float)INK_SCREEN_W * 0.5f + 210.0f, 300.0f, 62.0f,
                       SEAL_HAKUBUN, SEAL_PRIO_MILESTONE, 1.0f);
@@ -374,6 +383,9 @@ void render_consume_events(RenderState *r, const GameState *g)
             start_clear_banner(r, TEXT_CALLOUT_WAVE_CLEAR);
             break;
         case EV_ACT_CLEAR:
+            if (!fx_budget_allows(r, ev->type)) {
+                break;
+            }
             push_stroke(r, 2, 0.0f, (float)INK_SCREEN_H * 0.5f, 1.0f, 0.0f, (float)INK_SCREEN_W,
                         1.50f);
             push_stroke(r, 10, ev->x, ev->y, 0.0f, 0.0f, 1100.0f, 1.0f);
@@ -1148,31 +1160,15 @@ void render_vfx_draw_flash(RenderState *r, const UiView *ui)
     ink_fill_poly(r, screen, 4, pal_color_alpha(PAL_GOFUN, r->flash_t * 3.0f));
 }
 
-/* Only two seals fit on screen at once; milestone seals outrank reaction and UI stamps, and the
- * newest wins within a tier, instead of whichever happened to sit at the lowest array slot. */
-int32_t render_vfx_pick_seals(const RenderState *r, int32_t out[2])
+static int32_t pick_seals(const RenderState *r, int32_t out[2])
 {
-    out[0] = -1;
-    out[1] = -1;
+    VfxSealRank ranks[RENDER_MAX_SEALS];
     for (int32_t i = 0; i < RENDER_MAX_SEALS; ++i) {
         const VfxSeal *s = &r->seals[i];
-        if (!s->active || s->life <= 0.0f) {
-            continue;
-        }
-        for (int32_t slot = 0; slot < 2; ++slot) {
-            const VfxSeal *cur = out[slot] >= 0 ? &r->seals[out[slot]] : NULL;
-            const bool better = cur == NULL || s->priority > cur->priority ||
-                                (s->priority == cur->priority && s->age < cur->age);
-            if (better) {
-                if (slot == 0) {
-                    out[1] = out[0];
-                }
-                out[slot] = i;
-                break;
-            }
-        }
+        ranks[i] = (VfxSealRank){
+            .active = s->active && s->life > 0.0f, .priority = s->priority, .age = s->age};
     }
-    return (out[0] >= 0 ? 1 : 0) + (out[1] >= 0 ? 1 : 0);
+    return vfx_rank_top_two(ranks, RENDER_MAX_SEALS, out);
 }
 
 void render_vfx_draw_ui(RenderState *r, const GameState *g)
@@ -1182,7 +1178,7 @@ void render_vfx_draw_ui(RenderState *r, const GameState *g)
     }
 
     int32_t picked[2];
-    const int32_t seal_n = render_vfx_pick_seals(r, picked);
+    const int32_t seal_n = pick_seals(r, picked);
     for (int32_t k = seal_n - 1; k >= 0; --k) {
         const VfxSeal *s = &r->seals[picked[k]];
         const float u = ink_clampf(s->age / s->life, 0.0f, 1.0f);

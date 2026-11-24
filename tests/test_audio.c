@@ -446,20 +446,20 @@ static void render_brush(AudioState *a, int32_t style, bool dry, bool surge, int
 
 static void test_audio_brush_scrape_differs_per_brush_and_state(void)
 {
-    enum { N = AUDIO_SAMPLES_PER_TICK * 6 };
+    enum { N = AUDIO_SAMPLES_PER_TICK * 6, VARIANTS = 5 };
     AudioState *a = calloc(1, sizeof *a);
-    int16_t (*bufs)[N] = calloc(5, sizeof *bufs);
+    int16_t *bufs = calloc((size_t)N * VARIANTS, sizeof *bufs);
     TEST_ASSERT_NOT_NULL(a);
     TEST_ASSERT_NOT_NULL(bufs);
-    render_brush(a, BRUSH_STYLE_HEAVY, false, false, bufs[0], N);
-    render_brush(a, BRUSH_STYLE_EMBER, false, false, bufs[1], N);
-    render_brush(a, BRUSH_STYLE_QUILL, false, false, bufs[2], N);
-    render_brush(a, BRUSH_STYLE_HEAVY, true, false, bufs[3], N);
-    render_brush(a, BRUSH_STYLE_HEAVY, false, true, bufs[4], N);
-    for (int i = 0; i < 5; ++i) {
-        TEST_ASSERT_TRUE(peak_abs(bufs[i], N) > 200);
-        for (int j = i + 1; j < 5; ++j) {
-            TEST_ASSERT_TRUE(memcmp(bufs[i], bufs[j], sizeof bufs[i]) != 0);
+    render_brush(a, BRUSH_STYLE_HEAVY, false, false, bufs, N);
+    render_brush(a, BRUSH_STYLE_EMBER, false, false, bufs + N, N);
+    render_brush(a, BRUSH_STYLE_QUILL, false, false, bufs + 2 * N, N);
+    render_brush(a, BRUSH_STYLE_HEAVY, true, false, bufs + 3 * N, N);
+    render_brush(a, BRUSH_STYLE_HEAVY, false, true, bufs + 4 * N, N);
+    for (int i = 0; i < VARIANTS; ++i) {
+        TEST_ASSERT_TRUE(peak_abs(bufs + i * N, N) > 200);
+        for (int j = i + 1; j < VARIANTS; ++j) {
+            TEST_ASSERT_TRUE(memcmp(bufs + i * N, bufs + j * N, N * sizeof *bufs) != 0);
         }
     }
     free(bufs);

@@ -23,6 +23,14 @@ static void advance_aftermath(GameState *g)
     }
 }
 
+/* A reaction or slam on the winning tick starts a hitstop, and the clear resolves when it ends. */
+static void step_until_cleared(GameState *g)
+{
+    for (int i = 0; i < 10 && g->phase == RUN_PHASE_PLAYING; ++i) {
+        game_step(g, NULL, NULL);
+    }
+}
+
 static void advance_act_transition(GameState *g)
 {
     for (int i = 0; i < 130 && g->phase == RUN_PHASE_ACT_TRANSITION; ++i) {
@@ -86,7 +94,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
     g->shrines[0].hp = g->shrines[0].max_hp - 4;
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
 
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_WAVE_AFTERMATH, g->phase);
     TEST_ASSERT_EQUAL_INT32(1, g->run.acts_cleared);
@@ -130,7 +138,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     assert_boss_alive_kind(g, ENEMY_BOSS_NUE);
     g->shrines[0].hp = g->shrines[0].max_hp - 1;
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     TEST_ASSERT_EQUAL_INT32(g->shrines[0].max_hp, g->shrines[0].hp);
     TEST_ASSERT_EQUAL_INT32(2, g->run.acts_cleared);
 
@@ -160,7 +168,7 @@ static void test_three_acts_boss_relic_and_transitions(void)
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
     assert_boss_alive_kind(g, ENEMY_BOSS_RYU);
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     TEST_ASSERT_EQUAL_INT32(3, g->run.acts_cleared);
 
     advance_aftermath(g);
@@ -183,7 +191,7 @@ static void test_boss_relic_fallback_advances_act(void)
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
     assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
     game_debug_force_wave_clear(g);
-    game_step(g, NULL, NULL);
+    step_until_cleared(g);
     advance_aftermath(g);
 
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_REWARD, g->phase);

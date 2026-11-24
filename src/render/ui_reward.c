@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "roguelike/rewards.h"
 
 #include "core.h"
 
@@ -455,9 +456,7 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     }
 
     if (layout.has_reroll) {
-        const bool can_reroll =
-            (rw->kind == REWARD_KIND_UPGRADE || rw->kind == REWARD_KIND_RELIC) &&
-            g->run.rerolls_left > 0;
+        const bool can_reroll = rewards_can_reroll(g);
         const bool hov = hover == UI_HOVER_REROLL && can_reroll;
         ink_fill_panel(r, layout.reroll_rect, can_reroll ? PAL_GOFUN : PAL_SUMI_CLEAR,
                        can_reroll ? 0.94f : 0.45f,

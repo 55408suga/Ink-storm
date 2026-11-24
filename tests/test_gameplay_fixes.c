@@ -116,6 +116,21 @@ static void test_maelstrom_bind_collision_damage_waits_for_hit_cooldown(void)
     game_destroy(g);
 }
 
+static void test_recycled_slot_starts_without_maelstrom_state(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    const EntityId first = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 400.0f, 300.0f);
+    g->internal.maelstrom_bind_t[first.index] = 1.0f;
+    g->internal.maelstrom_hit_cd[first.index] = 0.45f;
+    ecs_destroy(&g->ecs, first);
+    ecs_flush_destroy(&g->ecs);
+    const EntityId next = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 500.0f, 300.0f);
+    TEST_ASSERT_EQUAL_UINT32(first.index, next.index);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->internal.maelstrom_bind_t[next.index]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->internal.maelstrom_hit_cd[next.index]);
+    game_destroy(g);
+}
+
 static void test_piercing_burning_shot_hits_each_target_once(void)
 {
     GameState *g = arena(BRUSH_STYLE_HEAVY);
@@ -135,6 +150,28 @@ static void test_piercing_burning_shot_hits_each_target_once(void)
     if (ecs_is_alive(&g->ecs, shot)) {
         TEST_ASSERT_EQUAL_INT32(2, game_proj(g, shot)->pierce);
     }
+    game_destroy(g);
+}
+
+static void test_piercing_shot_homes_on_fresh_targets_after_a_hit(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    const EntityId boss = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 300.0f);
+    const EntityId fresh = sturdy_enemy(g, ENEMY_KAMAITACHI, 980.0f, 300.0f, 1000);
+    const int32_t boss_hp0 = game_health(g, boss)->hp;
+    const EntityId shot = projectiles_spawn(g, PROJ_ARROW, 560.0f, 300.0f, 600.0f, 0.0f);
+    ProjComp *p = game_proj_mut(g, shot);
+    p->deflected = true;
+    p->burning = true;
+    p->pierce = 3;
+    for (int t = 0; t < 60 && ecs_is_alive(&g->ecs, shot); ++t) {
+        game_transform_mut(g, fresh)->x = 980.0f;
+        game_transform_mut(g, fresh)->y = 300.0f;
+        projectiles_step(g);
+        ecs_flush_destroy(&g->ecs);
+    }
+    TEST_ASSERT_EQUAL_INT32(boss_hp0 - 40, game_health(g, boss)->hp);
+    TEST_ASSERT_EQUAL_INT32(1000 - 40, game_health(g, fresh)->hp);
     game_destroy(g);
 }
 
@@ -202,6 +239,14 @@ static void test_barrier_ward_is_kept_while_shrine_is_invulnerable(void)
     TEST_ASSERT_FALSE(g->internal.barrier_shield_ready);
     TEST_ASSERT_EQUAL_INT32(hp0, g->shrines[0].hp);
     TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SHRINE_HIT, EVF_SHRINE_BLOCKED));
+
+    g->internal.barrier_shield_ready = true;
+    g->run.wave_kills = g->run.wave_quota;
+    (void)projectiles_spawn(g, PROJ_ARROW, sx + 20.0f, sy, -200.0f, 0.0f);
+    projectiles_step(g);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_TRUE(g->internal.barrier_shield_ready);
+    TEST_ASSERT_EQUAL_INT32(hp0, g->shrines[0].hp);
     game_destroy(g);
 }
 
@@ -240,6 +285,7 @@ static void test_reroll_refuses_when_no_new_choice_exists(void)
     g->phase = RUN_PHASE_REWARD;
     g->run.rerolls_left = 1;
     TEST_ASSERT_EQUAL_INT32(3, g->run.reward.choice_count);
+    TEST_ASSERT_FALSE(rewards_can_reroll(g));
     TEST_ASSERT_FALSE(rewards_reroll(g));
     TEST_ASSERT_EQUAL_INT32(1, g->run.rerolls_left);
     game_destroy(g);
@@ -268,7 +314,9 @@ static void test_reroll_brings_in_the_unseen_choice(void)
         }
     }
     TEST_ASSERT_TRUE(unseen >= 0);
+    TEST_ASSERT_TRUE(rewards_can_reroll(g));
     TEST_ASSERT_TRUE(rewards_reroll(g));
+    TEST_ASSERT_FALSE(rewards_can_reroll(g));
     TEST_ASSERT_EQUAL_INT32(0, g->run.rerolls_left);
     bool offered = false;
     for (int i = 0; i < g->run.reward.choice_count; ++i) {
@@ -367,27 +415,44 @@ static void test_wave_clear_purifies_each_remaining_enemy(void)
     game_destroy(g);
 }
 
-static void test_aftermath_holds_hitstop_and_freezes_chain_and_surge(void)
+static void test_final_kill_hitstop_plays_before_the_clear(void)
 {
     GameState *g = arena(BRUSH_STYLE_HEAVY);
-    g->run.wave_kills = g->run.wave_quota;
-    game_step(g, NULL, NULL);
-    TEST_ASSERT_EQUAL_INT(RUN_PHASE_WAVE_AFTERMATH, g->phase);
-    g->hitstop_t = 0.05f;
+    g->internal.spawn_cd = 999.0f;
+    const EntityId last = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 52.0f, 400.0f);
+    game_velocity_mut(g, last)->vx = -420.0f;
+    game_velocity_mut(g, last)->vy = 0.0f;
+    game_status_mut(g, last)->knockback_t = 1.0f;
+    g->run.wave_kills = g->run.wave_quota - 1;
     g->run.chain = 3;
     g->run.chain_t = 1.0f;
     g->player.surge_t = 2.0f;
-    for (int t = 0; t < 3; ++t) {
+
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, last));
+    TEST_ASSERT_EQUAL_INT32(g->run.wave_quota, g->run.wave_kills);
+    TEST_ASSERT_TRUE(g->hitstop_t > 0.0f);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_WAVE_CLEAR, 0));
+
+    int ticks_to_clear = 0;
+    for (int t = 1; t <= 10 && g->phase == RUN_PHASE_PLAYING; ++t) {
         game_step(g, NULL, NULL);
+        ticks_to_clear = t;
     }
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, g->phase_t);
+    TEST_ASSERT_EQUAL_INT(3, ticks_to_clear);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_WAVE_AFTERMATH, g->phase);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_WAVE_CLEAR, 0));
+
+    const float chain_t = g->run.chain_t;
+    const float surge_t = g->player.surge_t;
     for (int t = 0; t < 30; ++t) {
         game_step(g, NULL, NULL);
     }
     TEST_ASSERT_TRUE(g->phase_t > 0.4f);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, g->run.chain_t);
-    TEST_ASSERT_EQUAL_INT32(3, g->run.chain);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 2.0f, g->player.surge_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, chain_t, g->run.chain_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, surge_t, g->player.surge_t);
+    TEST_ASSERT_TRUE(g->run.chain_t > 0.0f);
     game_destroy(g);
 }
 
@@ -508,7 +573,9 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_maelstrom_bind_collision_damage_waits_for_hit_cooldown);
+    RUN_TEST(test_recycled_slot_starts_without_maelstrom_state);
     RUN_TEST(test_piercing_burning_shot_hits_each_target_once);
+    RUN_TEST(test_piercing_shot_homes_on_fresh_targets_after_a_hit);
     RUN_TEST(test_gale_reaches_slam_speed_for_heavy_and_fanned_targets);
     RUN_TEST(test_undeflected_shot_passing_shrine_stays_hostile_without_fluid);
     RUN_TEST(test_barrier_ward_is_kept_while_shrine_is_invulnerable);
@@ -520,7 +587,7 @@ int main(void)
     RUN_TEST(test_wind_return_repels_approaching_walker);
     RUN_TEST(test_met_quota_blocks_shrine_damage_and_spawns);
     RUN_TEST(test_wave_clear_purifies_each_remaining_enemy);
-    RUN_TEST(test_aftermath_holds_hitstop_and_freezes_chain_and_surge);
+    RUN_TEST(test_final_kill_hitstop_plays_before_the_clear);
     RUN_TEST(test_gale_cooldown_clamps_to_shortened_total);
     RUN_TEST(test_wave_start_clears_lingering_field_state);
     RUN_TEST(test_ryu_orbs_start_on_screen_and_offscreen_parts_are_untargetable);

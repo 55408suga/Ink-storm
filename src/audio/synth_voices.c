@@ -236,41 +236,45 @@ static float step_single_voice(AudioVoice *v, float nz)
         break;
     }
     case AUDIO_VOICE_CYCLONE_SWIRL: {
-        /* param: 0 Heavy (low churn), 1 Ember (crackling roar), 2 Quill (airy rising whistle) */
+        /* param carries the BrushStyleId of the caster. */
         const int style = (int)lroundf(v->param);
-        const float lp_k = style == 0 ? 0.07f : (style == 2 ? 0.18f : 0.10f);
+        const bool heavy = style == BRUSH_STYLE_HEAVY;
+        const bool quill = style == BRUSH_STYLE_QUILL;
+        const float lp_k = heavy ? 0.07f : (quill ? 0.18f : 0.10f);
         v->lp += lp_k * (nz - v->lp);
         v->bp += 0.045f * (v->lp - v->bp);
-        const float f = style == 0   ? 105.0f + 190.0f * (1.0f - v->env)
-                        : style == 2 ? 230.0f + 420.0f * (1.0f - v->env)
-                                     : 145.0f + 260.0f * (1.0f - v->env);
+        const float f = heavy   ? 105.0f + 190.0f * (1.0f - v->env)
+                        : quill ? 230.0f + 420.0f * (1.0f - v->env)
+                                : 145.0f + 260.0f * (1.0f - v->env);
         v->phase += f / sr;
         float body = sinf(v->phase * k_two_pi) * 0.34f + (v->lp - v->bp) * 0.95f;
-        if (style == 1 && nz > 0.86f) {
+        if (style == BRUSH_STYLE_EMBER && nz > 0.86f) {
             body += nz * 0.45f;
-        } else if (style == 2) {
+        } else if (quill) {
             v->phase2 += (f * 3.01f) / sr;
             body += sinf(v->phase2 * k_two_pi) * 0.14f * v->env;
         }
-        out = body * v->env * (style == 0 ? 0.60f : 0.52f);
+        out = body * v->env * (heavy ? 0.60f : 0.52f);
         v->env *= 0.99968f;
         break;
     }
     case AUDIO_VOICE_GALE_SLASH: {
         const int style = (int)lroundf(v->param);
-        v->lp += (style == 0 ? 0.10f : (style == 2 ? 0.26f : 0.16f)) * (nz - v->lp);
-        const float f = style == 0   ? 120.0f + 320.0f * v->env
-                        : style == 2 ? 260.0f + 640.0f * v->env
-                                     : 175.0f + 460.0f * v->env;
+        const bool heavy = style == BRUSH_STYLE_HEAVY;
+        const bool quill = style == BRUSH_STYLE_QUILL;
+        v->lp += (heavy ? 0.10f : (quill ? 0.26f : 0.16f)) * (nz - v->lp);
+        const float f = heavy   ? 120.0f + 320.0f * v->env
+                        : quill ? 260.0f + 640.0f * v->env
+                                : 175.0f + 460.0f * v->env;
         v->phase += f / sr;
         float body = (nz - v->lp) * 0.56f + sinf(v->phase * k_two_pi) * 0.28f;
-        if (style == 0) {
+        if (heavy) {
             body += sinf(v->phase * k_two_pi * 0.5f) * 0.22f * v->env;
-        } else if (style == 1 && nz > 0.82f) {
+        } else if (style == BRUSH_STYLE_EMBER && nz > 0.82f) {
             body += nz * 0.40f * v->env;
         }
         out = body * v->env * 0.50f;
-        v->env *= style == 2 ? 0.99915f : 0.99935f;
+        v->env *= quill ? 0.99915f : 0.99935f;
         break;
     }
     case AUDIO_VOICE_ORB_DROP: {

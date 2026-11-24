@@ -260,7 +260,10 @@ static void init_save_context(AppRunContext *ctx, const CliOptions *opts)
         fprintf(stderr, "INKSTORM: save file '%s' unreadable (%s); using defaults\n",
                 ctx->save_path, res == SAVE_LOAD_CORRUPT ? "corrupt" : "io error");
     }
-    if (res == SAVE_LOAD_CORRUPT && save_backup_unreadable(ctx->save_path)) {
+    /* An I/O failure mid-read also leaves defaults in memory that would overwrite the file; the
+     * backup refuses existing .bak files and cleans up partial copies, so trying it is safe. */
+    if ((res == SAVE_LOAD_CORRUPT || res == SAVE_LOAD_IO_ERROR) &&
+        save_backup_unreadable(ctx->save_path)) {
         fprintf(stderr, "INKSTORM: kept a copy of the unreadable save at '%s.bak'\n",
                 ctx->save_path);
     }

@@ -75,7 +75,6 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index);
 void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui);
 void render_vfx_draw_flash(RenderState *r, const UiView *ui);
 void render_vfx_draw_ui(RenderState *r, const GameState *g);
-int32_t render_vfx_pick_seals(const RenderState *r, int32_t out[2]);
 Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
 
 /* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, ui_lobby.c, ui_shop.c, ui_pause.c,

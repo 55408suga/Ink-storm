@@ -268,6 +268,10 @@ EntityId game_spawn_entity(GameState *g, uint64_t comp_mask)
         return invalid;
     }
     zero_component_slots(g, id.index, comp_mask);
+    /* Per-slot timers are indexed by ECS slot, so a recycled slot must not inherit the previous
+     * occupant's Maelstrom bind (stun) or collision cooldown. */
+    g->internal.maelstrom_bind_t[id.index] = 0.0f;
+    g->internal.maelstrom_hit_cd[id.index] = 0.0f;
     if (!ecs_add_mask(&g->ecs, id, comp_mask)) {
         ecs_destroy(&g->ecs, id);
         return invalid;
