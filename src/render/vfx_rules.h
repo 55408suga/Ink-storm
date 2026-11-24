@@ -2,7 +2,6 @@
 #define INK_RENDER_VFX_RULES_H
 
 #include "game.h"
-#include "game_events.h"
 
 #include <stdbool.h>
 #include <stdint.h>

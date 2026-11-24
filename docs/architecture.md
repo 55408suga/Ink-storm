@@ -28,7 +28,9 @@
     - `audio.h` → `struct GameState` の前方宣言のみ（`game.h` を include しない）
     - `render.h` → `raylib.h`, `game.h`, `ui_view.h`
     - `ui_view.h` → `game_ids.h`, `meta.h`（raylib 非依存）
-    - `cli.h` / `frame_clock.h` / `input_latch.h` / `menu_nav.h` / `hint_queue.h` / `bgm_fade.h` / `save.h` / `text_table.h` / `text_layout.h` / `vfx_rules.h` → 標準ヘッダと `game.h` / `meta.h` / `ui_view.h` のみ（raylib 非依存）
+    - `cli.h` / `frame_clock.h` / `input_latch.h` / `hint_queue.h` / `save.h` / `text_table.h` / `text_layout.h` / `vfx_rules.h` → 標準ヘッダと `game.h` / `meta.h` / `game_ids.h` のみ（raylib 非依存）
+    - `menu_nav.h` → 標準ヘッダと `input_map.h` / `ui_view.h` のみ（`input_map.h` も `game.h` / `input_latch.h` / `ui_view.h` だけに依存し raylib 非依存）
+    - `bgm_fade.h` → `audio.h` のみ（`BgmTrack` を参照するため。raylib 非依存）
     - 全モジュールのヘッダファイル名は `src/` 全体および raylib ヘッダ名と重複させない。
 - **`ink_render` が所有するもの**:
   - 純粋な見た目 VFX（火花パーティクル、雷ボルト残像、渦印リング演出、画面シェイク、日本語ポップアップ文字／コールアウト）はすべて `RenderState` 内に固定長プールとして持つ。

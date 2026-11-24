@@ -419,6 +419,40 @@ static void test_save_backup_keeps_every_distinct_unreadable_copy(void)
     (void)rmdir(dir);
 }
 
+static void test_save_backup_skips_symlinked_slot_pointing_at_the_save(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    char path[PATH_MAX + 64];
+    char bak[PATH_MAX + 64];
+    char bak1[PATH_MAX + 64];
+    join_path(path, sizeof path, dir, "save.txt");
+    join_path(bak, sizeof bak, dir, "save.txt.bak");
+    join_path(bak1, sizeof bak1, dir, "save.txt.bak.1");
+    write_text(path, "not a save file\n");
+    TEST_ASSERT_EQUAL_INT(0, symlink(path, bak));
+
+    char kept[PATH_MAX + 64];
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_CREATED, save_backup_unreadable(path, kept, sizeof kept));
+    TEST_ASSERT_EQUAL_STRING(bak1, kept);
+    struct stat st;
+    TEST_ASSERT_EQUAL_INT(0, lstat(bak, &st));
+    TEST_ASSERT_TRUE(S_ISLNK(st.st_mode));
+
+    MetaState meta;
+    meta_init_default(&meta);
+    TEST_ASSERT_TRUE(save_write(path, &meta, NULL));
+    char got[256];
+    read_text(bak1, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("not a save file\n", got);
+    TEST_ASSERT_EQUAL_INT(0, count_temp_backups(dir));
+
+    (void)remove(bak1);
+    (void)remove(bak);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
 static void test_save_backup_without_hard_links_fails_without_replacing(void)
 {
     char dir[PATH_MAX];
@@ -486,6 +520,7 @@ int main(void)
     RUN_TEST(test_save_load_classifications);
     RUN_TEST(test_save_backup_keeps_every_distinct_unreadable_copy);
     RUN_TEST(test_save_backup_failure_publishes_nothing);
+    RUN_TEST(test_save_backup_skips_symlinked_slot_pointing_at_the_save);
     RUN_TEST(test_save_backup_without_hard_links_fails_without_replacing);
     return UNITY_END();
 }

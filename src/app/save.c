@@ -299,8 +299,10 @@ SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, s
             break;
         }
         struct stat st;
-        if (stat(candidate, &st) == 0) {
-            if (files_identical(path, candidate)) {
+        /* lstat() so a symlinked slot is never taken as a kept copy: its target can be the save
+         * itself, which the next save_write() replaces. */
+        if (lstat(candidate, &st) == 0) {
+            if (S_ISREG(st.st_mode) && files_identical(path, candidate)) {
                 result = SAVE_BACKUP_ALREADY_KEPT;
                 if (out_path != NULL) {
                     (void)copy_checked(out_path, out_cap, "%s", candidate);
