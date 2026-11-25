@@ -631,51 +631,109 @@ static double rms_of(const int16_t *samples, size_t n)
     return n > 0 ? sqrt(sum / (double)n) : 0.0;
 }
 
-static void test_audio_brush_rides_through_a_still_tick_and_a_one_tick_lift(void)
-{
-    enum { TICKS = 60, STILL_TICK = 20, LIFT_TICK = 30, RELEASE_TICK = 40 };
-    GameState *g = game_create(NULL);
-    AudioState *a = calloc(1, sizeof *a);
-    int16_t *buf = calloc((size_t)TICKS * AUDIO_SAMPLES_PER_TICK, sizeof *buf);
-    TEST_ASSERT_NOT_NULL(g);
-    TEST_ASSERT_NOT_NULL(a);
-    TEST_ASSERT_NOT_NULL(buf);
-    audio_init(a, UINT64_C(11));
-    audio_set_volumes(a, 100, 0, 100);
-    audio_set_lobby_mode(a, true);
-    g->config.brush_style = BRUSH_STYLE_HEAVY;
-    g->event_count = 0;
+typedef struct {
+    GameState *g;
+    AudioState *a;
+    int16_t tick[AUDIO_SAMPLES_PER_TICK];
+} BrushRig;
 
-    double tick_rms[TICKS];
-    for (int t = 0; t < TICKS; ++t) {
-        g->player.painting = t < RELEASE_TICK && t != LIFT_TICK;
-        g->player.stroke_speed = t == STILL_TICK ? 0.0f : 600.0f;
-        audio_consume_lobby_events(a, g);
-        int16_t *tick = buf + (size_t)t * AUDIO_SAMPLES_PER_TICK;
-        audio_render(a, tick, AUDIO_SAMPLES_PER_TICK);
-        tick_rms[t] = rms_of(tick, AUDIO_SAMPLES_PER_TICK);
+static BrushRig *brush_rig_create(void)
+{
+    BrushRig *rig = calloc(1, sizeof *rig);
+    TEST_ASSERT_NOT_NULL(rig);
+    rig->g = game_create(NULL);
+    rig->a = calloc(1, sizeof *rig->a);
+    TEST_ASSERT_NOT_NULL(rig->g);
+    TEST_ASSERT_NOT_NULL(rig->a);
+    audio_init(rig->a, UINT64_C(11));
+    audio_set_volumes(rig->a, 100, 0, 100);
+    audio_set_lobby_mode(rig->a, true);
+    rig->g->config.brush_style = BRUSH_STYLE_HEAVY;
+    rig->g->event_count = 0;
+    return rig;
+}
+
+static void brush_rig_destroy(BrushRig *rig)
+{
+    TEST_ASSERT_TRUE(audio_validate_finite(rig->a));
+    game_destroy(rig->g);
+    free(rig->a);
+    free(rig);
+}
+
+static void brush_rig_queue(BrushRig *rig, bool painting, float stroke_speed)
+{
+    rig->g->player.painting = painting;
+    rig->g->player.stroke_speed = stroke_speed;
+    audio_consume_lobby_events(rig->a, rig->g);
+}
+
+static double brush_rig_tick(BrushRig *rig, bool painting, float stroke_speed)
+{
+    brush_rig_queue(rig, painting, stroke_speed);
+    audio_render(rig->a, rig->tick, AUDIO_SAMPLES_PER_TICK);
+    return rms_of(rig->tick, AUDIO_SAMPLES_PER_TICK);
+}
+
+static double brush_rig_steady_rms(BrushRig *rig, float stroke_speed)
+{
+    for (int t = 0; t < 12; ++t) {
+        (void)brush_rig_tick(rig, true, stroke_speed);
     }
     double steady = 0.0;
-    for (int t = 12; t < 18; ++t) {
-        steady += tick_rms[t] / 6.0;
+    for (int t = 0; t < 6; ++t) {
+        steady += brush_rig_tick(rig, true, stroke_speed) / 6.0;
     }
     TEST_ASSERT_TRUE(steady > 200.0);
-    TEST_ASSERT_TRUE(tick_rms[STILL_TICK] > 0.8 * steady);
-    TEST_ASSERT_TRUE(tick_rms[STILL_TICK + 1] > 0.8 * steady);
-    TEST_ASSERT_TRUE(tick_rms[LIFT_TICK] > 0.8 * steady);
-    TEST_ASSERT_TRUE(tick_rms[LIFT_TICK + 1] > 0.8 * steady);
-    TEST_ASSERT_TRUE(tick_rms[TICKS - 1] < 0.5 * steady);
+    return steady;
+}
 
-    g->player.painting = false;
-    for (int t = 0; t < 120; ++t) {
-        audio_consume_lobby_events(a, g);
-        audio_render(a, buf, AUDIO_SAMPLES_PER_TICK);
+static void test_audio_brush_rides_through_a_still_tick_while_held(void)
+{
+    BrushRig *rig = brush_rig_create();
+    const double steady = brush_rig_steady_rms(rig, 600.0f);
+
+    TEST_ASSERT_TRUE(brush_rig_tick(rig, true, 0.0f) > 0.8 * steady);
+    TEST_ASSERT_TRUE(brush_rig_tick(rig, true, 600.0f) > 0.8 * steady);
+    brush_rig_destroy(rig);
+}
+
+static void test_audio_brush_releases_from_the_first_sample_after_a_lift(void)
+{
+    BrushRig *rig = brush_rig_create();
+    (void)brush_rig_steady_rms(rig, 600.0f);
+    const float held_env = rig->a->brush_env;
+
+    brush_rig_queue(rig, false, 0.0f);
+    audio_render(rig->a, rig->tick, 1u);
+    TEST_ASSERT_TRUE(rig->a->brush_env < held_env);
+    audio_render(rig->a, rig->tick, AUDIO_SAMPLES_PER_TICK - 1u);
+    TEST_ASSERT_TRUE(rig->a->brush_env < 0.65f * held_env);
+
+    for (int t = 1; t < 6; ++t) {
+        (void)brush_rig_tick(rig, false, 0.0f);
     }
-    TEST_ASSERT_EQUAL_INT32(0, peak_abs(buf, AUDIO_SAMPLES_PER_TICK));
-    TEST_ASSERT_TRUE(audio_validate_finite(a));
-    free(buf);
-    free(a);
-    game_destroy(g);
+    TEST_ASSERT_TRUE(rig->a->brush_env < 0.05f * held_env);
+
+    for (int t = 0; t < 120; ++t) {
+        (void)brush_rig_tick(rig, false, 0.0f);
+    }
+    TEST_ASSERT_EQUAL_INT32(0, peak_abs(rig->tick, AUDIO_SAMPLES_PER_TICK));
+    brush_rig_destroy(rig);
+}
+
+static void test_audio_fast_stroke_from_silence_reaches_full_level_by_its_second_tick(void)
+{
+    BrushRig *rig = brush_rig_create();
+    for (int t = 0; t < 4; ++t) {
+        (void)brush_rig_tick(rig, false, 0.0f);
+    }
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, rig->a->brush_env);
+    (void)brush_rig_tick(rig, true, 900.0f);
+    const double second_tick = brush_rig_tick(rig, true, 900.0f);
+    const double steady = brush_rig_steady_rms(rig, 900.0f);
+    TEST_ASSERT_TRUE(second_tick > 0.9 * steady);
+    brush_rig_destroy(rig);
 }
 
 static void fill_test_loop(int16_t *pcm, size_t n, uint64_t seed)
@@ -1049,7 +1107,9 @@ int main(void)
     RUN_TEST(test_audio_batched_same_kind_voices_match_per_tick);
     RUN_TEST(test_audio_scene_change_drops_unplayed_combat_voice_but_keeps_ui);
     RUN_TEST(test_audio_skill_voices_reflect_dry_and_surge);
-    RUN_TEST(test_audio_brush_rides_through_a_still_tick_and_a_one_tick_lift);
+    RUN_TEST(test_audio_brush_rides_through_a_still_tick_while_held);
+    RUN_TEST(test_audio_brush_releases_from_the_first_sample_after_a_lift);
+    RUN_TEST(test_audio_fast_stroke_from_silence_reaches_full_level_by_its_second_tick);
     RUN_TEST(test_audio_brush_loops_shape_the_stroke_and_fall_back_cleanly);
     RUN_TEST(test_audio_skill_voices_blend_attached_loops);
     RUN_TEST(test_audio_pcm_read_stays_between_its_central_samples);

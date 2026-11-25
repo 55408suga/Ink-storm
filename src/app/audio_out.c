@@ -101,7 +101,7 @@ void audio_out_init(AudioOut *out, AudioState *audio)
     }
     PlayAudioStream(out->stream);
     /* The SE stream size is global state; music streams decoded with it underrun and stutter
-     * every ~46 ms, so restore a roomy default before any OGG is opened. */
+     * every ~23 ms, so restore a roomy default before any OGG is opened. */
     SetAudioStreamBufferSizeDefault(AUDIO_MUSIC_STREAM_FRAMES);
     out->ready = true;
     bgm_fade_reset(&out->fade);

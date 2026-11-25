@@ -200,8 +200,8 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
     const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
     const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
 
-    const float onset = audio_smoothstep(0.0f, 0.030f, t);
-    const float bloom = 0.55f + 0.45f * audio_smoothstep(0.02f, 0.24f, t);
+    const float onset = audio_smoothstep(0.0f, 0.010f, t);
+    const float bloom = 0.78f + 0.22f * audio_smoothstep(0.01f, 0.09f, t);
     if (t > 0.18f) {
         v->env *= 0.99984f;
     }
@@ -249,7 +249,7 @@ static float gale_slash_sample(const AudioState *audio, AudioVoice *v, float nz)
     const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
     const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
 
-    const float onset = audio_smoothstep(0.0f, 0.015f, t);
+    const float onset = audio_smoothstep(0.0f, 0.006f, t);
     v->env *= k_decay[style];
     const float rise = audio_smoothstep(0.0f, 0.07f, t);
     const float fall = audio_smoothstep(0.08f, 0.42f, t);

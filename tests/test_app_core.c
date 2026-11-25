@@ -423,6 +423,60 @@ static void test_catch_up_frame_casts_skills_at_the_sampled_cursor_and_aim(void)
     }
 }
 
+typedef struct {
+    float aim_x, aim_y;
+    GameEvent gale;
+} GaleAim;
+
+static GaleAim press_gale_after_a_small_move(int32_t move_ticks)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(7));
+    game_init_sandbox(g, &cfg);
+
+    InputLatch l;
+    input_latch_init(&l, 600.0f, 360.0f);
+    RawInput raw = make_raw(640.0f, 360.0f);
+    input_latch_feed(&l, &raw);
+    const BrushInput aim_right = input_latch_take_tick(&l);
+    game_step_sandbox(g, &aim_right);
+
+    raw = make_raw(643.0f, 363.0f);
+    input_latch_feed(&l, &raw);
+    for (int32_t t = 0; t < move_ticks; ++t) {
+        const BrushInput in = input_latch_take_subtick(&l, move_ticks - t);
+        game_step_sandbox(g, &in);
+    }
+
+    raw.gale_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput press = input_latch_take_subtick(&l, 1);
+    game_step_sandbox(g, &press);
+    SkillCasts casts = {0};
+    record_skill_casts(g, &casts);
+    const GaleAim out = {.aim_x = g->player.aim_x, .aim_y = g->player.aim_y, .gale = casts.gale};
+    game_destroy(g);
+    TEST_ASSERT_TRUE(casts.gale_seen);
+    return out;
+}
+
+static void test_small_move_on_a_catch_up_frame_still_turns_the_next_gale(void)
+{
+    const GaleAim one = press_gale_after_a_small_move(1);
+    TEST_ASSERT_TRUE(one.aim_y > 0.1f);
+    TEST_ASSERT_TRUE(one.gale.y2 > 0.1f);
+
+    static const int32_t k_catch_up[] = {2, 3};
+    for (size_t c = 0; c < sizeof k_catch_up / sizeof k_catch_up[0]; ++c) {
+        const GaleAim late = press_gale_after_a_small_move(k_catch_up[c]);
+        TEST_ASSERT_EQUAL_FLOAT(one.aim_x, late.aim_x);
+        TEST_ASSERT_EQUAL_FLOAT(one.aim_y, late.aim_y);
+        TEST_ASSERT_EQUAL_FLOAT(one.gale.x2, late.gale.x2);
+        TEST_ASSERT_EQUAL_FLOAT(one.gale.y2, late.gale.y2);
+    }
+}
+
 static void test_latch_single_subtick_matches_take_tick(void)
 {
     InputLatch a;
@@ -849,6 +903,7 @@ int main(void)
     RUN_TEST(test_latch_catch_up_ticks_share_motion_without_a_skill_press);
     RUN_TEST(test_latch_skill_press_takes_the_whole_catch_up_motion_once);
     RUN_TEST(test_catch_up_frame_casts_skills_at_the_sampled_cursor_and_aim);
+    RUN_TEST(test_small_move_on_a_catch_up_frame_still_turns_the_next_gale);
     RUN_TEST(test_latch_single_subtick_matches_take_tick);
     RUN_TEST(test_latch_edge_press_held_and_coalesced);
     RUN_TEST(test_latch_reward_commands_and_priority);

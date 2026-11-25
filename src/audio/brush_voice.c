@@ -7,12 +7,12 @@
 #include <math.h>
 #include <string.h>
 
-enum { BRUSH_HOLD_SAMPLES = 2000 };
+enum { BRUSH_HOLD_SAMPLES = 1200 };
 
-static const float k_brush_attack = 0.00055f;
-static const float k_brush_release = 0.00015f;
-static const float k_brush_fast_release = 0.0009f;
-static const float k_brush_speed_glide = 0.00025f;
+static const float k_brush_attack = 0.0022f;
+static const float k_brush_release = 0.00075f;
+static const float k_brush_fast_release = 0.0020f;
+static const float k_brush_speed_glide = 0.0012f;
 static const float k_surge_bloom = 0.00025f;
 static const float k_surge_fade = 0.000087f;
 static const float k_brush_silent = 1e-4f;
@@ -97,22 +97,29 @@ void audio_brush_reset_dsp(AudioState *a)
     a->brush_dsp_live = false;
 }
 
-/* Returns the stroke speed the tone should follow this sample. A tick with no pointer motion, or
- * one where the brush briefly reads as lifted, keeps the last moving stroke for ~45 ms. */
+/* Returns the stroke speed the tone should follow this sample. While the brush stays down, a tick
+ * with no pointer motion keeps the last moving speed for ~27 ms. A lift is not held: holding it
+ * delayed every release by the hold length. A stroke starting from silence takes its speed at
+ * once, since gliding up from zero muffled the start of a fast flick. */
 static float brush_step_envelopes(AudioState *a)
 {
-    float gate = a->paused ? 0.0f : ink_clampf(a->brush_target, 0.0f, 1.0f);
+    const float gate = a->paused ? 0.0f : ink_clampf(a->brush_target, 0.0f, 1.0f);
+    const bool held = !a->paused && a->brush_active;
     float speed = a->brush_speed;
-    if (!a->paused && a->brush_active && a->brush_speed > 0.0f) {
+    if (!held) {
+        a->brush_hold = 0u;
+    } else if (a->brush_speed > 0.0f) {
         a->brush_hold = BRUSH_HOLD_SAMPLES;
         a->brush_hold_speed = a->brush_speed;
-    } else if (!a->paused && a->brush_hold > 0u) {
+    } else if (a->brush_hold > 0u) {
         --a->brush_hold;
-        gate = 1.0f;
         speed = a->brush_hold_speed;
     }
     if (gate > 0.0f) {
         a->brush_fast_release = false;
+    }
+    if (held && a->brush_env < 0.02f && speed > a->brush_speed_smooth) {
+        a->brush_speed_smooth = speed;
     }
 
     float k = k_brush_release;
