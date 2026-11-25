@@ -834,6 +834,202 @@ static void test_audio_skill_voices_blend_attached_loops(void)
     game_destroy(g);
 }
 
+static void fill_square_pcm(int16_t *pcm, size_t n)
+{
+    for (size_t i = 0; i < n; ++i) {
+        pcm[i] = (i / 2u) % 2u == 0u ? INT16_MIN : INT16_MAX;
+    }
+}
+
+static void test_audio_pcm_read_stays_between_its_central_samples(void)
+{
+    static const int16_t k_edge[4] = {INT16_MIN, INT16_MAX, INT16_MAX, INT16_MIN};
+    TEST_ASSERT_TRUE(fabsf(audio_pcm_read(k_edge, 4u, 1.5f, 0.0f)) <= 1.0f);
+
+    enum { N = 4096 };
+    int16_t *pcm = calloc(N, sizeof *pcm);
+    TEST_ASSERT_NOT_NULL(pcm);
+    fill_test_loop(pcm, N, UINT64_C(0x71));
+    for (int i = 1; i < N - 3; ++i) {
+        pcm[i] = (int16_t)(i % 7 == 0 ? INT16_MAX : (i % 11 == 0 ? INT16_MIN : pcm[i]));
+    }
+    for (int k = 0; k < 4 * (N - 4); ++k) {
+        const float pos = 1.0f + (float)k * 0.25f + 0.125f;
+        const int32_t i = (int32_t)floorf(pos);
+        const float lo = fminf((float)pcm[i], (float)pcm[i + 1]) / 32768.0f;
+        const float hi = fmaxf((float)pcm[i], (float)pcm[i + 1]) / 32768.0f;
+        const float v = audio_pcm_read(pcm, N, pos, 0.0f);
+        TEST_ASSERT_TRUE(v >= lo - 1e-6f && v <= hi + 1e-6f);
+    }
+    free(pcm);
+}
+
+static void test_audio_grain_setup_bounds_huge_and_invalid_windows(void)
+{
+    AudioGrainLoop g;
+    audio_grain_setup(&g, (size_t)UINT32_MAX, 0.0f, 1.0f, 1024.0f);
+    TEST_ASSERT_EQUAL_UINT32(0u, g.start);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, g.span);
+    TEST_ASSERT_EQUAL_FLOAT(1024.0f, g.grain_len);
+
+    audio_grain_setup(&g, 4096u, 0.25f, 0.75f, 512.0f);
+    TEST_ASSERT_EQUAL_UINT32(1024u, g.start);
+    TEST_ASSERT_EQUAL_UINT32(2048u, g.span);
+
+    static const float k_bad[] = {NAN, INFINITY, -INFINITY};
+    for (size_t b = 0; b < sizeof k_bad / sizeof k_bad[0]; ++b) {
+        audio_grain_setup(&g, 4096u, k_bad[b], 0.9f, 512.0f);
+        TEST_ASSERT_EQUAL_UINT32(0u, g.span);
+        audio_grain_setup(&g, 4096u, 0.1f, k_bad[b], 512.0f);
+        TEST_ASSERT_EQUAL_UINT32(0u, g.span);
+        audio_grain_setup(&g, 4096u, 0.1f, 0.9f, k_bad[b]);
+        TEST_ASSERT_EQUAL_UINT32(0u, g.span);
+    }
+    audio_grain_setup(&g, 4096u, 0.1f, 0.9f, 4.0f);
+    TEST_ASSERT_EQUAL_UINT32(0u, g.span);
+}
+
+static void test_audio_grain_step_survives_non_finite_and_out_of_range_state(void)
+{
+    enum { N = 8192, STEPS = 6000 };
+    int16_t *pcm = calloc(N, sizeof *pcm);
+    TEST_ASSERT_NOT_NULL(pcm);
+    fill_square_pcm(pcm, N);
+
+    typedef struct {
+        float rate;
+        float ph;
+        float base;
+        float grain_len;
+    } GrainCase;
+    static const GrainCase k_cases[] = {
+        {NAN, 0.0f, 0.0f, 0.0f}, {INFINITY, 0.0f, 0.0f, 0.0f}, {-3.0f, 0.0f, 0.0f, 0.0f},
+        {1.0f, NAN, 0.0f, 0.0f}, {1.0f, -0.4f, 0.0f, 0.0f},    {1.0f, 1e30f, 0.0f, 0.0f},
+        {1.0f, 0.0f, NAN, 0.0f}, {1.0f, 0.0f, -500.0f, 0.0f},  {1.0f, 0.0f, 1e30f, 0.0f},
+        {1.0f, 0.0f, 0.0f, NAN}, {1.0f, 0.0f, 0.0f, 1e30f},
+    };
+    for (size_t c = 0; c < sizeof k_cases / sizeof k_cases[0]; ++c) {
+        const GrainCase gc = k_cases[c];
+        AudioGrainLoop g;
+        audio_grain_setup(&g, N, 0.1f, 0.9f, 1024.0f);
+        g.ph[0] = gc.ph;
+        g.base[1] = gc.base;
+        if (gc.grain_len != 0.0f) {
+            g.grain_len = gc.grain_len;
+        }
+        uint64_t rng = UINT64_C(9);
+        for (int i = 0; i < STEPS; ++i) {
+            const float v = audio_grain_step(&g, pcm, N, gc.rate, &rng);
+            /* The two half-offset Hann windows sum to 1 only up to float rounding. */
+            TEST_ASSERT_TRUE(isfinite(v) && fabsf(v) <= 1.001f);
+        }
+        if (gc.grain_len == 0.0f) {
+            TEST_ASSERT_TRUE(audio_grain_finite(&g));
+            TEST_ASSERT_TRUE(g.ph[0] >= 0.0f && g.ph[0] < 1.0f);
+            TEST_ASSERT_TRUE(g.base[1] >= 0.0f && g.base[1] <= (float)g.span);
+        }
+    }
+
+    AudioGrainLoop past_end;
+    audio_grain_setup(&past_end, N, 0.1f, 0.9f, 1024.0f);
+    uint64_t rng = UINT64_C(9);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, audio_grain_step(&past_end, pcm, N / 2u, 1.0f, &rng));
+    past_end.start = UINT32_MAX - 32u;
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, audio_grain_step(&past_end, pcm, N, 1.0f, &rng));
+    free(pcm);
+}
+
+static void queue_one_stroke_and_one_voice(AudioState *a, GameState *g)
+{
+    audio_init(a, UINT64_C(5));
+    g->player.painting = true;
+    g->player.stroke_speed = 600.0f;
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    one_event(g, EV_CYCLONE);
+    audio_consume_events(a, g);
+    TEST_ASSERT_TRUE(a->state_q_count > 0);
+    TEST_ASSERT_TRUE(a->pending_count > 0);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+}
+
+static void test_audio_validator_rejects_non_finite_queued_ticks_and_voices(void)
+{
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    for (int field = 0; field < 5; ++field) {
+        queue_one_stroke_and_one_voice(a, g);
+        AudioTickState *tick = &a->state_q[a->state_q_head];
+        AudioPendingVoice *voice = &a->pending[a->pending_head];
+        float *const fields[5] = {&tick->brush_target, &tick->brush_speed, &tick->wind_target,
+                                  &voice->freq, &voice->param};
+        *fields[field] = NAN;
+        TEST_ASSERT_FALSE(audio_validate_finite(a));
+    }
+
+    queue_one_stroke_and_one_voice(a, g);
+    const int32_t free_tick = (a->state_q_head + a->state_q_count) % AUDIO_STATE_QUEUE_CAP;
+    const int32_t free_voice = (a->pending_head + a->pending_count) % AUDIO_PENDING_VOICE_CAP;
+    a->state_q[free_tick].brush_speed = NAN;
+    a->pending[free_voice].freq = NAN;
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    free(a);
+    game_destroy(g);
+}
+
+static void render_after_quick_pause(AudioState *a, GameState *g, bool painted, bool pause,
+                                     int16_t *buf, size_t n)
+{
+    enum { QUEUED_TICKS = 4 };
+    audio_init(a, UINT64_C(31));
+    audio_set_volumes(a, 100, 0, 100);
+    audio_set_lobby_mode(a, true);
+    g->config.brush_style = BRUSH_STYLE_HEAVY;
+    g->event_count = 0;
+    g->player.painting = painted;
+    g->player.stroke_speed = painted ? 600.0f : 0.0f;
+    for (int t = 0; t < QUEUED_TICKS; ++t) {
+        audio_consume_lobby_events(a, g);
+    }
+    if (pause) {
+        audio_set_paused(a, true);
+        audio_set_paused(a, false);
+    }
+    g->player.painting = false;
+    g->player.stroke_speed = 0.0f;
+    audio_consume_lobby_events(a, g);
+    audio_render(a, buf, n);
+}
+
+static void test_audio_quick_pause_and_resume_never_replays_a_queued_stroke(void)
+{
+    enum { N = AUDIO_SAMPLES_PER_TICK * 12 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(N, sizeof *buf);
+    int16_t *idle = calloc(N, sizeof *idle);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+    TEST_ASSERT_NOT_NULL(idle);
+
+    render_after_quick_pause(a, g, true, false, buf, N);
+    TEST_ASSERT_TRUE(peak_abs(buf, N) > 200);
+
+    render_after_quick_pause(a, g, false, true, idle, N);
+    render_after_quick_pause(a, g, true, true, buf, N);
+    TEST_ASSERT_FALSE(a->brush_active);
+    TEST_ASSERT_EQUAL_MEMORY(idle, buf, N * sizeof *buf);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(idle);
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -856,5 +1052,10 @@ int main(void)
     RUN_TEST(test_audio_brush_rides_through_a_still_tick_and_a_one_tick_lift);
     RUN_TEST(test_audio_brush_loops_shape_the_stroke_and_fall_back_cleanly);
     RUN_TEST(test_audio_skill_voices_blend_attached_loops);
+    RUN_TEST(test_audio_pcm_read_stays_between_its_central_samples);
+    RUN_TEST(test_audio_grain_setup_bounds_huge_and_invalid_windows);
+    RUN_TEST(test_audio_grain_step_survives_non_finite_and_out_of_range_state);
+    RUN_TEST(test_audio_validator_rejects_non_finite_queued_ticks_and_voices);
+    RUN_TEST(test_audio_quick_pause_and_resume_never_replays_a_queued_stroke);
     return UNITY_END();
 }

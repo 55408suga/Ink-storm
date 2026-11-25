@@ -312,7 +312,7 @@ static int run_demo_live_mode(GameState *game, AudioState *audio, RenderState *r
     }
 
     if (opts->smoke_frames == 0) {
-        audio_out_close(&audio_out, audio);
+        audio_out_close(&audio_out);
     }
     return EXIT_SUCCESS;
 }

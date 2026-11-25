@@ -65,21 +65,31 @@ void audio_grain_setup(AudioGrainLoop *g, size_t pcm_len, float start_frac, floa
                        float grain_samples)
 {
     memset(g, 0, sizeof *g);
-    const size_t len = pcm_len > (size_t)UINT32_MAX ? (size_t)UINT32_MAX : pcm_len;
-    const float lo = ink_clampf(start_frac, 0.0f, 1.0f);
-    const float hi = ink_clampf(end_frac, lo, 1.0f);
-    const uint32_t start = (uint32_t)((float)len * lo);
-    const uint32_t end = (uint32_t)((float)len * hi);
-    if (end <= start || end - start < 64u) {
+    if (!isfinite(start_frac) || !isfinite(end_frac) || !isfinite(grain_samples)) {
         return;
     }
-    g->start = start;
-    g->span = end - start;
-    g->grain_len = fminf(grain_samples, (float)g->span * 0.85f);
+    /* Endpoints are formed in double: a float product rounds UINT32_MAX up to 2^32, which does
+     * not fit the uint32_t window. */
+    const double len = (double)(pcm_len > (size_t)UINT32_MAX ? (size_t)UINT32_MAX : pcm_len);
+    const double lo = fmin(fmax((double)start_frac, 0.0), 1.0);
+    const double hi = fmin(fmax((double)end_frac, lo), 1.0);
+    const double start = floor(len * lo);
+    const double end = floor(len * hi);
+    if (end - start < 64.0) {
+        return;
+    }
+    const uint32_t span = (uint32_t)(end - start);
+    const float grain_len = fminf(grain_samples, (float)span * 0.85f);
+    if (grain_len < 8.0f) {
+        return;
+    }
+    g->start = (uint32_t)start;
+    g->span = span;
+    g->grain_len = grain_len;
     g->ph[0] = 0.0f;
     g->ph[1] = 0.5f;
     g->base[0] = 0.0f;
-    g->base[1] = 0.35f * ((float)g->span - g->grain_len - 8.0f);
+    g->base[1] = 0.35f * ((float)span - grain_len - 8.0f);
 }
 
 static float pcm_at(const int16_t *win, uint32_t span, int64_t i)
@@ -88,12 +98,16 @@ static float pcm_at(const int16_t *win, uint32_t span, int64_t i)
     return (float)win[c];
 }
 
-/* Catmull-Rom: unlike the plain 4-point cubic it never overshoots past its neighbours. */
+/* Catmull-Rom alone overshoots on sharp edges (a full-scale square pair peaks near 1.25), so the
+ * result is held between the two samples it interpolates; that keeps every read in [-1, 1]. */
 static float sample_hermite(const int16_t *win, uint32_t span, float pos)
 {
-    const float fl = floorf(pos);
+    if (!isfinite(pos)) {
+        return 0.0f;
+    }
+    const float fl = floorf(ink_clampf(pos, 0.0f, (float)span));
     const int64_t i = (int64_t)fl;
-    const float t = pos - fl;
+    const float t = ink_clampf(pos - fl, 0.0f, 1.0f);
     const float y0 = pcm_at(win, span, i - 1);
     const float y1 = pcm_at(win, span, i);
     const float y2 = pcm_at(win, span, i + 1);
@@ -101,21 +115,35 @@ static float sample_hermite(const int16_t *win, uint32_t span, float pos)
     const float c1 = 0.5f * (y2 - y0);
     const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
     const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-    return ((c3 * t + c2) * t + c1) * t + y1;
+    const float y = ((c3 * t + c2) * t + c1) * t + y1;
+    return ink_clampf(y, fminf(y1, y2), fmaxf(y1, y2));
+}
+
+static bool grain_window_fits(const AudioGrainLoop *g, size_t pcm_len)
+{
+    return g->span >= 64u && g->start <= pcm_len && g->span <= pcm_len - g->start &&
+           isfinite(g->grain_len) && g->grain_len >= 8.0f && g->grain_len <= (float)g->span;
 }
 
 float audio_grain_step(AudioGrainLoop *g, const int16_t *pcm, size_t pcm_len, float rate,
                        uint64_t *rng)
 {
-    if (pcm == NULL || g->span < 64u || g->grain_len < 8.0f ||
-        (size_t)g->start + (size_t)g->span > pcm_len) {
+    if (pcm == NULL || !grain_window_fits(g, pcm_len)) {
         return 0.0f;
     }
     const int16_t *win = pcm + g->start;
-    const float inc = ink_clampf(rate, 0.05f, 4.0f) / g->grain_len;
+    const float safe_rate = isfinite(rate) ? ink_clampf(rate, 0.05f, 4.0f) : 1.0f;
+    const float inc = safe_rate / g->grain_len;
     const float max_base = fmaxf((float)g->span - g->grain_len - 8.0f, 1.0f);
     float out = 0.0f;
     for (int h = 0; h < 2; ++h) {
+        /* A phase outside [0, 1) would read outside the Hann window, so it restarts silent. */
+        if (!(g->ph[h] >= 0.0f && g->ph[h] < 1.0f)) {
+            g->ph[h] = 0.0f;
+        }
+        if (!(g->base[h] >= 0.0f && g->base[h] <= max_base)) {
+            g->base[h] = isfinite(g->base[h]) ? ink_clampf(g->base[h], 0.0f, max_base) : 0.0f;
+        }
         g->ph[h] += inc;
         if (g->ph[h] >= 1.0f) {
             g->ph[h] = fminf(g->ph[h] - 1.0f, 0.999f);
@@ -137,7 +165,8 @@ float audio_pcm_read(const int16_t *pcm, size_t pcm_len, float pos, float fade)
     if (pos >= last) {
         return 0.0f;
     }
-    const float tail = fade > 0.0f ? audio_smoothstep(0.0f, fade, last - pos) : 1.0f;
+    const float tail =
+        isfinite(fade) && fade > 0.0f ? audio_smoothstep(0.0f, fade, last - pos) : 1.0f;
     return sample_hermite(pcm, span, pos) * tail * (1.0f / 32768.0f);
 }
 

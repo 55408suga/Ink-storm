@@ -268,7 +268,7 @@ static void test_latch_move_first_tick_only(void)
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.0f, t2.my);
 }
 
-static void test_latch_catch_up_ticks_share_motion_and_fire_skills_once(void)
+static void test_latch_catch_up_ticks_share_motion_without_a_skill_press(void)
 {
     static const int32_t k_tick_counts[] = {2, 3};
     for (size_t c = 0; c < sizeof k_tick_counts / sizeof k_tick_counts[0]; ++c) {
@@ -277,8 +277,6 @@ static void test_latch_catch_up_ticks_share_motion_and_fire_skills_once(void)
         input_latch_init(&l, 0.0f, 0.0f);
         RawInput raw = make_raw(90.0f, -60.0f);
         raw.left_down = true;
-        raw.cyclone_pressed = true;
-        raw.gale_pressed = true;
         input_latch_feed(&l, &raw);
 
         for (int32_t t = 0; t < ticks; ++t) {
@@ -290,13 +288,138 @@ static void test_latch_catch_up_ticks_share_motion_and_fire_skills_once(void)
             TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f * to, in.mx);
             TEST_ASSERT_FLOAT_WITHIN(1e-3f, -60.0f * to, in.my);
             TEST_ASSERT_TRUE(in.paint);
-            TEST_ASSERT_EQUAL(t == 0, in.cyclone);
-            TEST_ASSERT_EQUAL(t == 0, in.gale);
+            TEST_ASSERT_FALSE(in.cyclone);
+            TEST_ASSERT_FALSE(in.gale);
         }
 
         const BrushInput rest = input_latch_take_tick(&l);
         TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, rest.pmx);
         TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, rest.mx);
+    }
+}
+
+static void test_latch_skill_press_takes_the_whole_catch_up_motion_once(void)
+{
+    static const int32_t k_tick_counts[] = {2, 3};
+    static const bool k_cyclone[] = {true, false, true};
+    static const bool k_gale[] = {false, true, true};
+    for (size_t c = 0; c < sizeof k_tick_counts / sizeof k_tick_counts[0]; ++c) {
+        for (size_t p = 0; p < sizeof k_cyclone / sizeof k_cyclone[0]; ++p) {
+            const int32_t ticks = k_tick_counts[c];
+            InputLatch l;
+            input_latch_init(&l, 0.0f, 0.0f);
+            RawInput raw = make_raw(90.0f, -60.0f);
+            raw.left_down = true;
+            raw.cyclone_pressed = k_cyclone[p];
+            raw.gale_pressed = k_gale[p];
+            input_latch_feed(&l, &raw);
+
+            const BrushInput press = input_latch_take_subtick(&l, ticks);
+            TEST_ASSERT_EQUAL_FLOAT(0.0f, press.pmx);
+            TEST_ASSERT_EQUAL_FLOAT(0.0f, press.pmy);
+            TEST_ASSERT_EQUAL_FLOAT(90.0f, press.mx);
+            TEST_ASSERT_EQUAL_FLOAT(-60.0f, press.my);
+            TEST_ASSERT_TRUE(press.paint);
+            TEST_ASSERT_EQUAL(k_cyclone[p], press.cyclone);
+            TEST_ASSERT_EQUAL(k_gale[p], press.gale);
+
+            for (int32_t t = 1; t < ticks; ++t) {
+                const BrushInput still = input_latch_take_subtick(&l, ticks - t);
+                TEST_ASSERT_EQUAL_FLOAT(90.0f, still.pmx);
+                TEST_ASSERT_EQUAL_FLOAT(-60.0f, still.pmy);
+                TEST_ASSERT_EQUAL_FLOAT(90.0f, still.mx);
+                TEST_ASSERT_EQUAL_FLOAT(-60.0f, still.my);
+                TEST_ASSERT_TRUE(still.paint);
+                TEST_ASSERT_FALSE(still.cyclone);
+                TEST_ASSERT_FALSE(still.gale);
+            }
+        }
+    }
+}
+
+typedef struct {
+    bool cyclone_seen;
+    bool gale_seen;
+    GameEvent cyclone;
+    GameEvent gale;
+} SkillCasts;
+
+static void record_skill_casts(const GameState *g, SkillCasts *out)
+{
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        const GameEvent *ev = &g->events[i];
+        if (ev->type == EV_CYCLONE && !out->cyclone_seen) {
+            out->cyclone = *ev;
+            out->cyclone_seen = true;
+        } else if (ev->type == EV_GALE && !out->gale_seen) {
+            out->gale = *ev;
+            out->gale_seen = true;
+        }
+    }
+}
+
+static SkillCasts cast_skills_after_aiming_right(int32_t frame_ticks, float from_x, float from_y,
+                                                 float to_x, float to_y)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(7));
+    game_init_sandbox(g, &cfg);
+
+    InputLatch l;
+    input_latch_init(&l, from_x - 40.0f, from_y);
+    RawInput raw = make_raw(from_x, from_y);
+    input_latch_feed(&l, &raw);
+    const BrushInput aim = input_latch_take_tick(&l);
+    game_step_sandbox(g, &aim);
+
+    raw = make_raw(to_x, to_y);
+    raw.cyclone_pressed = true;
+    raw.gale_pressed = true;
+    input_latch_feed(&l, &raw);
+    SkillCasts casts = {0};
+    for (int32_t t = 0; t < frame_ticks; ++t) {
+        const BrushInput in = input_latch_take_subtick(&l, frame_ticks - t);
+        game_step_sandbox(g, &in);
+        record_skill_casts(g, &casts);
+    }
+    game_destroy(g);
+    TEST_ASSERT_TRUE(casts.cyclone_seen);
+    TEST_ASSERT_TRUE(casts.gale_seen);
+    return casts;
+}
+
+static void test_catch_up_frame_casts_skills_at_the_sampled_cursor_and_aim(void)
+{
+    typedef struct {
+        float from_x, from_y, to_x, to_y;
+    } Motion;
+    /* A long diagonal sweep, and a 4.2 px flick whose thirds fall below Gale's 2 px aim step. */
+    static const Motion k_motions[] = {
+        {300.0f, 300.0f, 600.0f, 420.0f},
+        {640.0f, 360.0f, 643.0f, 363.0f},
+    };
+    for (size_t m = 0; m < sizeof k_motions / sizeof k_motions[0]; ++m) {
+        const Motion mv = k_motions[m];
+        const SkillCasts one =
+            cast_skills_after_aiming_right(1, mv.from_x, mv.from_y, mv.to_x, mv.to_y);
+        TEST_ASSERT_EQUAL_FLOAT(mv.to_x, one.cyclone.x);
+        TEST_ASSERT_EQUAL_FLOAT(mv.to_y, one.cyclone.y);
+        TEST_ASSERT_EQUAL_FLOAT(mv.to_x, one.gale.x);
+        TEST_ASSERT_EQUAL_FLOAT(mv.to_y, one.gale.y);
+        TEST_ASSERT_TRUE(one.gale.y2 > 0.1f);
+
+        static const int32_t k_catch_up[] = {2, 3};
+        for (size_t c = 0; c < sizeof k_catch_up / sizeof k_catch_up[0]; ++c) {
+            const SkillCasts late = cast_skills_after_aiming_right(k_catch_up[c], mv.from_x,
+                                                                   mv.from_y, mv.to_x, mv.to_y);
+            TEST_ASSERT_EQUAL_FLOAT(one.cyclone.x, late.cyclone.x);
+            TEST_ASSERT_EQUAL_FLOAT(one.cyclone.y, late.cyclone.y);
+            TEST_ASSERT_EQUAL_FLOAT(one.gale.x, late.gale.x);
+            TEST_ASSERT_EQUAL_FLOAT(one.gale.y, late.gale.y);
+            TEST_ASSERT_EQUAL_FLOAT(one.gale.x2, late.gale.x2);
+            TEST_ASSERT_EQUAL_FLOAT(one.gale.y2, late.gale.y2);
+        }
     }
 }
 
@@ -723,7 +846,9 @@ int main(void)
     RUN_TEST(test_frame_clock);
     RUN_TEST(test_latch_move_first_tick_only);
     RUN_TEST(test_latch_zero_tick_frame_preserves_motion);
-    RUN_TEST(test_latch_catch_up_ticks_share_motion_and_fire_skills_once);
+    RUN_TEST(test_latch_catch_up_ticks_share_motion_without_a_skill_press);
+    RUN_TEST(test_latch_skill_press_takes_the_whole_catch_up_motion_once);
+    RUN_TEST(test_catch_up_frame_casts_skills_at_the_sampled_cursor_and_aim);
     RUN_TEST(test_latch_single_subtick_matches_take_tick);
     RUN_TEST(test_latch_edge_press_held_and_coalesced);
     RUN_TEST(test_latch_reward_commands_and_priority);

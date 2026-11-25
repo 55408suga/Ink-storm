@@ -116,10 +116,19 @@ void audio_set_paused(AudioState *audio, bool paused)
         return;
     }
     audio->paused = paused;
-    if (paused) {
-        audio->brush_target = 0.0f;
-        audio->brush_active = false;
-        audio->brush_hold = 0u;
+    if (!paused) {
+        return;
+    }
+    audio->brush_target = 0.0f;
+    audio->brush_active = false;
+    audio->brush_hold = 0u;
+    /* A resume can land before the stream drains these snapshots; left intact, they would replay
+     * the pre-pause stroke and its hold would then keep it alive. */
+    for (int32_t i = 0; i < audio->state_q_count; ++i) {
+        AudioTickState *st = &audio->state_q[(audio->state_q_head + i) % AUDIO_STATE_QUEUE_CAP];
+        st->brush_active = false;
+        st->brush_target = 0.0f;
+        st->brush_speed = 0.0f;
     }
 }
 
@@ -492,6 +501,39 @@ void audio_render(AudioState *audio, int16_t *samples, size_t sample_count)
 
 BgmTrack audio_bgm_track(const AudioState *audio) { return audio != NULL ? audio->bgm : BGM_NONE; }
 
+static bool queued_ticks_finite(const AudioState *audio)
+{
+    if (audio->state_q_count < 0 || audio->state_q_count > AUDIO_STATE_QUEUE_CAP ||
+        audio->state_q_head < 0 || audio->state_q_head >= AUDIO_STATE_QUEUE_CAP) {
+        return false;
+    }
+    for (int32_t i = 0; i < audio->state_q_count; ++i) {
+        const AudioTickState *st =
+            &audio->state_q[(audio->state_q_head + i) % AUDIO_STATE_QUEUE_CAP];
+        if (!isfinite(st->brush_target) || !isfinite(st->brush_speed) ||
+            !isfinite(st->wind_target)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool pending_voices_finite(const AudioState *audio)
+{
+    if (audio->pending_count < 0 || audio->pending_count > AUDIO_PENDING_VOICE_CAP ||
+        audio->pending_head < 0 || audio->pending_head >= AUDIO_PENDING_VOICE_CAP) {
+        return false;
+    }
+    for (int32_t i = 0; i < audio->pending_count; ++i) {
+        const AudioPendingVoice *pv =
+            &audio->pending[(audio->pending_head + i) % AUDIO_PENDING_VOICE_CAP];
+        if (!isfinite(pv->freq) || !isfinite(pv->param)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool audio_validate_finite(const AudioState *audio)
 {
     if (audio == NULL) {
@@ -505,7 +547,8 @@ bool audio_validate_finite(const AudioState *audio)
         !isfinite(audio->bgm_duck)) {
         return false;
     }
-    if (!audio_brush_validate_finite(audio)) {
+    if (!audio_brush_validate_finite(audio) || !queued_ticks_finite(audio) ||
+        !pending_voices_finite(audio)) {
         return false;
     }
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {

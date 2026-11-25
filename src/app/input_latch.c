@@ -99,10 +99,12 @@ BrushInput input_latch_take_tick(InputLatch *l)
 
 /* A catch-up frame that runs several ticks hands each one an equal slice of the frame's pointer
  * motion; giving it all to the first tick left the rest with zero stroke speed, which chopped the
- * brush sound on every slow frame. */
+ * brush sound on every slow frame. A tick that consumes a skill press still takes the whole
+ * remaining motion: a slice would cast Cyclone and Gale behind the sampled cursor and could split
+ * an aiming flick into steps below Gale's aim threshold. */
 BrushInput input_latch_take_subtick(InputLatch *l, int32_t remaining_ticks)
 {
-    if (l == NULL || remaining_ticks <= 1) {
+    if (l == NULL || remaining_ticks <= 1 || l->cyclone_pending || l->gale_pending) {
         return input_latch_take_tick(l);
     }
     const float share = 1.0f / (float)remaining_ticks;

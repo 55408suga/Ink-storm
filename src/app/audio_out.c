@@ -42,11 +42,17 @@ static bool load_brush_loop(const char *rel_path, Wave *out_wave)
     }
     Wave w = LoadWave(full_path);
     if (!IsWaveValid(w)) {
+        /* An Ogg that opens but decodes zero frames still hands back its allocation. */
+        if (w.data != NULL) {
+            UnloadWave(w);
+        }
         TraceLog(LOG_WARNING,
                  "INKSTORM: failed to load brush loop '%s'; procedural fallback active", rel_path);
         return false;
     }
-    WaveFormat(&w, AUDIO_SAMPLE_RATE, 16, 1);
+    if (w.sampleRate != (unsigned)AUDIO_SAMPLE_RATE || w.sampleSize != 16u || w.channels != 1u) {
+        WaveFormat(&w, AUDIO_SAMPLE_RATE, 16, 1);
+    }
     if (w.data == NULL || w.frameCount == 0u || w.sampleRate != (unsigned)AUDIO_SAMPLE_RATE ||
         w.sampleSize != 16u || w.channels != 1u) {
         UnloadWave(w);
@@ -60,8 +66,9 @@ static bool load_brush_loop(const char *rel_path, Wave *out_wave)
     return true;
 }
 
-static void attach_brush_loops(const AudioOut *out, AudioState *audio)
+static void attach_brush_loops(AudioOut *out, AudioState *audio)
 {
+    out->attached_audio = audio;
     if (audio == NULL) {
         return;
     }
@@ -169,13 +176,14 @@ void audio_out_pump(AudioOut *out, AudioState *audio)
     }
 }
 
-void audio_out_close(AudioOut *out, AudioState *audio)
+void audio_out_close(AudioOut *out)
 {
     if (out == NULL || !out->ready) {
         return;
     }
-    if (audio != NULL) {
-        audio_set_brush_samples(audio, NULL, 0u, NULL, 0u);
+    if (out->attached_audio != NULL) {
+        audio_set_brush_samples(out->attached_audio, NULL, 0u, NULL, 0u);
+        out->attached_audio = NULL;
     }
     if (out->brush_flow_loaded) {
         UnloadWave(out->brush_flow);

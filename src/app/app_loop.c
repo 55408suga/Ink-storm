@@ -690,7 +690,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
 
     if (opts->smoke_frames == 0) {
         app_finish_run_on_exit(&ctx, game);
-        audio_out_close(&audio_out, audio);
+        audio_out_close(&audio_out);
     }
 
     render_close(render);
