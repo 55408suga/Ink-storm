@@ -186,7 +186,7 @@ typedef enum {
 
 ### 4.1 設定・状態構造体と単位契約
 - **座標・距離単位**: `px, py, pw, ph, radius_px` は画面論理 px（`0..1280`, `0..720`）。流体セル `(x, y)` は `[c·x, c·x+c)` px（`c = FLUID_CELL_PX`、160×90 では 8px）を占め、中心は `(c·x + c/2, c·y + c/2)` とする。`rad_cells`・速度 `(u, v, fx, fy, strength, peak_speed)` は格子単位（セル / セル/s）。ゲーム側での px/s 換算は `× FLUID_CELL_PX`。`dye` は無次元 `[0, max_dye]`。
-- **解像度非依存の規則（格子を 240×135 などへ変えても破綻しないこと）**: ゲーム側のセル探索窓は px 半径から `fluid_cell_reach(radius_px)`（`ceil(r / FLUID_CELL_PX)`）で求める。爆雷・三元共鳴のブロックは画面 64px 四方（`GAME_REACTION_BLOCK_PX`、20×12 ブロック）でセル中心の px 座標から決める。セル数の閾値（紅蓮 24・雷墨連鎖 10・三元 8・爆雷 6）は 8px セル基準で、セル面積比 `GAME_CELL_COUNT_SCALE`（160×90 では厳密に `1.0f`）を掛けて比較する。
+- **解像度非依存の規則（格子を 240×135 などへ変えても破綻しないこと）**: ゲーム側のセル探索窓は px 半径から `fluid_cell_reach(radius_px)`（`ceil(r / FLUID_CELL_PX)`）で求める。爆雷・三元共鳴のブロックは画面 64px 四方（`GAME_REACTION_BLOCK_PX`、20×12 ブロック）でセル中心の px 座標から決める。セル数の閾値（紅蓮 24・雷墨連鎖 10・三元 8・爆雷 6）は 8px セル基準で、セル面積比 `GAME_CELL_COUNT_SCALE`（160×90 では厳密に `1.0f`）を掛けて比較する。反応・ギミックが流体へ渡す半径と速度（三元共鳴・爆雷の注入、霊柱・落雷・鵺の軌跡・龍の渦・鎌鼬・山颪）は px と px/s で定義し、`GAME_PX_TO_CELLS` で格子単位へ換算する（160×90 では従来の値と完全に一致）。
 - **非有限値・範囲外入力の契約**:
   - 注入系・障害物設定系の引数に `NaN` / `Inf` または非正半径が渡された場合は安全に no-op 拒否する。
   - 範囲外座標は、`fluid_sample` では有効格子域へクランプ、`fluid_splat` / `fluid_swirl` / `fluid_add_radial_impulse` では格子と交差する有効セル範囲のみ適用する。
@@ -598,8 +598,9 @@ typedef struct {
 ### 9.2 `ink_render`（`src/render/render.h`）
 - 描画対象は `const GameState *`（および `ui_view.h` で定義する raylib 非依存の軽量 `const UiView *`）のみで、ゲーム状態を変更しない。`render_init(RenderState *r, const RenderOptions *opt)` でポストシェーダ有効/無効と障害注入マスクを受け取り、`render_draw(RenderState *r, const GameState *g, const UiView *ui)` で描画する。
 - 内部に固定長 VFX プール（`sparks[512]`, `bolts[32]`, `seals[16]`, `callouts[24]`）、画面シェイク状態、専用 `vfx_rng`、rlgl 筆描画プリミティブ（`ink_stroke`, `ink_wash`, `ink_splatter`, `ink_outline`, `ink_knockout`, `seal_stamp`）、和紙ポストシェーダ（C 文字列埋め込み）、流体可視化テクスチャ、和風フォント（＋文字列表の英語 ASCII フォールバック）を保持する。
+- **GPU 資源の検査**: RenderTexture は ID と添付に加えて `rlFramebufferComplete` で FBO の完全性を確かめてから使い（`render_texture_usable`。背景キャッシュ・ポスト用シーン・`--snap` の描画先）、不完全なら直接描画へ切り替える。コンパイルに失敗したシェーダが持つ `locs` は `render_discard_shader` で解放する。
 - **背景キャッシュ**: `bg_cache` は四辺に 16px（`RENDER_BG_PAD`）の余白を持つ不透明な RenderTexture。和紙テクスチャ（継ぎ目のない 512×512）と山水背景・砂子を、色は通常合成・保存先アルファは 1 固定（`BLEND_CUSTOM_SEPARATE`）で焼き込み、描き戻しでアルファが二重に掛からないようにする。キャッシュキーは `(BgKind { BG_LOBBY, BG_ACT }, act_index)`（`render_rules.h`）で、ロビーと第 1 幕を区別する。FBO を作れない環境では毎フレーム直接描画する。画面揺れでも余白により紙の端が見えない。
-- **流体の描画経路**: ポスト処理が有効で流体シェーダを読み込めたとき（`render_fluid_use_gpu`）は、`(ink, fire, storm, solid)` を `FLUID_W × FLUID_H` の RGBA8 1 枚（濃度は `sqrt(v / max_dye)` で符号化）に詰めて 1 回 `UpdateTexture` し、埋め込み GLSL 330（4095 バイト以内）で 1280×720 に描く（B スプライン双三次補間、和紙の繊維に沿ったにじみと粒状感、連続した墨のトーン曲線と勾配による墨溜まり、火・雷・金の乗算済みアルファ合成、`solid` マスク）。`--no-post`・設定でのポスト無効・`INKSTORM_DEBUG_FAULTS=shader` では CPU 経路（同じトーン曲線を表引きにした墨の乗算テクスチャ＋火・雷の乗算済みアルファテクスチャ）へ切り替える。`F1` に `fluid_shader: GPU/CPU` を表示する。色計算・符号化・判定は raylib 非依存の `render_rules.c` に置き、`test_render_rules` で検証する。
+- **流体の描画経路**: ポスト処理が有効で、流体シェーダと和紙テクスチャ（`texture1`）が揃ったとき（`render_fluid_use_gpu`）は、`(ink, fire, storm, solid)` を `FLUID_W × FLUID_H` の RGBA8 1 枚（濃度は `sqrt(v / max_dye)` で符号化）に詰めて 1 回 `UpdateTexture` し、埋め込み GLSL 330（4095 バイト以内）で 1280×720 に描く（B スプライン双三次補間、和紙の繊維に沿ったにじみと粒状感、連続した墨のトーン曲線と勾配による墨溜まり、火・雷・金の乗算済みアルファ合成、にじみで動かさないセル位置を `texelFetch` して `solid` セルを正確に除外。復元した濃度は有限な範囲へ制限する）。流体テクスチャは 2 枚ずつ交互に更新し、前フレームが描画中のテクスチャへの転送で CPU が GPU を待たないようにする。`--no-post`・設定でのポスト無効・`INKSTORM_DEBUG_FAULTS=shader` では CPU 経路（同じトーン曲線を表引きにした墨の乗算テクスチャ＋火・雷の乗算済みアルファテクスチャ）へ切り替える。`F1` に `fluid_shader: GPU/CPU` を表示する。色計算・符号化・判定は raylib 非依存の `render_rules.c` に置き、`test_render_rules` で検証する。
 - **再現性と描画順契約（[art-direction.md](art-direction.md) 準拠）**:
   - 登場物のシルエット揺らぎ（ボイル）は `EntityId`（`index`, `gen`）由来の固定シードで生成し、`vfx_rng` は粒子エフェクトのみに用いる（`--snap` 比較の再現性を維持）。
   - HUD・UI は必ずポストシェーダの**後**に描画し、文字のにじみを防ぐ。

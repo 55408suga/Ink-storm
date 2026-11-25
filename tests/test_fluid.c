@@ -458,14 +458,22 @@ static void test_cell_size_follows_screen_and_grid(void)
 {
     TEST_ASSERT_EQUAL_FLOAT((float)INK_SCREEN_W / (float)FLUID_W, FLUID_CELL_PX);
     TEST_ASSERT_EQUAL_FLOAT((float)INK_SCREEN_H / (float)FLUID_H, FLUID_CELL_PX);
-    TEST_ASSERT_EQUAL_FLOAT(8.0f, FLUID_CELL_PX);
 }
 
 static void test_cell_reach_covers_pixel_radius(void)
 {
-    TEST_ASSERT_EQUAL_INT(25, fluid_cell_reach(195.0f));
-    TEST_ASSERT_EQUAL_INT(8, fluid_cell_reach(64.0f));
-    TEST_ASSERT_EQUAL_INT(4, fluid_cell_reach(28.0f));
+    for (int cells = 1; cells <= 30; ++cells) {
+        const float exact = (float)cells * FLUID_CELL_PX;
+        TEST_ASSERT_EQUAL_INT(cells, fluid_cell_reach(exact * 0.999f));
+        TEST_ASSERT_EQUAL_INT(cells + 1, fluid_cell_reach(exact * 1.001f));
+    }
+    /* Gameplay radii: the window always covers the radius without a spare cell. */
+    static const float k_radii[] = {28.0f, 40.0f, 48.0f, 64.0f, 160.0f, 195.0f};
+    for (size_t i = 0; i < sizeof k_radii / sizeof k_radii[0]; ++i) {
+        const int reach = fluid_cell_reach(k_radii[i]);
+        TEST_ASSERT_TRUE((float)reach * FLUID_CELL_PX >= k_radii[i]);
+        TEST_ASSERT_TRUE((float)(reach - 1) * FLUID_CELL_PX < k_radii[i]);
+    }
     TEST_ASSERT_EQUAL_INT(1, fluid_cell_reach(0.01f));
     TEST_ASSERT_EQUAL_INT(0, fluid_cell_reach(0.0f));
     TEST_ASSERT_EQUAL_INT(0, fluid_cell_reach(-5.0f));

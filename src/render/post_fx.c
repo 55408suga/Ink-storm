@@ -36,7 +36,7 @@ static const char k_post_fragment[] =
     "  float sat=max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));\n"
     "  float glow=smoothstep(.12,.42,sat)*smoothstep(.45,.85,lum);\n"
     "  float edge=max(dot(avg-c,vec3(.3333)),0.);\n"
-    "  c*=1.-min(edge*1.8,.1)*(1.-glow)*smoothstep(.98,.4,lum);\n"
+    "  c*=1.-min(edge*1.8,.1)*(1.-glow)*(1.-smoothstep(.4,.98,lum));\n"
     "  float g=(vn(px*.33)-.5)*.5+(vn(px*1.4+17.)-.5)*.35+(h(px)-.5)*.3;\n"
     "  c+=vec3(1.,.97,.9)*g*.034*(.45+2.2*lum*(1.-lum));\n"
     "  vec2 d=(uv-.5)*vec2(1.2,.92);\n"
@@ -67,16 +67,18 @@ void render_post_init(RenderState *r, const RenderOptions *opt)
         shader = LoadShaderFromMemory(NULL, k_post_fragment);
     }
     if (force_shader_fault || !IsShaderValid(shader) || shader.id == rlGetShaderIdDefault()) {
-        if (shader.id != 0 && shader.id != rlGetShaderIdDefault()) {
-            UnloadShader(shader);
+        if (!force_shader_fault) {
+            render_discard_shader(shader);
         }
         TraceLog(LOG_WARNING, "INKSTORM: post shader unavailable; drawing directly");
         return;
     }
 
     RenderTexture2D scene = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
-    if (!IsRenderTextureValid(scene)) {
-        UnloadRenderTexture(scene);
+    if (!render_texture_usable(scene)) {
+        if (scene.id != 0) {
+            UnloadRenderTexture(scene);
+        }
         UnloadShader(shader);
         TraceLog(LOG_WARNING, "INKSTORM: render texture unavailable; drawing directly");
         return;

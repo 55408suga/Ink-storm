@@ -569,12 +569,17 @@ static void test_thunderburst_in_bottom_right_block_uses_last_block(void)
     clear_all_entities(g);
     fluid_reset(&g->fluid);
 
-    /* The bottom row of 64px blocks is only partly covered by the 720px screen. */
+    /* The bottom row of 64px blocks is only partly covered by the 720px screen. Painting the
+     * fixed screen region x >= 1216, y >= 704 fills that last partial block on any grid. */
     float *fire = fluid_channel_mut(&g->fluid, 1);
     float *storm = fluid_channel_mut(&g->fluid, 2);
-    for (int k = 0; k < 6; ++k) {
-        fire[cell_idx(FLUID_W - 8 + k, FLUID_H - 2)] = 0.45f;
-        storm[cell_idx(FLUID_W - 8 + k, FLUID_H - 2)] = 0.45f;
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        for (int x = 1; x < FLUID_W - 1; ++x) {
+            if (cell_center_px(x) >= 1216.0f && cell_center_px(y) >= 704.0f) {
+                fire[cell_idx(x, y)] = 0.45f;
+                storm[cell_idx(x, y)] = 0.45f;
+            }
+        }
     }
     g->event_count = 0;
     elements_step(g);

@@ -142,7 +142,7 @@ static int run_demo_snap_mode(GameState *game, AudioState *audio, RenderState *r
                               const char *snap_dir)
 {
     RenderTexture2D target = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
-    if (!IsRenderTextureValid(target) || target.id == render->scene.id ||
+    if (!render_texture_usable(target) || target.id == render->scene.id ||
         target.id == render->bg_cache.id) {
         fputs("INKSTORM: failed to create offscreen render texture for --snap\n", stderr);
         if (target.id != 0) {
@@ -203,9 +203,15 @@ static int run_demo_snap_mode(GameState *game, AudioState *audio, RenderState *r
     if (ok) {
         demo_step_autoplay(game, audio, render, 45);
         ui->xray = true;
-        for (int w = 0; w < 6; ++w) {
+        for (int w = 0; w < 5; ++w) {
             render_draw_to_texture(render, game, ui, target);
         }
+        /* Unpresented back-to-back frames queue GPU work, and the next draw would time that
+         * backlog instead of command issue. Reading the target back drains the queue the way the
+         * paced 60 Hz loop does between frames. */
+        Image drained = LoadImageFromTexture(target.texture);
+        UnloadImage(drained);
+        render_draw_to_texture(render, game, ui, target);
         TraceLog(LOG_INFO,
                  "INKSTORM: snap_06 F1 metrics render_draw=%.2fms prim_verts=%" PRIu32
                  " blend_sw=%" PRIu32 " fluid_solve=%.2fms",

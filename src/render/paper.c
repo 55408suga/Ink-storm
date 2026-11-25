@@ -141,7 +141,7 @@ void render_paper_init(RenderState *r)
 
     r->bg_cache =
         LoadRenderTexture(INK_SCREEN_W + 2 * RENDER_BG_PAD, INK_SCREEN_H + 2 * RENDER_BG_PAD);
-    if (!IsRenderTextureValid(r->bg_cache)) {
+    if (!render_texture_usable(r->bg_cache)) {
         if (r->bg_cache.id != 0) {
             UnloadRenderTexture(r->bg_cache);
         }

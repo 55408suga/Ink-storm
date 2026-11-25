@@ -7,6 +7,25 @@
 #include <stddef.h>
 #include <string.h>
 
+bool render_texture_usable(RenderTexture2D target)
+{
+    return IsRenderTextureValid(target) && rlFramebufferComplete(target.id);
+}
+
+void render_discard_shader(Shader shader)
+{
+    if (shader.id == rlGetShaderIdDefault()) {
+        return; /* raylib shares the default shader and its locations */
+    }
+    if (shader.id == 0) {
+        if (shader.locs != NULL) {
+            MemFree(shader.locs);
+        }
+        return;
+    }
+    UnloadShader(shader);
+}
+
 void render_set_blend(RenderState *r, int mode)
 {
     if (r == NULL || r->cur_blend == mode) {

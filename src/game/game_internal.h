@@ -18,6 +18,8 @@
 #define GAME_THUNDERBURST_BLOCKS (GAME_THUNDERBURST_BLOCKS_X * GAME_THUNDERBURST_BLOCKS_Y)
 /* セル数の閾値は 8px セル（160x90）で調整済み。セル面積比で換算し 160x90 では厳密に 1.0f */
 #define GAME_REF_CELL_PX 8.0f
+/* 流体へ渡す半径 [px] と速度 [px/s] を格子単位（セル / セル/s）へ換算する */
+#define GAME_PX_TO_CELLS(px) ((px) / FLUID_CELL_PX)
 #define GAME_CELL_COUNT_SCALE                                                                      \
     ((GAME_REF_CELL_PX / FLUID_CELL_PX) * (GAME_REF_CELL_PX / FLUID_CELL_PX))
 

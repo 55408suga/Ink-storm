@@ -163,9 +163,12 @@ typedef struct {
     Shader fluid_shader;
     int fluid_paper_loc;
     int fluid_max_dye_loc;
-    Texture2D fluid_field_tex; /* GPU 経路: (ink, fire, storm, solid) RGBA8 */
-    Texture2D fluid_ink_tex;   /* CPU 経路: 墨の乗算色 */
-    Texture2D fluid_elem_tex;  /* CPU 経路: 火・雷の乗算済みアルファ */
+    /* 流体テクスチャは 2 枚ずつ交互に更新し、前フレームが描画中のテクスチャへ転送して
+     * CPU が GPU の完了を待つ暗黙の同期を避ける */
+    Texture2D fluid_field_tex[2]; /* GPU 経路: (ink, fire, storm, solid) RGBA8 */
+    Texture2D fluid_ink_tex[2];   /* CPU 経路: 墨の乗算色 */
+    Texture2D fluid_elem_tex[2];  /* CPU 経路: 火・雷の乗算済みアルファ */
+    int32_t fluid_tex_slot;
     unsigned char fluid_field_px[FLUID_N * 4];
     Color fluid_ink_px[FLUID_N];
     Color fluid_elem_px[FLUID_N];
@@ -254,6 +257,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt);
 void render_draw(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui,
                             RenderTexture2D target);
+bool render_texture_usable(RenderTexture2D target); /* ID・添付に加えて FBO の完全性も検査 */
 void render_close(RenderState *r);
 
 void render_reward_layout(const GameState *g, RewardLayout *out);

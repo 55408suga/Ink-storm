@@ -27,6 +27,10 @@ typedef struct {
 
 typedef enum { SEAL_HAKUBUN = 0, SEAL_SHUBUN } SealStyle;
 
+/* GPU resource helpers (render.c). A shader that failed to compile still owns its locs array, and
+ * an FBO can carry valid ids while its attachments are incomplete. */
+void render_discard_shader(Shader shader);
+
 /* Blend mode tracking (counts switches for F1 budget <= 12) */
 void render_set_blend(RenderState *r, int mode);
 void render_reset_blend(RenderState *r);

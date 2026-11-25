@@ -18,8 +18,11 @@ typedef struct {
 BgKey render_bg_key(bool combat_world, int32_t act_index);
 bool render_bg_key_equal(BgKey a, BgKey b);
 
-/* GPU 水墨流体シェーダはポスト処理が有効で、シェーダが読み込めたときだけ使う */
-bool render_fluid_use_gpu(bool post_enabled, unsigned int fluid_shader_id);
+/* GPU
+ * 水墨流体シェーダはポスト処理が有効で、シェーダと和紙テクスチャ（texture1）が揃ったときだけ使う。
+ * 和紙がないと texture1 が流体テクスチャの unit を指し、濃度を紙として読んでしまう */
+bool render_fluid_use_gpu(bool post_enabled, unsigned int fluid_shader_id,
+                          unsigned int paper_tex_id);
 
 /* (ink, fire, storm, solid) を FLUID_W x FLUID_H の RGBA8 に詰める。濃度は max_dye で正規化して
  * sqrt で符号化し、淡墨域の 8bit 量子化段差を抑える（シェーダ側で二乗して復元） */
@@ -41,8 +44,15 @@ RenderRgba render_fluid_cpu_ink(const RenderFluidPalette *pal, float ink, float 
 /* CPU フォールバックの火・雷: 乗算済みアルファ（rgb <= a）。透明域が黒く滲まない */
 RenderRgba render_fluid_cpu_elem(const RenderFluidPalette *pal, float fire, float storm);
 
-/* 折れ線の区間ごとのサンプル数を決め、合計が cap - 1 を超えないよう全区間に配分する。
- * 戻り値は終点を含めた総サンプル数 */
-int render_polyline_plan(const float *seg_len, int segs, int cap, int *steps);
+typedef struct {
+    int32_t seg; /* 区間番号 */
+    float t;     /* 区間内の位置 [0, 1) */
+} RenderPolySample;
+
+/* 折れ線を最大 cap - 1 点でサンプルする位置を決める（終点は呼び出し側で足す）。区間の長さに応じて
+ * 2〜24 点を配り、予算を超えるときは全区間で分け合う。区間数が予算以上なら全区間の累積長に沿って
+ * 等間隔に配り、末尾の区間を弦で省略しない。戻り値はサンプル数 */
+int render_polyline_plan(const float *seg_len, int segs, int cap, RenderPolySample *out);
+int render_polyline_segment_steps(float seg_len); /* 予算に余裕があるときの区間あたり点数 */
 
 #endif

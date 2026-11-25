@@ -99,6 +99,28 @@ static void mist_puff(RenderState *r, Vector2 c, float rx, float ry, float alpha
     ink_radial_glow(r, c, rx, ry, tone_c(PAL_GOFUN, alpha), tone_c(PAL_GOFUN, 0.0f));
 }
 
+/* Rolling cloud-mist: overlapping puffs at varying heights with faint grey undersides, so the
+ * layer reads as drifting cloud instead of a ruled band. */
+static void mist_drift(RenderState *r, float y, float spread, float alpha, uint32_t seed)
+{
+    mist_band(r, y - spread * 0.5f, y + spread * 0.5f, alpha * 0.3f);
+    const int puffs = 16;
+    const float step = ((float)INK_SCREEN_W + 2.0f * (float)RENDER_BG_PAD + 120.0f) / (float)puffs;
+    for (int k = 0; k < puffs; ++k) {
+        const float x = -(float)RENDER_BG_PAD - 60.0f +
+                        ((float)k + 0.2f + 0.6f * h01(seed, (uint32_t)k)) * step;
+        const float yy = y + hs(seed + 1u, (uint32_t)k) * spread * 0.45f;
+        const float rx = step * (0.9f + 0.9f * h01(seed + 2u, (uint32_t)k));
+        const float ry = spread * (0.28f + 0.30f * h01(seed + 3u, (uint32_t)k));
+        if (h01(seed + 5u, (uint32_t)k) > 0.45f) {
+            ink_radial_glow(r, (Vector2){x + rx * 0.08f, yy + ry * 0.55f}, rx * 0.75f, ry * 0.45f,
+                            tone_c(PAL_SUMI_CLEAR, alpha * 0.14f), tone_c(PAL_SUMI_CLEAR, 0.0f));
+        }
+        mist_puff(r, (Vector2){x, yy}, rx, ry,
+                  alpha * (0.55f + 0.45f * h01(seed + 4u, (uint32_t)k)));
+    }
+}
+
 static void centre_mist(RenderState *r, float alpha)
 {
     /* Lifts anything that drifted toward the battlefield back to pale paper. */
@@ -134,11 +156,14 @@ static void draw_peak(RenderState *r, PeakSpec s)
         const float t = (float)i / (float)(N - 1);
         const float u = t * 2.0f - 1.0f;
         const float d = u < skew ? (u - skew) / (1.0f + skew) : (u - skew) / (1.0f - skew);
-        const float base = powf(cosf(d * k_pi * 0.5f), sharp);
+        /* cosf at d = +-1 rounds slightly below zero, and powf of a negative base is NaN. */
+        const float base = powf(fmaxf(0.0f, cosf(d * k_pi * 0.5f)), sharp);
         const float rough = (fbm(s.seed + 2u, t * 9.0f) - 0.5f) * 0.42f * base;
         prof[i] = ink_clampf(base + rough, 0.0f, 1.08f);
         top[i] = (Vector2){s.cx + u * s.half_w, s.base_y - s.height * prof[i]};
-        bottom[i] = (Vector2){top[i].x, s.base_y + fade};
+        /* An uneven foot keeps neighbouring ranges from ending on one straight line. */
+        bottom[i] =
+            (Vector2){top[i].x, s.base_y + fade * (0.45f + 0.75f * fbm(s.seed + 11u, t * 4.0f))};
         top_c[i] = tone_c(s.tone, s.alpha * fminf(prof[i] * 1.8f, 1.0f));
         bottom_c[i] = tone_c(s.tone, 0.0f);
     }
@@ -222,60 +247,60 @@ static void draw_peak(RenderState *r, PeakSpec s)
 
 /* ---------------------------------------------------------------- stone columns */
 
-/* Tall weathered stone standing at the screen edge: pale body, vertical veins, a heavy contour on
- * the shadow side; the foot dissolves into mist. */
+/* Tall weathered stone standing at the screen edge, filled right up to a rounded, slightly
+ * off-centre summit: pale lit face, vertical veins, one contour that is heavier on the shadow side,
+ * and a foot that dissolves into mist. */
 static void draw_stone_column(RenderState *r, float cx, float y_top, float y_bot, float w,
                               float alpha, uint32_t seed)
 {
-    enum { N = 12 };
+    enum { N = 18 };
     Vector2 left[N];
     Vector2 right[N];
     Color lc[N];
     Color rc[N];
+    float shape[N];
+    const float dome = 0.10f + 0.06f * h01(seed, 9u); /* share of the height spent widening */
+    const float apex_off = hs(seed, 8u) * w * 0.16f;
     for (int k = 0; k < N; ++k) {
-        const float t = (float)k / (float)(N - 1);
+        /* Rows bunch up near the summit so the rounded crown stays smooth. */
+        const float t = powf((float)k / (float)(N - 1), 1.7f);
         const float y = y_top + (y_bot - y_top) * t;
-        const float bulge = sinf(t * k_pi) * w * 0.08f;
-        const float lw = (fbm(seed, t * 3.0f) - 0.5f) * w * 0.28f;
-        const float rw = (fbm(seed + 1u, t * 3.0f) - 0.5f) * w * 0.28f;
-        left[k] = (Vector2){cx - w * 0.5f - bulge + lw, y};
-        right[k] = (Vector2){cx + w * 0.5f + bulge + rw, y};
+        const float grow = sqrtf(fminf(t / dome, 1.0f));
+        const float bulge = sinf(t * k_pi) * 0.08f;
+        shape[k] = grow * (1.0f + bulge);
+        const float xc = cx + apex_off * (1.0f - grow);
+        const float lw = (fbm(seed, t * 3.0f) - 0.5f) * w * 0.28f * grow;
+        const float rw = (fbm(seed + 1u, t * 3.0f) - 0.5f) * w * 0.28f * grow;
+        left[k] = (Vector2){xc - w * 0.5f * shape[k] + lw, y};
+        right[k] = (Vector2){xc + w * 0.5f * shape[k] + rw, y};
         const float foot = 1.0f - ink_clampf((t - 0.62f) / 0.38f, 0.0f, 1.0f);
         lc[k] = tone_c(PAL_SUMI_CLEAR, alpha * 0.95f * foot);
         rc[k] = tone_c(PAL_SUMI_LIGHT, alpha * 0.92f * foot);
     }
-    /* Weathered, uneven crown rather than a clean cylinder cap. */
-    Vector2 cap[9];
-    const float cw = (right[0].x - left[0].x) * 0.5f;
-    const float ccx = (right[0].x + left[0].x) * 0.5f;
-    const float peak = hs(seed + 30u, 0u) * 0.35f;
-    for (int k = 0; k < 9; ++k) {
-        const float a = k_pi + k_pi * (float)k / 8.0f;
-        const float j = (k == 0 || k == 8) ? 1.0f : 0.78f + 0.4f * h01(seed + 31u, (uint32_t)k);
-        const float lean = 1.0f + peak * cosf(a);
-        cap[k] = (Vector2){ccx + cosf(a) * cw, y_top + sinf(a) * cw * 0.9f * j * lean};
-    }
-    ink_fill_poly(r, cap, 9, tone_c(PAL_SUMI_CLEAR, alpha * 0.95f));
     ink_fill_strip_shaded(r, left, right, lc, rc, N);
     /* Shadow face: a darker band hugging the right edge. */
     Vector2 inner[N];
     Color ic[N];
     Color sc[N];
     for (int k = 0; k < N; ++k) {
-        inner[k] = (Vector2){right[k].x - w * 0.32f, right[k].y};
-        const float foot =
-            1.0f - ink_clampf(((float)k / (float)(N - 1) - 0.55f) / 0.45f, 0.0f, 1.0f);
+        const float t = (right[k].y - y_top) / (y_bot - y_top);
+        inner[k] = (Vector2){right[k].x - w * 0.32f * shape[k], right[k].y};
+        const float foot = 1.0f - ink_clampf((t - 0.55f) / 0.45f, 0.0f, 1.0f);
         ic[k] = tone_c(PAL_SUMI_HEAVY, 0.0f);
         sc[k] = tone_c(PAL_SUMI_HEAVY, alpha * 0.55f * foot);
     }
     ink_fill_strip_shaded(r, inner, right, ic, sc, N);
-    /* Vertical veins (wrinkle strokes) like weathered limestone. */
+    ink_wash(r, (Vector2){cx + apex_off * 0.5f - w * 0.12f, y_top + (y_bot - y_top) * 0.05f},
+             w * 0.22f, w * 0.12f, -0.4f, (InkTone){.color = PAL_GOFUN, .alpha = alpha * 0.45f}, 1,
+             seed + 6u);
+
+    /* Vertical veins (wrinkle strokes) like weathered limestone, starting below the crown. */
     const int veins = 3 + (int)(w / 40.0f);
     for (int v = 0; v < veins; ++v) {
         const float off =
             -0.36f + 0.72f * ((float)v + 0.5f) / (float)veins + hs(seed + 2u, (uint32_t)v) * 0.06f;
-        const float t0 = 0.04f + 0.2f * h01(seed + 3u, (uint32_t)v);
-        const float t1 = t0 + 0.35f + 0.35f * h01(seed + 4u, (uint32_t)v);
+        const float t0 = 0.22f + 0.2f * h01(seed + 3u, (uint32_t)v);
+        const float t1 = fminf(0.95f, t0 + 0.30f + 0.30f * h01(seed + 4u, (uint32_t)v));
         Vector2 pts[5];
         for (int k = 0; k < 5; ++k) {
             const float t = t0 + (t1 - t0) * (float)k / 4.0f;
@@ -288,19 +313,27 @@ static void draw_stone_column(RenderState *r, float cx, float y_top, float y_bot
                  brush(2.4f + w * 0.035f, 0.2f, 0.2f, 0.45f, 0.7f, seed + 10u + (uint32_t)v),
                  PAL_SUMI_HEAVY, alpha * (0.42f + 0.25f * h01(seed + 5u, (uint32_t)v)));
     }
-    /* Contours: heavy on the shadow side, lighter on the lit side, both fading toward the foot. */
-    Vector2 rline[8];
-    Vector2 lline[8];
-    for (int k = 0; k < 8; ++k) {
-        const float t = 0.72f * (float)k / 7.0f;
-        rline[k] = lerp_pt(right, N, t);
-        lline[k] = lerp_pt(left, N, t);
+    /* Moss dots along the crown. */
+    for (int k = 0; k < 5; ++k) {
+        const Vector2 p = lerp_pt(k % 2 == 0 ? left : right, N, 0.08f + 0.05f * (float)k);
+        ink_wash(r, (Vector2){p.x + (k % 2 == 0 ? 3.0f : -3.0f), p.y + 2.0f}, 2.6f, 1.8f, 0.3f,
+                 (InkTone){.color = PAL_SUMI_DARK, .alpha = fminf(0.9f, alpha * 1.1f)}, 1,
+                 seed + 40u + (uint32_t)k);
     }
-    stroke_n(r, rline, 8, brush(5.0f + w * 0.03f, 0.2f, 0.04f, 0.55f, 0.45f, seed + 20u),
-             PAL_SUMI_DARK, alpha * 1.05f);
-    stroke_n(r, lline, 8, brush(2.4f, 0.25f, 0.04f, 0.6f, 0.6f, seed + 21u), PAL_SUMI_DARK,
-             alpha * 0.85f);
-    stroke_n(r, cap, 9, brush(3.2f, 0.3f, 0.1f, 0.1f, 0.4f, seed + 22u), PAL_SUMI_DARK, alpha);
+    /* One contour over the summit: thin on the lit left, heavy on the shadowed right, both ends
+     * lifting off before the foot dissolves. */
+    enum { C = 13 };
+    Vector2 contour[C * 2 - 1];
+    int n = 0;
+    for (int k = C - 1; k >= 0; --k) {
+        contour[n++] = left[k];
+    }
+    for (int k = 1; k < C; ++k) {
+        contour[n++] = right[k];
+    }
+    ink_outline_tone(r, contour, n, false, 5.6f + w * 0.03f, (Vector2){0.95f, 0.3f},
+                     (InkTone){.color = PAL_SUMI_DARK, .alpha = fminf(1.0f, alpha * 1.1f)},
+                     seed + 20u);
 }
 
 /* ---------------------------------------------------------------- trees */
@@ -549,7 +582,7 @@ static void scene_lobby(RenderState *r)
     draw_peak(r, (PeakSpec){760.0f, 196.0f, 92.0f, 200.0f, PAL_SUMI_LIGHT, 0.28f, 1.8f, 7012u});
     draw_peak(r, (PeakSpec){330.0f, 206.0f, 120.0f, 190.0f, PAL_SUMI_HEAVY, 0.30f, 2.8f, 7013u});
     draw_peak(r, (PeakSpec){1210.0f, 214.0f, 104.0f, 170.0f, PAL_SUMI_HEAVY, 0.30f, 2.8f, 7014u});
-    mist_band(r, 170.0f, 300.0f, 0.75f);
+    mist_drift(r, 228.0f, 120.0f, 0.8f, 7050u);
 
     draw_stone_column(r, 26.0f, 40.0f, 620.0f, 64.0f, 0.75f, 7100u);
     draw_stone_column(r, 140.0f, 110.0f, 300.0f, 54.0f, 0.55f, 7101u);
@@ -580,7 +613,7 @@ static void scene_act1(RenderState *r)
     draw_peak(r, (PeakSpec){420.0f, 138.0f, 70.0f, 200.0f, PAL_SUMI_LIGHT, 0.26f, 1.8f, 1013u});
     draw_peak(r, (PeakSpec){800.0f, 142.0f, 62.0f, 210.0f, PAL_SUMI_HEAVY, 0.28f, 2.4f, 1014u});
     draw_peak(r, (PeakSpec){40.0f, 150.0f, 80.0f, 170.0f, PAL_SUMI_HEAVY, 0.30f, 2.6f, 1015u});
-    mist_band(r, 118.0f, 210.0f, 0.7f);
+    mist_drift(r, 162.0f, 86.0f, 0.75f, 1050u);
 
     draw_stone_column(r, 1166.0f, 70.0f, 330.0f, 58.0f, 0.7f, 1100u);
     draw_stone_column(r, 1262.0f, 50.0f, 420.0f, 70.0f, 0.75f, 1101u);
@@ -602,7 +635,7 @@ static void scene_act2(RenderState *r)
     draw_peak(r, (PeakSpec){420.0f, 124.0f, 60.0f, 300.0f, PAL_SUMI_LIGHT, 0.18f, 0.0f, 2010u});
     draw_peak(r, (PeakSpec){860.0f, 128.0f, 70.0f, 280.0f, PAL_SUMI_LIGHT, 0.18f, 0.0f, 2011u});
     draw_peak(r, (PeakSpec){640.0f, 140.0f, 50.0f, 180.0f, PAL_SUMI_HEAVY, 0.26f, 2.2f, 2012u});
-    mist_band(r, 110.0f, 196.0f, 0.65f);
+    mist_drift(r, 152.0f, 80.0f, 0.7f, 2050u);
 
     static const float far_x[10] = {14.0f,   40.0f,   70.0f,   104.0f,  140.0f,
                                     1140.0f, 1176.0f, 1210.0f, 1240.0f, 1268.0f};
@@ -639,7 +672,7 @@ static void scene_act3(RenderState *r)
     draw_peak(r, (PeakSpec){1000.0f, 142.0f, 100.0f, 170.0f, PAL_SUMI_HEAVY, 0.30f, 2.4f, 3012u});
     draw_cloud(r, (Vector2){430.0f, 70.0f}, 250.0f, 58.0f, PAL_SUMI_HEAVY, 0.22f, 3020u);
     draw_cloud(r, (Vector2){820.0f, 62.0f}, 270.0f, 60.0f, PAL_SUMI_HEAVY, 0.22f, 3030u);
-    mist_band(r, 132.0f, 220.0f, 0.65f);
+    mist_drift(r, 174.0f, 84.0f, 0.7f, 3050u);
 
     draw_stone_column(r, 30.0f, 60.0f, 700.0f, 78.0f, 0.8f, 3100u);
     draw_stone_column(r, 116.0f, 300.0f, 700.0f, 52.0f, 0.6f, 3101u);

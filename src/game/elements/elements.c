@@ -248,12 +248,13 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
     const float cx_px = sum_x[best_b] / (float)count;
     const float cy_px = sum_y[best_b] / (float)count;
 
+    const float dye_rad_px = 96.0f;
     if (g->pending_impulse_count < GAME_MAX_PENDING_IMPULSE) {
         g->pending_impulses[g->pending_impulse_count++] = (PendingImpulse){
             .x = cx_px,
             .y = cy_px,
-            .rad_cells = 12.0f,
-            .peak_speed = 90.0f,
+            .rad_cells = GAME_PX_TO_CELLS(dye_rad_px),
+            .peak_speed = GAME_PX_TO_CELLS(720.0f),
         };
     }
 
@@ -356,7 +357,6 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
                                   0.0f);
     }
 
-    const float dye_rad_px = 12.0f * FLUID_CELL_PX;
     const float dye_rad_px2 = dye_rad_px * dye_rad_px;
     int gx0 = (int)floorf((cx_px - dye_rad_px) / FLUID_CELL_PX);
     int gx1 = (int)ceilf((cx_px + dye_rad_px) / FLUID_CELL_PX);
@@ -493,8 +493,8 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
     }
 
     const float dmg_rad_px = 96.0f * rmul;
-    const float dye_rad_cells = 9.0f * rmul;
-    const float dye_rad_px = dye_rad_cells * FLUID_CELL_PX;
+    const float dye_rad_px = 72.0f * rmul;
+    const float dye_rad_cells = GAME_PX_TO_CELLS(dye_rad_px);
     const float dye_rad_px2 = dye_rad_px * dye_rad_px;
     const uint32_t hw = g->ecs.high_water;
 
@@ -509,7 +509,7 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
                 .x = cx_px,
                 .y = cy_px,
                 .rad_cells = dye_rad_cells,
-                .peak_speed = 60.0f,
+                .peak_speed = GAME_PX_TO_CELLS(480.0f),
             };
         }
 

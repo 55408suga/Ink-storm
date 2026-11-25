@@ -5,6 +5,13 @@
 
 enum { POLYLINE_MIN_STEPS = 2, POLYLINE_MAX_STEPS = 24 };
 
+int render_polyline_segment_steps(float seg_len)
+{
+    const float d = isfinite(seg_len) && seg_len > 0.0f ? seg_len : 0.0f;
+    const int n = (int)ceilf(fminf(d, 4.0f * (float)POLYLINE_MAX_STEPS) / 4.0f);
+    return n < POLYLINE_MIN_STEPS ? POLYLINE_MIN_STEPS : n;
+}
+
 static float clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
 
 static float smooth(float lo, float hi, float x)
@@ -33,17 +40,21 @@ bool render_bg_key_equal(BgKey a, BgKey b)
     return a.kind == b.kind && a.act_index == b.act_index;
 }
 
-bool render_fluid_use_gpu(bool post_enabled, unsigned int fluid_shader_id)
+bool render_fluid_use_gpu(bool post_enabled, unsigned int fluid_shader_id,
+                          unsigned int paper_tex_id)
 {
-    return post_enabled && fluid_shader_id != 0u;
+    return post_enabled && fluid_shader_id != 0u && paper_tex_id != 0u;
 }
 
-static unsigned char encode_density(float value, float inv_max)
+static unsigned char encode_density(float value, float max_dye)
 {
     if (!(value > 0.0f)) {
         return 0u;
     }
-    const float n = clamp01(value * inv_max);
+    /* Divide instead of multiplying by 1 / max_dye: a tiny max_dye makes the reciprocal infinite.
+     */
+    const float ratio = value / max_dye;
+    const float n = isfinite(ratio) ? clamp01(ratio) : 1.0f;
     return (unsigned char)(sqrtf(n) * 255.0f + 0.5f);
 }
 
@@ -57,12 +68,11 @@ void render_fluid_encode_field(const FluidState *f, unsigned char *rgba)
     const float *storm = fluid_channel_const(f, 2);
     const uint8_t *solid = fluid_solid_const(f);
     const float max_dye = isfinite(f->cfg.max_dye) && f->cfg.max_dye > 0.0f ? f->cfg.max_dye : 1.0f;
-    const float inv_max = 1.0f / max_dye;
     for (int i = 0; i < FLUID_N; ++i) {
         unsigned char *px = rgba + (size_t)i * 4u;
-        px[0] = encode_density(ink[i], inv_max);
-        px[1] = encode_density(fire[i], inv_max);
-        px[2] = encode_density(storm[i], inv_max);
+        px[0] = encode_density(ink[i], max_dye);
+        px[1] = encode_density(fire[i], max_dye);
+        px[2] = encode_density(storm[i], max_dye);
         px[3] = solid[i] != 0u ? 255u : 0u;
     }
 }
@@ -121,37 +131,60 @@ RenderRgba render_fluid_cpu_elem(const RenderFluidPalette *pal, float fire, floa
     return (RenderRgba){c.r * a, c.g * a, c.b * a, a};
 }
 
-int render_polyline_plan(const float *seg_len, int segs, int cap, int *steps)
+static float usable_length(float len) { return isfinite(len) && len > 0.0f ? len : 0.0f; }
+
+static int plan_by_arc_length(const float *seg_len, int segs, int budget, RenderPolySample *out)
 {
-    if (seg_len == NULL || steps == NULL || segs <= 0 || cap < 2) {
+    double total = 0.0;
+    for (int s = 0; s < segs; ++s) {
+        total += usable_length(seg_len[s]);
+    }
+    if (!(total > 0.0)) {
+        for (int k = 0; k < budget; ++k) {
+            out[k] = (RenderPolySample){(int32_t)(((long long)k * segs) / budget), 0.0f};
+        }
+        return budget;
+    }
+    int s = 0;
+    double seg_start = 0.0;
+    for (int k = 0; k < budget; ++k) {
+        const double target = total * (double)k / (double)budget;
+        while (s < segs - 1 && seg_start + usable_length(seg_len[s]) <= target) {
+            seg_start += usable_length(seg_len[s]);
+            ++s;
+        }
+        const double len = usable_length(seg_len[s]);
+        const double t = len > 0.0 ? (target - seg_start) / len : 0.0;
+        out[k] = (RenderPolySample){(int32_t)s, (float)(t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t))};
+    }
+    return budget;
+}
+
+int render_polyline_plan(const float *seg_len, int segs, int cap, RenderPolySample *out)
+{
+    if (seg_len == NULL || out == NULL || segs <= 0 || cap < 2) {
         return 0;
+    }
+    const int budget = cap - 1;
+    if (segs >= budget) {
+        return plan_by_arc_length(seg_len, segs, budget, out);
     }
     int total = 0;
     for (int s = 0; s < segs; ++s) {
-        const float d = isfinite(seg_len[s]) && seg_len[s] > 0.0f ? seg_len[s] : 0.0f;
-        const float wanted = ceilf(fminf(d, 4.0f * (float)POLYLINE_MAX_STEPS) / 4.0f);
-        int n = (int)wanted;
-        n = n < POLYLINE_MIN_STEPS ? POLYLINE_MIN_STEPS : n;
-        steps[s] = n;
-        total += n;
+        total += render_polyline_segment_steps(seg_len[s]);
     }
-    const int budget = cap - 1;
-    if (total <= budget) {
-        return total + 1;
-    }
-    if (segs >= budget) {
-        for (int s = 0; s < segs; ++s) {
-            steps[s] = s < budget ? 1 : 0;
-        }
-        return budget + 1;
-    }
-    /* Every segment keeps one sample; the spare budget is shared in proportion to its demand. */
+    /* Every segment keeps its start sample; any spare budget is shared in proportion to demand. */
     const int spare = budget - segs;
     const int demand = total - segs;
-    int used = 0;
+    int n = 0;
     for (int s = 0; s < segs; ++s) {
-        steps[s] = 1 + (int)(((long long)(steps[s] - 1) * spare) / demand);
-        used += steps[s];
+        int steps = render_polyline_segment_steps(seg_len[s]);
+        if (total > budget) {
+            steps = 1 + (int)(((long long)(steps - 1) * spare) / demand);
+        }
+        for (int k = 0; k < steps; ++k) {
+            out[n++] = (RenderPolySample){(int32_t)s, (float)k / (float)steps};
+        }
     }
-    return used + 1;
+    return n;
 }

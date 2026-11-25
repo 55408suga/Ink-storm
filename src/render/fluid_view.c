@@ -45,8 +45,9 @@ static const char k_fluid_fragment[] =
     "  float pf=texture(texture1,pu*.37+vec2(.31,.17)).r;\n"
     "  vec2 bleed=(vec2(pp,pf)-.95)*6./u_fluidSize;\n"
     "  vec4 F=field(uv+bleed);\n"
-    "  vec3 v=F.rgb*F.rgb*u_maxDye;\n"
-    "  float open=1.-smoothstep(.3,.7,F.a);\n"
+    "  vec3 v=min(F.rgb*F.rgb*u_maxDye,vec3(4.));\n"
+    "  ivec2 cell=ivec2(clamp(uv*u_fluidSize,vec2(0.),u_fluidSize-1.));\n"
+    "  float open=1.-texelFetch(texture0,cell,0).a;\n"
     "  float gr=clamp((.975-pp)*9.,-.4,1.);\n"
     "  float d=v.r*(1.+.22*gr);\n"
     "  float cov=smoothstep(.05,.1,d);\n"
@@ -161,9 +162,7 @@ static void load_fluid_shader(RenderState *r)
 {
     Shader shader = LoadShaderFromMemory(NULL, k_fluid_fragment);
     if (!IsShaderValid(shader) || shader.id == rlGetShaderIdDefault()) {
-        if (shader.id != 0 && shader.id != rlGetShaderIdDefault()) {
-            UnloadShader(shader);
-        }
+        render_discard_shader(shader);
         TraceLog(LOG_WARNING, "INKSTORM: fluid shader unavailable; using CPU fluid shading");
         return;
     }
@@ -193,16 +192,20 @@ void render_fluid_init(RenderState *r, const RenderOptions *opt)
     r->fluid_shader = (Shader){0};
     r->fluid_paper_loc = -1;
     r->fluid_max_dye_loc = -1;
-    r->fluid_field_tex = load_field_texture(pal_blank());
-    r->fluid_ink_tex = load_field_texture(pal_white());
-    r->fluid_elem_tex = load_field_texture(pal_blank());
+    for (int i = 0; i < 2; ++i) {
+        r->fluid_field_tex[i] = load_field_texture(pal_blank());
+        r->fluid_ink_tex[i] = load_field_texture(pal_white());
+        r->fluid_elem_tex[i] = load_field_texture(pal_blank());
+    }
+    r->fluid_tex_slot = 0;
     build_cpu_luts(r);
 
     /* The GPU path rides on the post-processing switch, so --no-post and an injected shader fault
      * both exercise the CPU shading below. */
     const bool use_post = opt == NULL || opt->use_post;
     const bool shader_fault = opt != NULL && (opt->fault_mask & RENDER_FAULT_SHADER) != 0;
-    if (use_post && !shader_fault && r->fluid_field_tex.id != 0) {
+    if (use_post && !shader_fault && r->fluid_field_tex[0].id != 0 &&
+        r->fluid_field_tex[1].id != 0) {
         load_fluid_shader(r);
     }
 }
@@ -212,8 +215,9 @@ void render_fluid_close(RenderState *r)
     if (r == NULL) {
         return;
     }
-    Texture2D *texes[3] = {&r->fluid_field_tex, &r->fluid_ink_tex, &r->fluid_elem_tex};
-    for (int i = 0; i < 3; ++i) {
+    Texture2D *texes[6] = {&r->fluid_field_tex[0], &r->fluid_field_tex[1], &r->fluid_ink_tex[0],
+                           &r->fluid_ink_tex[1],   &r->fluid_elem_tex[0],  &r->fluid_elem_tex[1]};
+    for (int i = 0; i < 6; ++i) {
         if (texes[i]->id != 0) {
             UnloadTexture(*texes[i]);
             *texes[i] = (Texture2D){0};
@@ -229,27 +233,28 @@ void render_fluid_close(RenderState *r)
 
 bool render_fluid_gpu_active(const RenderState *r)
 {
-    return r != NULL && render_fluid_use_gpu(r->post_enabled, r->fluid_shader.id) &&
-           r->fluid_field_tex.id != 0;
+    return r != NULL &&
+           render_fluid_use_gpu(r->post_enabled, r->fluid_shader.id,
+                                r->fluid_paper_loc >= 0 ? r->paper_tex.id : 0u) &&
+           r->fluid_field_tex[0].id != 0 && r->fluid_field_tex[1].id != 0;
 }
 
 static void draw_fluid_gpu(RenderState *r, const GameState *g)
 {
     render_fluid_encode_field(&g->fluid, r->fluid_field_px);
-    UpdateTexture(r->fluid_field_tex, r->fluid_field_px);
+    const Texture2D field = r->fluid_field_tex[r->fluid_tex_slot];
+    UpdateTexture(field, r->fluid_field_px);
 
     const Rectangle src = {0.0f, 0.0f, (float)FLUID_W, (float)FLUID_H};
     const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
     render_set_blend(r, BLEND_ALPHA_PREMULTIPLY);
     BeginShaderMode(r->fluid_shader);
-    if (r->fluid_paper_loc >= 0 && r->paper_tex.id != 0) {
-        SetShaderValueTexture(r->fluid_shader, r->fluid_paper_loc, r->paper_tex);
-    }
+    SetShaderValueTexture(r->fluid_shader, r->fluid_paper_loc, r->paper_tex);
     if (r->fluid_max_dye_loc >= 0) {
         const float max_dye = g->fluid.cfg.max_dye;
         SetShaderValue(r->fluid_shader, r->fluid_max_dye_loc, &max_dye, SHADER_UNIFORM_FLOAT);
     }
-    DrawTexturePro(r->fluid_field_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+    DrawTexturePro(field, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
     EndShaderMode();
     render_set_blend(r, BLEND_ALPHA);
 }
@@ -282,16 +287,18 @@ static void draw_fluid_cpu(RenderState *r, const GameState *g)
             r->fluid_elem_px[idx] = r->fluid_elem_lut[fi * RENDER_ELEM_LUT_LEVELS + si];
         }
     }
-    UpdateTexture(r->fluid_ink_tex, r->fluid_ink_px);
-    UpdateTexture(r->fluid_elem_tex, r->fluid_elem_px);
+    const Texture2D ink_tex = r->fluid_ink_tex[r->fluid_tex_slot];
+    const Texture2D elem_tex = r->fluid_elem_tex[r->fluid_tex_slot];
+    UpdateTexture(ink_tex, r->fluid_ink_px);
+    UpdateTexture(elem_tex, r->fluid_elem_px);
 
     const Rectangle src = {0.0f, 0.0f, (float)FLUID_W, (float)FLUID_H};
     const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
     render_set_blend(r, BLEND_MULTIPLIED);
-    DrawTexturePro(r->fluid_ink_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+    DrawTexturePro(ink_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
     /* Premultiplied texels filter without the dark fringe that straight alpha over black gives. */
     render_set_blend(r, BLEND_ALPHA_PREMULTIPLY);
-    DrawTexturePro(r->fluid_elem_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+    DrawTexturePro(elem_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
     render_set_blend(r, BLEND_ALPHA);
 }
 
@@ -302,7 +309,11 @@ void render_fluid_update_and_draw(RenderState *r, const GameState *g)
     }
     if (render_fluid_gpu_active(r)) {
         draw_fluid_gpu(r, g);
-    } else if (r->fluid_ink_tex.id != 0 && r->fluid_elem_tex.id != 0) {
+    } else if (r->fluid_ink_tex[0].id != 0 && r->fluid_ink_tex[1].id != 0 &&
+               r->fluid_elem_tex[0].id != 0 && r->fluid_elem_tex[1].id != 0) {
         draw_fluid_cpu(r, g);
+    } else {
+        return;
     }
+    r->fluid_tex_slot ^= 1;
 }

@@ -56,12 +56,25 @@ static XrayCellCounts count_element_cells(const FluidState *f)
 static void draw_solid_borders(const FluidState *f)
 {
     const Color solid_col = pal_color_alpha(PAL_KIN, 0.50f);
-    const int cell_px = (int)FLUID_CELL_PX;
+    /* Cell edges stay fractional so the frames line up with terrain on grids whose cells are not a
+     * whole number of pixels. */
     for (int y = 1; y < FLUID_H - 1; ++y) {
         const int row = y * FLUID_W;
+        const float y0 = (float)y * FLUID_CELL_PX;
+        const float y1 = (float)(y + 1) * FLUID_CELL_PX;
         for (int x = 1; x < FLUID_W - 1; ++x) {
             if (f->solid[row + x] != 0) {
-                DrawRectangleLines(x * cell_px, y * cell_px, cell_px, cell_px, solid_col);
+                const float x0 = (float)x * FLUID_CELL_PX;
+                const float x1 = (float)(x + 1) * FLUID_CELL_PX;
+                /* Half-pixel inset matches DrawRectangleLines' pixel-centred lines. */
+                const float l = x0 + 0.5f;
+                const float rgt = x1 - 0.5f;
+                const float t = y0 + 0.5f;
+                const float b = y1 - 0.5f;
+                DrawLineV((Vector2){l, t}, (Vector2){rgt, t}, solid_col);
+                DrawLineV((Vector2){rgt, t}, (Vector2){rgt, b}, solid_col);
+                DrawLineV((Vector2){rgt, b}, (Vector2){l, b}, solid_col);
+                DrawLineV((Vector2){l, b}, (Vector2){l, t}, solid_col);
             }
         }
     }

@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <string.h>
 
-enum { INK_MAX_SAMPLES = 256 };
+enum { INK_MAX_SAMPLES = 256, INK_MAX_CTRL = 512 };
 
 static const float k_pi = 3.14159265359f;
 static const float k_two_pi = 6.28318530718f;
@@ -61,32 +61,35 @@ static int resample_polyline(const Vector2 *pts, int n, bool closed, Vector2 *ou
     if (n < 2 || cap < 2) {
         return 0;
     }
-    int segs = closed ? n : (n - 1);
-    segs = segs > INK_MAX_SAMPLES ? INK_MAX_SAMPLES : segs;
-    float seg_len[INK_MAX_SAMPLES] = {0};
-    int seg_steps[INK_MAX_SAMPLES] = {0};
+    cap = cap > INK_MAX_SAMPLES ? INK_MAX_SAMPLES : cap;
+    /* Very dense input is thinned to evenly strided control points that keep both ends. */
+    Vector2 thin[INK_MAX_CTRL];
+    if (n > INK_MAX_CTRL) {
+        for (int i = 0; i < INK_MAX_CTRL; ++i) {
+            thin[i] = pts[(int)(((long long)i * (n - 1)) / (INK_MAX_CTRL - 1))];
+        }
+        pts = thin;
+        n = INK_MAX_CTRL;
+    }
+    const int segs = closed ? n : (n - 1);
+    float seg_len[INK_MAX_CTRL] = {0};
     for (int s = 0; s < segs; ++s) {
         seg_len[s] = vec_dist(pts[s % n], pts[(s + 1) % n]);
     }
-    /* Budgeting every segment up front keeps long strokes from running out of samples and
-     * closing with a straight chord to the last point. */
-    (void)render_polyline_plan(seg_len, segs, cap, seg_steps);
-    int out_n = 0;
-    for (int s = 0; s < segs && out_n < cap - 1; ++s) {
+    /* Planning every segment up front keeps long strokes from running out of samples and closing
+     * with a straight chord to the last point. */
+    RenderPolySample plan[INK_MAX_SAMPLES];
+    const int count = render_polyline_plan(seg_len, segs, cap, plan);
+    for (int k = 0; k < count; ++k) {
+        const int s = plan[k].seg < 0 ? 0 : (plan[k].seg >= segs ? segs - 1 : plan[k].seg);
         const int i1 = s % n;
         const int i2 = (s + 1) % n;
         const int i0 = closed ? ((s + n - 1) % n) : (s > 0 ? s - 1 : 0);
         const int i3 = closed ? ((s + 2) % n) : (s + 2 < n ? s + 2 : n - 1);
-        const int steps = seg_steps[s];
-        for (int k = 0; k < steps && out_n < cap - 1; ++k) {
-            const float t = (float)k / (float)steps;
-            out[out_n++] = catmull_rom(pts[i0], pts[i1], pts[i2], pts[i3], t);
-        }
+        out[k] = catmull_rom(pts[i0], pts[i1], pts[i2], pts[i3], plan[k].t);
     }
-    if (out_n < cap) {
-        out[out_n++] = closed ? pts[0] : pts[n - 1];
-    }
-    return out_n;
+    out[count] = closed ? pts[0] : pts[n - 1];
+    return count + 1;
 }
 
 static void emit_tri_ccw(RenderState *r, Vector2 a, Color ca, Vector2 b, Color cb, Vector2 c,
