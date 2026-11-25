@@ -27,10 +27,6 @@ typedef struct {
     UiView ui;
 
     HintQueue hints;
-
-    /* Lobby brush sandbox */
-    uint64_t lobby_ticks;
-    float lobby_idle_t;
 } AppRunContext;
 
 static void sync_meta_view(AppRunContext *ctx)
@@ -109,7 +105,6 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
     const RunConfig sandbox_cfg =
         meta_build_run_config(&ctx->meta, ctx->ui.selected_brush, UINT64_C(1));
     game_init_sandbox(game, &sandbox_cfg);
-    ctx->lobby_idle_t = 0.0f;
     render_reset_vfx(render, UINT64_C(1));
     sync_meta_view(ctx);
     if (audio != NULL) {
@@ -321,28 +316,12 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
 
 /* The Lobby canvas runs the real brush, skills and element reactions on a sandbox GameState so
  * what the player feels there is exactly what each brush does in a run. */
-static void step_lobby_sandbox(AppRunContext *ctx, GameState *game, RenderState *render,
-                               AudioState *audio, InputLatch *latch, bool interactive)
+static void step_lobby_sandbox(const AppRunContext *ctx, GameState *game, RenderState *render,
+                               AudioState *audio, InputLatch *latch, bool interactive,
+                               int32_t remaining_ticks)
 {
-    ctx->lobby_ticks++;
     game_sandbox_set_brush(game, ctx->ui.selected_brush);
-    const BrushInput in = input_latch_take_tick(latch);
-    const bool active = interactive && (in.paint || in.cyclone || in.gale);
-    ctx->lobby_idle_t = active ? 0.0f : ctx->lobby_idle_t + INK_FIXED_DT;
-
-    /* The ambient swirl backs off while the player is testing so it never fights their stroke. */
-    const float ambient = ink_clampf((ctx->lobby_idle_t - 0.8f) / 1.6f, 0.0f, 1.0f);
-    const float t = (float)ctx->lobby_ticks * INK_FIXED_DT;
-    const float px = 784.0f + cosf(t * 0.42f) * 240.0f;
-    const float py = 368.0f + sinf(t * 0.65f) * 160.0f;
-    const float vx = -sinf(t * 0.42f) * 16.0f * ambient;
-    const float vy = cosf(t * 0.65f) * 14.0f * ambient;
-    const float amb_dye[FLUID_MAX_CHANNELS] = {
-        (ctx->lobby_ticks % 6u) == 0u ? 0.24f * ambient : 0.0f, 0.0f, 0.0f, 0.0f};
-    if (ambient > 0.0f) {
-        fluid_splat(&game->fluid, px, py, 5.5f, vx, vy, amb_dye);
-    }
-
+    const BrushInput in = input_latch_take_subtick(latch, remaining_ticks);
     game_step_sandbox(game, interactive ? &in : NULL);
     audio_consume_lobby_events(audio, game);
     render_consume_events(render, game);
@@ -609,7 +588,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
 
     AudioOut audio_out = {0};
     if (opts->smoke_frames == 0) {
-        audio_out_init(&audio_out);
+        audio_out_init(&audio_out, audio);
     }
 
     FrameClock clock;
@@ -659,7 +638,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                 const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
                 for (int t = 0; t < ticks; ++t) {
                     const RunPhase prev_phase = game->phase;
-                    const BrushInput in = input_latch_take_tick(&latch);
+                    const BrushInput in = input_latch_take_subtick(&latch, ticks - t);
                     GameCommand cmd = input_latch_take_command(&latch, game->phase);
                     if (game->phase == RUN_PHASE_REWARD &&
                         (render->reward_anim_t < 0.75f || render->reward_reroll_t > 0.0f)) {
@@ -697,7 +676,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                 }
                 const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
                 for (int t = 0; t < ticks; ++t) {
-                    step_lobby_sandbox(&ctx, game, render, audio, &latch, interactive);
+                    step_lobby_sandbox(&ctx, game, render, audio, &latch, interactive, ticks - t);
                 }
             }
             audio_out_pump(&audio_out, audio);

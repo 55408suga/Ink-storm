@@ -298,6 +298,8 @@ void game_init_sandbox(GameState *g, const RunConfig *cfg)
     g->phase = RUN_PHASE_PLAYING;
     g->phase_t = 0.0f;
     g->internal.act_prepared = true;
+    g->internal.sandbox_infinite_ink = true;
+    player_skills_refill_sandbox_ink(g);
 }
 
 void game_sandbox_set_brush(GameState *g, BrushStyleId brush)
@@ -309,6 +311,7 @@ void game_sandbox_set_brush(GameState *g, BrushStyleId brush)
     g->config.brush_style = brush;
     g->internal.ember_tip_dist = 0.0f;
     roguelike_recompute_modifiers(g);
+    player_skills_refill_sandbox_ink(g);
 }
 
 void game_sandbox_apply_config(GameState *g, const RunConfig *cfg)
@@ -319,6 +322,7 @@ void game_sandbox_apply_config(GameState *g, const RunConfig *cfg)
     g->config = *cfg;
     g->internal.ember_tip_dist = 0.0f;
     roguelike_recompute_modifiers(g);
+    player_skills_refill_sandbox_ink(g);
 }
 
 void game_step_sandbox(GameState *g, const BrushInput *in)

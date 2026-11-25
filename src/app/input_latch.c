@@ -1,7 +1,10 @@
 #include "input_latch.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
+
+static const double k_min_slice_px = 2.5;
 
 void input_latch_init(InputLatch *l, float x, float y)
 {
@@ -92,6 +95,42 @@ BrushInput input_latch_take_tick(InputLatch *l)
 
     l->prev_x = l->cur_x;
     l->prev_y = l->cur_y;
+    l->cyclone_pending = false;
+    l->gale_pending = false;
+    return in;
+}
+
+/* A catch-up frame that runs several ticks hands each one an equal slice of the frame's pointer
+ * motion; giving it all to the first tick left the rest with zero stroke speed, which chopped the
+ * brush sound on every slow frame. A tick that consumes a skill press still takes the whole
+ * remaining motion: a slice would cast Cyclone and Gale behind the sampled cursor. A small move
+ * also stays whole, because its slices would all fall under Gale's 2 px aim step and leave the
+ * next Gale aimed the old way; the brush stays down over the still ticks after it, so its sound
+ * carries on as it does when the pointer pauses mid-stroke. */
+BrushInput input_latch_take_subtick(InputLatch *l, int32_t remaining_ticks)
+{
+    if (l == NULL || remaining_ticks <= 1 || l->cyclone_pending || l->gale_pending) {
+        return input_latch_take_tick(l);
+    }
+    const double move =
+        hypot((double)l->cur_x - (double)l->prev_x, (double)l->cur_y - (double)l->prev_y);
+    if (!(move > k_min_slice_px * (double)remaining_ticks)) {
+        return input_latch_take_tick(l);
+    }
+    const float share = 1.0f / (float)remaining_ticks;
+    const float x = l->prev_x + (l->cur_x - l->prev_x) * share;
+    const float y = l->prev_y + (l->cur_y - l->prev_y) * share;
+    const BrushInput in = {
+        .mx = x,
+        .my = y,
+        .pmx = l->prev_x,
+        .pmy = l->prev_y,
+        .paint = l->left_down && !l->paint_suppressed,
+        .cyclone = l->cyclone_pending,
+        .gale = l->gale_pending,
+    };
+    l->prev_x = x;
+    l->prev_y = y;
     l->cyclone_pending = false;
     l->gale_pending = false;
     return in;

@@ -73,6 +73,8 @@ int app_run_headless_smoke(GameState *game, AudioState *audio)
     log_optional_asset("BGM(battle)", "audio/bgm_battle.ogg", "procedural fallback");
     log_optional_asset("BGM(boss)", "audio/bgm_boss.ogg", "procedural fallback");
     log_optional_asset("BGM(victory)", "audio/bgm_victory.ogg", "procedural fallback");
+    log_optional_asset("SFX(brush flow)", "audio/sfx_brush_flow.ogg", "procedural fallback");
+    log_optional_asset("SFX(brush swish)", "audio/sfx_brush_swish.ogg", "procedural fallback");
 
     printf("Headless smoke passed. ticks=%" PRIu64 " hash=0x%016" PRIx64 "\n", game->ticks,
            game_hash(game));

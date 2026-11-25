@@ -17,9 +17,22 @@ static void decay_timer(float *t)
     }
 }
 
+void player_skills_refill_sandbox_ink(GameState *g)
+{
+    if (g == NULL || !g->internal.sandbox_infinite_ink) {
+        return;
+    }
+    g->player.ink = g->player.ink_max;
+    g->player.dry = false;
+}
+
 static void regen_ink_idle(GameState *g)
 {
     g->player.idle_t += INK_FIXED_DT;
+    if (g->internal.sandbox_infinite_ink) {
+        player_skills_refill_sandbox_ink(g);
+        return;
+    }
     const float base_rate =
         (g->internal.mods.ink_regen_no_delay || g->player.idle_t > 0.32f) ? 26.0f : 15.0f;
     const float rate = base_rate * g->internal.mods.ink_regen_mul;
@@ -70,7 +83,8 @@ static float mass_gale_multiplier(MassTier tier)
 static void cast_cyclone(GameState *g)
 {
     const RunModifiers *mods = &g->internal.mods;
-    const float cost = g->player.surge_t > 0.0f ? 26.0f * 0.5f : 26.0f;
+    const bool free_ink = g->internal.sandbox_infinite_ink;
+    const float cost = free_ink ? 0.0f : (g->player.surge_t > 0.0f ? 26.0f * 0.5f : 26.0f);
     if (g->player.cyclone_cd > 0.0f || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
@@ -84,6 +98,7 @@ static void cast_cyclone(GameState *g)
 
     g->player.ink -= cost;
     g->player.dry = g->player.ink < 20.0f;
+    player_skills_refill_sandbox_ink(g);
     g->player.cyclone_cd = mods->cyclone_cd;
 
     const float rad_cells = 15.5f * mods->cyclone_radius_mul;
@@ -275,7 +290,8 @@ static void cast_gale(GameState *g)
 {
     const RunModifiers *mods = &g->internal.mods;
     const float base_cost = 16.0f + mods->gale_cost_add;
-    const float cost = g->player.surge_t > 0.0f ? base_cost * 0.5f : base_cost;
+    const bool free_ink = g->internal.sandbox_infinite_ink;
+    const float cost = free_ink ? 0.0f : (g->player.surge_t > 0.0f ? base_cost * 0.5f : base_cost);
     if (g->player.gale_charges <= 0 || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
@@ -289,6 +305,7 @@ static void cast_gale(GameState *g)
 
     g->player.ink -= cost;
     g->player.dry = g->player.ink < 20.0f;
+    player_skills_refill_sandbox_ink(g);
     --g->player.gale_charges;
     if (g->player.gale_cd <= 0.0f) {
         g->player.gale_cd = mods->gale_cd;
@@ -451,9 +468,12 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
             const float surge_cost_mul = g->player.surge_t > 0.0f ? 0.5f : 1.0f;
             const float raw_cost =
                 (0.16f + mdist * 0.028f) * surge_cost_mul * mods->stroke_cost_mul;
+            const bool free_ink = g->internal.sandbox_infinite_ink;
             const bool free_dry = mods->dry_zero_cost && g->player.ink < 20.0f;
-            if (g->player.ink > 0.5f || free_dry) {
-                if (!free_dry) {
+            if (free_ink || g->player.ink > 0.5f || free_dry) {
+                if (free_ink) {
+                    player_skills_refill_sandbox_ink(g);
+                } else if (!free_dry) {
                     const float spent = fminf(g->player.ink, raw_cost);
                     g->player.ink -= spent;
                     if (g->player.ink < 0.0f) {

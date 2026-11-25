@@ -32,7 +32,54 @@ static void load_bgm_slot(AudioOut *out, BgmTrack track, const char *rel_path, b
     TraceLog(LOG_INFO, "INKSTORM: loaded external BGM '%s'", rel_path);
 }
 
-void audio_out_init(AudioOut *out)
+static bool load_brush_loop(const char *rel_path, Wave *out_wave)
+{
+    char full_path[PATH_MAX];
+    if (!app_resolve_asset_path(rel_path, full_path, sizeof full_path)) {
+        TraceLog(LOG_WARNING, "INKSTORM: brush loop '%s' missing; procedural fallback active",
+                 rel_path);
+        return false;
+    }
+    Wave w = LoadWave(full_path);
+    if (!IsWaveValid(w)) {
+        /* An Ogg that opens but decodes zero frames still hands back its allocation. */
+        if (w.data != NULL) {
+            UnloadWave(w);
+        }
+        TraceLog(LOG_WARNING,
+                 "INKSTORM: failed to load brush loop '%s'; procedural fallback active", rel_path);
+        return false;
+    }
+    if (w.sampleRate != (unsigned)AUDIO_SAMPLE_RATE || w.sampleSize != 16u || w.channels != 1u) {
+        WaveFormat(&w, AUDIO_SAMPLE_RATE, 16, 1);
+    }
+    if (w.data == NULL || w.frameCount == 0u || w.sampleRate != (unsigned)AUDIO_SAMPLE_RATE ||
+        w.sampleSize != 16u || w.channels != 1u) {
+        UnloadWave(w);
+        TraceLog(LOG_WARNING,
+                 "INKSTORM: brush loop '%s' could not be converted; procedural fallback active",
+                 rel_path);
+        return false;
+    }
+    *out_wave = w;
+    TraceLog(LOG_INFO, "INKSTORM: loaded brush loop '%s' (%u frames)", rel_path, w.frameCount);
+    return true;
+}
+
+static void attach_brush_loops(AudioOut *out, AudioState *audio)
+{
+    out->attached_audio = audio;
+    if (audio == NULL) {
+        return;
+    }
+    audio_set_brush_samples(audio,
+                            out->brush_flow_loaded ? (const int16_t *)out->brush_flow.data : NULL,
+                            out->brush_flow_loaded ? (size_t)out->brush_flow.frameCount : 0u,
+                            out->brush_swish_loaded ? (const int16_t *)out->brush_swish.data : NULL,
+                            out->brush_swish_loaded ? (size_t)out->brush_swish.frameCount : 0u);
+}
+
+void audio_out_init(AudioOut *out, AudioState *audio)
 {
     if (out == NULL) {
         return;
@@ -53,8 +100,8 @@ void audio_out_init(AudioOut *out)
         return;
     }
     PlayAudioStream(out->stream);
-    /* The small SE stream size is global state; music streams decoded with it underrun and
-     * stutter every ~23 ms, so restore a roomy default before any OGG is opened. */
+    /* The SE stream size is global state; music streams decoded with it underrun and stutter
+     * every ~23 ms, so restore a roomy default before any OGG is opened. */
     SetAudioStreamBufferSizeDefault(AUDIO_MUSIC_STREAM_FRAMES);
     out->ready = true;
     bgm_fade_reset(&out->fade);
@@ -63,6 +110,10 @@ void audio_out_init(AudioOut *out)
     load_bgm_slot(out, BGM_BATTLE, "audio/bgm_battle.ogg", true);
     load_bgm_slot(out, BGM_BOSS, "audio/bgm_boss.ogg", true);
     load_bgm_slot(out, BGM_VICTORY, "audio/bgm_victory.ogg", false);
+
+    out->brush_flow_loaded = load_brush_loop("audio/sfx_brush_flow.ogg", &out->brush_flow);
+    out->brush_swish_loaded = load_brush_loop("audio/sfx_brush_swish.ogg", &out->brush_swish);
+    attach_brush_loops(out, audio);
 }
 
 static bool track_loaded(const AudioOut *out, BgmTrack t)
@@ -116,7 +167,7 @@ void audio_out_pump(AudioOut *out, AudioState *audio)
     }
     pump_external_bgm(out, audio);
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 4; ++i) {
         if (!IsAudioStreamProcessed(out->stream)) {
             break;
         }
@@ -129,6 +180,18 @@ void audio_out_close(AudioOut *out)
 {
     if (out == NULL || !out->ready) {
         return;
+    }
+    if (out->attached_audio != NULL) {
+        audio_set_brush_samples(out->attached_audio, NULL, 0u, NULL, 0u);
+        out->attached_audio = NULL;
+    }
+    if (out->brush_flow_loaded) {
+        UnloadWave(out->brush_flow);
+        out->brush_flow_loaded = false;
+    }
+    if (out->brush_swish_loaded) {
+        UnloadWave(out->brush_swish);
+        out->brush_swish_loaded = false;
     }
     for (int i = 1; i < AUDIO_BGM_TRACK_SLOTS; ++i) {
         if (out->bgm_loaded[i]) {

@@ -38,3 +38,22 @@ License:    CC0 1.0 Universal (Public Domain Dedication)
             https://creativecommons.org/publicdomain/zero/1.0/
 Status:     Original project-generated OGG Vorbis assets, free for
             redistribution and modification without restriction.
+
+4. External Brush & Wind Foley Loops (OGG Vorbis)
+-------------------------------------------------
+Files:      assets/audio/sfx_brush_flow.ogg  (Continuous flowing-ink bed for brush
+                                              strokes, 4.0 s mono 44.1 kHz)
+            assets/audio/sfx_brush_swish.ogg (Soft wind swish for faster curves,
+                                              Cyclone and Gale, 0.33 s mono 44.1 kHz)
+Source:     CC0-Public-Domain-Sounds collection
+            https://github.com/Lavenderdotpet/CC0-Public-Domain-Sounds
+            - 30-cc0-sfx-loops/water_flowing.ogg
+            - 100-cc0-sfx-2/sfx100v2_loop_water_02.ogg
+            - Micro Pack - Organic Wooshes/Gentle Swish.wav
+License:    CC0 1.0 Universal (Public Domain Dedication)
+            https://creativecommons.org/publicdomain/zero/1.0/
+Status:     Derived works: the source recordings were trimmed, mixed, filtered
+            and re-encoded as mono OGG Vorbis for continuous looping brush and
+            wind playback. The game resamples them with granular playback at
+            run time and falls back to built-in procedural synthesis when they
+            are missing.

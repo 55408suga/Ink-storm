@@ -233,7 +233,7 @@ static int run_demo_live_mode(GameState *game, AudioState *audio, RenderState *r
 
     AudioOut audio_out = {0};
     if (opts->smoke_frames == 0) {
-        audio_out_init(&audio_out);
+        audio_out_init(&audio_out, audio);
     }
 
     FrameClock clock;

@@ -593,7 +593,10 @@ typedef struct {
 - `audio.h` は `struct GameState;` を前方宣言のみとし、`game.h` の include を強制しない。
 - `audio_consume_events(AudioState *audio, const struct GameState *game)` で各ティックのイベントと状態を読み取り、SE トリガおよび望ましい BGM トラック状態（`BGM_NONE`, `BGM_LOBBY`, `BGM_BATTLE`, `BGM_BOSS`, `BGM_VICTORY`）を更新する。
 - 外部 BGM（`assets/audio/`）や任意差し替え SE が存在しない場合は、組み込みプロシージャル和風環境音・シンセへ自動フォールバックする。
-- 公開関数：`audio_init`, `audio_set_volumes`, `audio_consume_events`, `audio_render`, `audio_bgm_track`, `audio_validate_finite`。
+- 筆音と渦印・風斬りは、状態変数フィルタ（TPT SVF）・ピンクノイズ・窓付きグレインで合成し、聞こえる正弦波オシレータを使わない。`app` が `assets/audio/sfx_brush_flow.ogg` / `sfx_brush_swish.ogg` をデコードして `audio_set_brush_samples` で 16bit モノラル PCM を貸し出す（所有は `app`。解放前に `NULL, 0` で外す）。貸し出された PCM は前後の無音を除いて使い、無い場合は同じ音色設計のプロシージャル合成へ切り替える。
+- 筆音は毎ティックの `painting` と `stroke_speed` から、ゲート（時定数で立ち上がり約 10 ms・余韻約 30 ms、ポーズと場面切替は約 11 ms）と速度の慣性（約 19 ms）で滑らかに追従する。筆を置いたまま動きの無いティックは直前の速度を約 27 ms 保持して途切れさせず、筆を離したときは保持せずすぐ余韻へ移る。無音から書き始めた筆は速度の慣性を待たずにその速さで鳴らす。
+- 効果音のストリームは 1 バッファ 1024 フレーム（約 23 ms）とし、フレームの揺らぎには 1 回のポンプで最大 4 バッファを補充して備える（バッファを大きくするとすべての効果音が遅れる）。
+- 公開関数：`audio_init`, `audio_set_volumes`, `audio_set_brush_samples`, `audio_consume_events`, `audio_render`, `audio_bgm_track`, `audio_validate_finite`。
 
 ### 9.2 `ink_render`（`src/render/render.h`）
 - 描画対象は `const GameState *`（および `ui_view.h` で定義する raylib 非依存の軽量 `const UiView *`）のみで、ゲーム状態を変更しない。`render_init(RenderState *r, const RenderOptions *opt)` でポストシェーダ有効/無効と障害注入マスクを受け取り、`render_draw(RenderState *r, const GameState *g, const UiView *ui)` で描画する。
