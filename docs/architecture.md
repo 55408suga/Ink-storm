@@ -62,8 +62,9 @@
 #define FLUID_W                  160
 #define FLUID_H                  90
 #define FLUID_N                  (FLUID_W * FLUID_H)
-#define FLUID_CELL_PX            8.0f
+#define FLUID_CELL_PX            ((float)INK_SCREEN_W / (float)FLUID_W) /* 160×90 では 8.0f */
 #define FLUID_MAX_CHANNELS       4     /* 0:Ink, 1:Fire, 2:Storm, 3:Reserved */
+/* fluid.h の _Static_assert: FLUID_W は偶数（Red-Black 分割）、セルは画面と同じ縦横比の正方形 */
 
 #define ECS_MAX_ENTITIES         512
 #define GAME_MAX_SHRINES         4     /* 基本1基使用、複数化への拡張余白 */
@@ -139,6 +140,7 @@ typedef enum {
      3. 爆雷の判定
      4. 敵への状態付与と属性ダメージ（墨印・炎上・帯電・雷墨連鎖）
      5. 敵弾の属性昇格・加速（炎上弾・雷撃弾・未偏向弾の雷加速）
+   - 炎・雷の最大濃度がいずれも 0.14 以下のティックは 1〜3 の全格子走査を省く（どの規則も 0.14 超を要するため結果は同一）。反応フックや三元共鳴の後は最大値を無効化して通常どおり走査する。
    - 完了後に必ず `fluid_sanitize_channels(&g->fluid)` を呼び、`solid` セル 0 固定・`[0, max_dye]` クランプ・非有限値除去を保証。
    - 爆雷・三元共鳴の放射インパルスは `pending_impulses[]` へ積み、次ティックのステップ 3 で速度クランプ付き注入する。
    - 反応ごとに `on_reaction` フック実行および `GameEvent` 発行。
@@ -183,7 +185,8 @@ typedef enum {
 `ink_fluid` はゲーム属性の意味を一切知らず、汎用スカラーチャンネルと障害物境界を持つ純粋な Stable Fluids ソルバとして設計する。
 
 ### 4.1 設定・状態構造体と単位契約
-- **座標・距離単位**: `px, py, pw, ph, radius_px` は画面論理 px（`0..1280`, `0..720`）。流体セル `(x, y)` は `[8x, 8x+8)` px を占め、中心は `(8x+4, 8y+4)` とする。`rad_cells`・速度 `(u, v, fx, fy, strength, peak_speed)` は格子単位（セル / セル/s）。ゲーム側での px/s 換算は `× FLUID_CELL_PX (8.0f)`。`dye` は無次元 `[0, max_dye]`。
+- **座標・距離単位**: `px, py, pw, ph, radius_px` は画面論理 px（`0..1280`, `0..720`）。流体セル `(x, y)` は `[c·x, c·x+c)` px（`c = FLUID_CELL_PX`、160×90 では 8px）を占め、中心は `(c·x + c/2, c·y + c/2)` とする。`rad_cells`・速度 `(u, v, fx, fy, strength, peak_speed)` は格子単位（セル / セル/s）。ゲーム側での px/s 換算は `× FLUID_CELL_PX`。`dye` は無次元 `[0, max_dye]`。
+- **解像度非依存の規則（格子を 240×135 などへ変えても破綻しないこと）**: ゲーム側のセル探索窓は px 半径から `fluid_cell_reach(radius_px)`（`ceil(r / FLUID_CELL_PX)`）で求める。爆雷・三元共鳴のブロックは画面 64px 四方（`GAME_REACTION_BLOCK_PX`、20×12 ブロック）でセル中心の px 座標から決める。セル数の閾値（紅蓮 24・雷墨連鎖 10・三元 8・爆雷 6）は 8px セル基準で、セル面積比 `GAME_CELL_COUNT_SCALE`（160×90 では厳密に `1.0f`）を掛けて比較する。反応・ギミックが流体へ渡す半径と速度（三元共鳴・爆雷の注入、霊柱・落雷・鵺の軌跡・龍の渦・鎌鼬・山颪）は px と px/s で定義し、`GAME_PX_TO_CELLS` で格子単位へ換算する（160×90 では従来の値と完全に一致）。
 - **非有限値・範囲外入力の契約**:
   - 注入系・障害物設定系の引数に `NaN` / `Inf` または非正半径が渡された場合は安全に no-op 拒否する。
   - 範囲外座標は、`fluid_sample` では有効格子域へクランプ、`fluid_splat` / `fluid_swirl` / `fluid_add_radial_impulse` では格子と交差する有効セル範囲のみ適用する。
@@ -251,10 +254,14 @@ void fluid_add_radial_impulse(FluidState *f, float px, float py,
 void fluid_sample(const FluidState *f, float px, float py,
                   float *out_u, float *out_v, float *out_dye);
 
-/* game/elements 向けの直列2フェーズ連携アクセサ */
+/* game/elements・render 向けの直列2フェーズ連携アクセサ */
 const float *fluid_channel_const(const FluidState *f, int ch);
-float *fluid_channel_mut(FluidState *f, int ch); /* 借用期限: 次回 fluid_step / fluid_reset まで */
-void fluid_sanitize_channels(FluidState *f);     /* elements_step 後に solid=0・[0,max_dye]・有限性を保証 */
+float *fluid_channel_mut(FluidState *f, int ch); /* 非アクティブなチャンネルは NULL。借用期限: 次回 fluid_step / fluid_reset まで */
+const float *fluid_u_const(const FluidState *f);   /* 読み取り専用の速度 x [セル/秒] */
+const float *fluid_v_const(const FluidState *f);   /* 読み取り専用の速度 y [セル/秒] */
+const uint8_t *fluid_solid_const(const FluidState *f);
+int fluid_cell_reach(float radius_px);             /* ceil(radius_px / FLUID_CELL_PX)、[0, FLUID_W] */
+void fluid_sanitize_channels(FluidState *f);     /* elements_step 後にアクティブなチャンネルの solid=0・[0,max_dye]・有限性を保証 */
 
 /* 決定性・健全性検証 */
 uint64_t fluid_hash(const FluidState *f);
@@ -267,6 +274,7 @@ bool fluid_validate_finite(const FluidState *f);
   - 圧力投影の Gauss-Seidel 反復では、隣接セルが `solid` の場合に自セルの圧力 `p[i]` を代用（`dp/dn = 0`）し、流れの反射・回り込み・渦剥離を再現する。
 - **薄い障害物の壁横断（トンネリング）防止**:
   - Semi-Lagrangian 移流のバックトレースは終点 1 点のみを `solid` 判定せず、**始点から終点までステップ長 `<= 0.5` セルの短いレイマーチ** を行い、途中で `solid` セルへ入った場合は直前の非 `solid` 座標で停止してサンプリングする（2 セル幅の鳥居柱の反対側から染料や速度が漏れるのを防ぐ）。
+- **作業領域**: 圧力投影（Red-Black Gauss-Seidel）の作業配列は `FluidState` 内の `rb_div` / `rb_p`（決定性ハッシュ対象外）に置き、112.5 KiB をスタックに確保しない。非アクティブなチャンネルはソルバ・注入・可変アクセサのいずれからも書けないため、`fluid_sanitize_channels` はアクティブなチャンネルだけを走査する。
 - **性能予算（Release ビルド・160×90・既定 12 反復・実戦闘負荷）**:
   - `fluid_step`: **< 2.0 ms / tick**
   - `game_step` 全体: **< 4.0 ms / tick**
@@ -437,8 +445,8 @@ typedef struct {
 | `EV_SLAM` | 衝突点 | 壁の法線または相手への向き | `EnemyDefId`（飛ばされた側） | `EVF_SLAM_WALL` / `EVF_SLAM_ENEMY` |
 | `EV_IGNITE` | 燃焼セルの重心（px） | — | 燃焼セル数 | 0（24 セル以上・3.2 秒間隔） |
 | `EV_STORM_ZAP` | 始点 | 終点 | ホップ番号（0 = 初撃） | 0 |
-| `EV_THUNDERBURST` | 爆雷ブロック内の爆雷セル重心（px） | `radius_px`（`72 * rmul`）, `0` | ブロック内の爆雷セル数（`>= 6`） | 0 |
-| `EV_CATACLYSM` | 共鳴ブロック内の共鳴セル重心（px） | `96.0f`, `0` | ブロック内の共鳴セル数（`>= 8`） | 0 |
+| `EV_THUNDERBURST` | 爆雷ブロック（64px 四方）内の爆雷セル重心（px） | `radius_px`（`72 * rmul`）, `0` | ブロック内の爆雷セル数（`>= 6 × GAME_CELL_COUNT_SCALE`） | 0 |
+| `EV_CATACLYSM` | 共鳴ブロック（64px 四方）内の共鳴セル重心（px） | `96.0f`, `0` | ブロック内の共鳴セル数（`>= 8 × GAME_CELL_COUNT_SCALE`） | 0 |
 | `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 0 |
 | `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（16） | `EVF_ORB_AUTO`（自動回収時） |
 | `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
@@ -590,6 +598,9 @@ typedef struct {
 ### 9.2 `ink_render`（`src/render/render.h`）
 - 描画対象は `const GameState *`（および `ui_view.h` で定義する raylib 非依存の軽量 `const UiView *`）のみで、ゲーム状態を変更しない。`render_init(RenderState *r, const RenderOptions *opt)` でポストシェーダ有効/無効と障害注入マスクを受け取り、`render_draw(RenderState *r, const GameState *g, const UiView *ui)` で描画する。
 - 内部に固定長 VFX プール（`sparks[512]`, `bolts[32]`, `seals[16]`, `callouts[24]`）、画面シェイク状態、専用 `vfx_rng`、rlgl 筆描画プリミティブ（`ink_stroke`, `ink_wash`, `ink_splatter`, `ink_outline`, `ink_knockout`, `seal_stamp`）、和紙ポストシェーダ（C 文字列埋め込み）、流体可視化テクスチャ、和風フォント（＋文字列表の英語 ASCII フォールバック）を保持する。
+- **GPU 資源の検査**: RenderTexture は ID と添付に加えて `rlFramebufferComplete` で FBO の完全性を確かめてから使い（`render_texture_usable`。背景キャッシュ・ポスト用シーン・`--snap` の描画先）、不完全なら直接描画へ切り替える。コンパイルに失敗したシェーダが持つ `locs` は `render_discard_shader` で解放する。
+- **背景キャッシュ**: `bg_cache` は四辺に 16px（`RENDER_BG_PAD`）の余白を持つ不透明な RenderTexture。和紙テクスチャ（継ぎ目のない 512×512）と山水背景・砂子を、色は通常合成・保存先アルファは 1 固定（`BLEND_CUSTOM_SEPARATE`）で焼き込み、描き戻しでアルファが二重に掛からないようにする。キャッシュキーは `(BgKind { BG_LOBBY, BG_ACT }, act_index)`（`render_rules.h`）で、ロビーと第 1 幕を区別する。FBO を作れない環境では毎フレーム直接描画する。画面揺れでも余白により紙の端が見えない。
+- **流体の描画経路**: ポスト処理が有効で、流体シェーダと和紙テクスチャ（`texture1`）が揃ったとき（`render_fluid_use_gpu`）は、`(ink, fire, storm, solid)` を `FLUID_W × FLUID_H` の RGBA8 1 枚（濃度は `sqrt(v / max_dye)` で符号化）に詰めて 1 回 `UpdateTexture` し、埋め込み GLSL 330（4095 バイト以内）で 1280×720 に描く（B スプライン双三次補間、和紙の繊維に沿ったにじみと粒状感、連続した墨のトーン曲線と勾配による墨溜まり、火・雷・金の乗算済みアルファ合成、にじみで動かさないセル位置を `texelFetch` して `solid` セルを正確に除外。復元した濃度は有限な範囲へ制限する）。流体テクスチャは 2 枚ずつ交互に更新し、前フレームが描画中のテクスチャへの転送で CPU が GPU を待たないようにする。`--no-post`・設定でのポスト無効・`INKSTORM_DEBUG_FAULTS=shader` では CPU 経路（同じトーン曲線を表引きにした墨の乗算テクスチャ＋火・雷の乗算済みアルファテクスチャ）へ切り替える。`F1` に `fluid_shader: GPU/CPU` を表示する。色計算・符号化・判定は raylib 非依存の `render_rules.c` に置き、`test_render_rules` で検証する。
 - **再現性と描画順契約（[art-direction.md](art-direction.md) 準拠）**:
   - 登場物のシルエット揺らぎ（ボイル）は `EntityId`（`index`, `gen`）由来の固定シードで生成し、`vfx_rng` は粒子エフェクトのみに用いる（`--snap` 比較の再現性を維持）。
   - HUD・UI は必ずポストシェーダの**後**に描画し、文字のにじみを防ぐ。

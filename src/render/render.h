@@ -18,6 +18,9 @@
 #define RENDER_MAX_INTRO_QUEUE 8
 #define RENDER_RYU_TRAIL_LEN 24
 #define SETTINGS_ROW_COUNT 9
+#define RENDER_INK_LUT_LEVELS 256
+#define RENDER_GRAD_LUT_LEVELS 24
+#define RENDER_ELEM_LUT_LEVELS 64
 
 typedef struct {
     bool use_post;
@@ -153,13 +156,26 @@ typedef struct {
     int post_res_loc;
     bool post_enabled;
     RenderTexture2D scene;
+    /* 不透明な和紙＋山水背景（画面揺れ用に四辺 16px の余白付き） */
     RenderTexture2D bg_cache;
+    int32_t bg_cached_kind; /* BgKind。未生成は -1 */
     int32_t bg_cached_act;
-    Texture2D paper_tex;
-    Texture2D fluid_ink_tex;
-    Texture2D fluid_elem_tex;
-    Color fluid_ink_pixels[FLUID_N];
-    Color fluid_elem_pixels[FLUID_N];
+    Texture2D paper_tex; /* 継ぎ目のない 512x512 和紙（REPEAT） */
+    Shader fluid_shader;
+    int fluid_paper_loc;
+    int fluid_max_dye_loc;
+    /* 流体テクスチャは 2 枚ずつ交互に更新し、前フレームが描画中のテクスチャへ転送して
+     * CPU が GPU の完了を待つ暗黙の同期を避ける */
+    Texture2D fluid_field_tex[2]; /* GPU 経路: (ink, fire, storm, solid) RGBA8 */
+    Texture2D fluid_ink_tex[2];   /* CPU 経路: 墨の乗算色 */
+    Texture2D fluid_elem_tex[2];  /* CPU 経路: 火・雷の乗算済みアルファ */
+    int32_t fluid_tex_slot;
+    unsigned char fluid_field_px[FLUID_N * 4];
+    Color fluid_ink_px[FLUID_N];
+    Color fluid_elem_px[FLUID_N];
+    /* CPU 経路の色テーブル（濃度は sqrt 量子化）: 墨 [濃度][勾配]、火・雷 [火][雷] */
+    Color fluid_ink_lut[RENDER_INK_LUT_LEVELS * RENDER_GRAD_LUT_LEVELS];
+    Color fluid_elem_lut[RENDER_ELEM_LUT_LEVELS * RENDER_ELEM_LUT_LEVELS];
 
     Font font_body;
     Font font_title;
@@ -242,6 +258,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt);
 void render_draw(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui,
                             RenderTexture2D target);
+bool render_texture_usable(RenderTexture2D target); /* ID・添付に加えて FBO の完全性も検査 */
 void render_close(RenderState *r);
 
 void render_reward_layout(const GameState *g, RewardLayout *out);

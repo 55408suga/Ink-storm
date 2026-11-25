@@ -422,7 +422,11 @@ static void test_invalid_inputs_and_optional_outputs(void)
 static void test_mutable_channels_are_sanitized(void)
 {
     int i = cell(80, 45);
-    for (int ch = 0; ch < FLUID_MAX_CHANNELS; ++ch) {
+    for (int ch = f->cfg.active_channels; ch < FLUID_MAX_CHANNELS; ++ch) {
+        TEST_ASSERT_NULL(fluid_channel_mut(f, ch));
+        TEST_ASSERT_NOT_NULL(fluid_channel_const(f, ch));
+    }
+    for (int ch = 0; ch < f->cfg.active_channels; ++ch) {
         float *dye = fluid_channel_mut(f, ch);
         TEST_ASSERT_NOT_NULL(dye);
         TEST_ASSERT_EQUAL_PTR(dye, fluid_channel_const(f, ch));
@@ -436,6 +440,56 @@ static void test_mutable_channels_are_sanitized(void)
         TEST_ASSERT_TRUE(dye[i] == 0 && dye[i + 1] == 0 && dye[i + 2] == f->cfg.max_dye &&
                          dye[0] == 0);
     }
+}
+
+static void test_read_only_field_accessors_alias_state(void)
+{
+    TEST_ASSERT_EQUAL_PTR(f->u, fluid_u_const(f));
+    TEST_ASSERT_EQUAL_PTR(f->v, fluid_v_const(f));
+    TEST_ASSERT_EQUAL_PTR(f->solid, fluid_solid_const(f));
+    TEST_ASSERT_NULL(fluid_u_const(NULL));
+    TEST_ASSERT_NULL(fluid_v_const(NULL));
+    TEST_ASSERT_NULL(fluid_solid_const(NULL));
+    TEST_ASSERT_NULL(fluid_channel_mut(NULL, 0));
+    TEST_ASSERT_NULL(fluid_channel_const(f, FLUID_MAX_CHANNELS));
+}
+
+static void test_cell_size_follows_screen_and_grid(void)
+{
+    TEST_ASSERT_EQUAL_FLOAT((float)INK_SCREEN_W / (float)FLUID_W, FLUID_CELL_PX);
+    TEST_ASSERT_EQUAL_FLOAT((float)INK_SCREEN_H / (float)FLUID_H, FLUID_CELL_PX);
+}
+
+static void test_cell_reach_covers_pixel_radius(void)
+{
+    for (int cells = 1; cells <= 30; ++cells) {
+        const float exact = (float)cells * FLUID_CELL_PX;
+        TEST_ASSERT_EQUAL_INT(cells, fluid_cell_reach(exact * 0.999f));
+        TEST_ASSERT_EQUAL_INT(cells + 1, fluid_cell_reach(exact * 1.001f));
+    }
+    /* Gameplay radii: the window always covers the radius without a spare cell. */
+    static const float k_radii[] = {28.0f, 40.0f, 48.0f, 64.0f, 160.0f, 195.0f};
+    for (size_t i = 0; i < sizeof k_radii / sizeof k_radii[0]; ++i) {
+        const int reach = fluid_cell_reach(k_radii[i]);
+        TEST_ASSERT_TRUE((float)reach * FLUID_CELL_PX >= k_radii[i]);
+        TEST_ASSERT_TRUE((float)(reach - 1) * FLUID_CELL_PX < k_radii[i]);
+    }
+    TEST_ASSERT_EQUAL_INT(1, fluid_cell_reach(0.01f));
+    TEST_ASSERT_EQUAL_INT(0, fluid_cell_reach(0.0f));
+    TEST_ASSERT_EQUAL_INT(0, fluid_cell_reach(-5.0f));
+    TEST_ASSERT_EQUAL_INT(0, fluid_cell_reach(NAN));
+    TEST_ASSERT_EQUAL_INT(FLUID_W, fluid_cell_reach(INFINITY));
+    TEST_ASSERT_EQUAL_INT(FLUID_W, fluid_cell_reach(1e30f));
+}
+
+static void test_is_solid_at_far_domain_edge_stays_in_grid(void)
+{
+    const float right = nextafterf((float)FLUID_W * FLUID_CELL_PX, 0.0f);
+    const float bottom = nextafterf((float)FLUID_H * FLUID_CELL_PX, 0.0f);
+    TEST_ASSERT_TRUE(fluid_is_solid(f, right, 360.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(f, 640.0f, bottom));
+    TEST_ASSERT_TRUE(fluid_is_solid(f, right, bottom));
+    TEST_ASSERT_FALSE(fluid_is_solid(f, right - FLUID_CELL_PX, 360.0f));
 }
 
 static void test_sampling_units_and_channels(void)
@@ -689,6 +743,10 @@ int main(void)
     RUN_TEST(test_injection_directions);
     RUN_TEST(test_invalid_inputs_and_optional_outputs);
     RUN_TEST(test_mutable_channels_are_sanitized);
+    RUN_TEST(test_read_only_field_accessors_alias_state);
+    RUN_TEST(test_cell_size_follows_screen_and_grid);
+    RUN_TEST(test_cell_reach_covers_pixel_radius);
+    RUN_TEST(test_is_solid_at_far_domain_edge_stays_in_grid);
     RUN_TEST(test_sampling_units_and_channels);
     RUN_TEST(test_deterministic_replay_and_hash_fields);
     RUN_TEST(test_geometry_cache_invalidation_on_solid_changes);

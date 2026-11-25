@@ -1,14 +1,20 @@
 #ifndef INK_FLUID_H
 #define INK_FLUID_H
 
+#include "core.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
 #define FLUID_W 160
 #define FLUID_H 90
 #define FLUID_N (FLUID_W * FLUID_H)
-#define FLUID_CELL_PX 8.0f
+#define FLUID_CELL_PX ((float)INK_SCREEN_W / (float)FLUID_W)
 #define FLUID_MAX_CHANNELS 4
+
+/* Red-Black 分割は偶数幅、セル→ピクセル変換は正方セル（画面と同じ縦横比）を前提にする */
+_Static_assert((FLUID_W & 1) == 0 && INK_SCREEN_W * FLUID_H == INK_SCREEN_H * FLUID_W,
+               "fluid grid must be even-width with square cells matching the screen aspect");
 
 typedef struct {
     int project_iters;                  /* 既定: 12（調整可能） */
@@ -43,6 +49,9 @@ typedef struct {
     float inv_rb[2][FLUID_N / 2];
     uint8_t near_wall[FLUID_N];
     uint8_t geometry_valid;
+    /* 圧力投影の Red-Black 作業領域（決定性ハッシュ対象外）。112.5 KiB をスタックに置かない */
+    float rb_div[2][FLUID_N / 2];
+    float rb_p[2][FLUID_N / 2];
 } FluidState;
 
 FluidConfig fluid_config_default(void);
@@ -54,6 +63,7 @@ void fluid_clear_solids(FluidState *f); /* 外周1セルのみ壁に戻す */
 void fluid_set_solid_rect(FluidState *f, float px, float py, float pw, float ph, bool solid);
 void fluid_set_solid_circle(FluidState *f, float px, float py, float radius_px, bool solid);
 bool fluid_is_solid(const FluidState *f, float px, float py);
+int fluid_cell_reach(float radius_px); /* 半径 radius_px を覆うセル数 ceil(r / FLUID_CELL_PX) */
 bool fluid_solid_normal(const FluidState *f, float px, float py, float *nx, float *ny);
 
 /* 数値ステップ・注入・サンプリング */
@@ -66,11 +76,15 @@ void fluid_add_radial_impulse(FluidState *f, float px, float py, float rad_cells
 void fluid_sample(const FluidState *f, float px, float py, float *out_u, float *out_v,
                   float *out_dye);
 
-/* game/elements 向けの直列2フェーズ連携アクセサ */
+/* game/elements・render 向けの直列2フェーズ連携アクセサ（借用期限: 次回 fluid_step /
+ * fluid_reset / fluid_init まで） */
 const float *fluid_channel_const(const FluidState *f, int ch);
-float *fluid_channel_mut(FluidState *f, int ch); /* 借用期限: 次回 fluid_step / fluid_reset まで */
-void fluid_sanitize_channels(
-    FluidState *f); /* elements_step 後に solid=0・[0,max_dye]・有限性を保証 */
+float *fluid_channel_mut(FluidState *f, int ch); /* 非アクティブなチャンネルは NULL */
+const float *fluid_u_const(const FluidState *f); /* 速度 x 成分 [セル/秒] */
+const float *fluid_v_const(const FluidState *f); /* 速度 y 成分 [セル/秒] */
+const uint8_t *fluid_solid_const(const FluidState *f);
+void fluid_sanitize_channels(FluidState *f); /* elements_step 後にアクティブなチャンネルの
+                                                solid=0・[0,max_dye]・有限性を保証 */
 
 /* 決定性・健全性検証 */
 uint64_t fluid_hash(const FluidState *f);

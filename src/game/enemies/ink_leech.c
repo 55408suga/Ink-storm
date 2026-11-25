@@ -76,15 +76,17 @@ void ink_leech_step(GameState *g, EntityId id)
     vel->vx += fu * FLUID_CELL_PX * vel->fluid_coupling * INK_FIXED_DT;
     vel->vy += fv * FLUID_CELL_PX * vel->fluid_coupling * INK_FIXED_DT;
 
-    /* Absorb 30%/s of ink (ch0) from non-solid cells within radius 64px (8 cells). */
+    /* Absorb 30%/s of ink (ch0) from non-solid cells within radius 64px. */
     float *ink_ch = fluid_channel_mut(&g->fluid, 0);
     if (ink_ch != NULL) {
+        const float absorb_r = 64.0f;
+        const int reach = fluid_cell_reach(absorb_r);
         const int cx = (int)(tr->x / FLUID_CELL_PX);
         const int cy = (int)(tr->y / FLUID_CELL_PX);
-        const int x0 = cx - 8 < 1 ? 1 : cx - 8;
-        const int x1 = cx + 8 > FLUID_W - 2 ? FLUID_W - 2 : cx + 8;
-        const int y0 = cy - 8 < 1 ? 1 : cy - 8;
-        const int y1 = cy + 8 > FLUID_H - 2 ? FLUID_H - 2 : cy + 8;
+        const int x0 = cx - reach < 1 ? 1 : cx - reach;
+        const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+        const int y0 = cy - reach < 1 ? 1 : cy - reach;
+        const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
         const float absorb_frac = 0.30f * INK_FIXED_DT;
         float sum_taken = 0.0f;
         int32_t cells = 0;
@@ -100,7 +102,7 @@ void ink_leech_step(GameState *g, EntityId id)
                 }
                 const float cell_x = ((float)gx_i + 0.5f) * FLUID_CELL_PX;
                 const float dx = cell_x - tr->x;
-                if (dx * dx + dy * dy > 64.0f * 64.0f) {
+                if (dx * dx + dy * dy > absorb_r * absorb_r) {
                     continue;
                 }
                 ++cells;

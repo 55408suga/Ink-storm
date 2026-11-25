@@ -4,6 +4,7 @@
 #include "core.h"
 #include "roguelike/upgrades.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 
@@ -62,7 +63,30 @@ static void decay_cd(float *cd)
     }
 }
 
-static int32_t elements_stage1_cells(GameState *g)
+typedef struct {
+    float fire;
+    float storm;
+} ElementPeaks;
+
+static float channel_peak(const float *ch)
+{
+    float peak = 0.0f;
+    for (int i = 0; i < FLUID_N; ++i) {
+        peak = ch[i] > peak ? ch[i] : peak;
+    }
+    return peak;
+}
+
+static int reaction_block_index(float px, float py)
+{
+    int bx = (int)(px / (float)GAME_REACTION_BLOCK_PX);
+    int by = (int)(py / (float)GAME_REACTION_BLOCK_PX);
+    bx = bx < 0 ? 0 : (bx >= GAME_THUNDERBURST_BLOCKS_X ? GAME_THUNDERBURST_BLOCKS_X - 1 : bx);
+    by = by < 0 ? 0 : (by >= GAME_THUNDERBURST_BLOCKS_Y ? GAME_THUNDERBURST_BLOCKS_Y - 1 : by);
+    return by * GAME_THUNDERBURST_BLOCKS_X + bx;
+}
+
+static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks)
 {
     float *ink_ch = fluid_channel_mut(&g->fluid, 0);
     float *fire_ch = fluid_channel_mut(&g->fluid, 1);
@@ -82,6 +106,8 @@ static int32_t elements_stage1_cells(GameState *g)
     float blaze_sum_x = 0.0f;
     float blaze_sum_y = 0.0f;
     int32_t storm_cells = 0;
+    float peak_fire = 0.0f;
+    float peak_storm = 0.0f;
 
     for (int y = 1; y < FLUID_H - 1; ++y) {
         const int row = y * FLUID_W;
@@ -94,6 +120,9 @@ static int32_t elements_stage1_cells(GameState *g)
             float fire = fire_ch[i];
             float storm = storm_ch[i];
             if (!isfinite(ink) || !isfinite(fire) || !isfinite(storm)) {
+                /* Later stages still read the finite fire/storm half of such a cell. */
+                peak_fire = fire > peak_fire ? fire : peak_fire;
+                peak_storm = storm > peak_storm ? storm : peak_storm;
                 continue;
             }
 
@@ -121,11 +150,16 @@ static int32_t elements_stage1_cells(GameState *g)
             if (storm > 0.24f) {
                 ++storm_cells;
             }
+            peak_fire = fire > peak_fire ? fire : peak_fire;
+            peak_storm = storm > peak_storm ? storm : peak_storm;
         }
     }
+    peaks->fire = peak_fire;
+    peaks->storm = peak_storm;
 
-    g->internal.blazing_active = blazing_cells >= 24;
-    if (blazing_cells >= 24 && g->internal.ignite_callout_cd <= 0.0f) {
+    const bool blazing = (float)blazing_cells >= 24.0f * GAME_CELL_COUNT_SCALE;
+    g->internal.blazing_active = blazing;
+    if (blazing && g->internal.ignite_callout_cd <= 0.0f) {
         g->internal.ignite_callout_cd = 3.2f;
         if (g->run.ignitions < META_MAX_COUNTERS) {
             ++g->run.ignitions;
@@ -140,13 +174,21 @@ static int32_t elements_stage1_cells(GameState *g)
                                      .flags = 0,
                                  });
         upgrades_fire_on_reaction(g, REACT_BLAZING, cx, cy, (float)blazing_cells);
+        /* Reaction hooks may inject fire or storm, so the peaks no longer bound the field. */
+        peaks->fire = FLT_MAX;
+        peaks->storm = FLT_MAX;
     }
     return storm_cells;
 }
 
-static int32_t elements_stage2_cataclysm(GameState *g)
+static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
 {
     if (g->internal.cataclysm_cd > 0.0f) {
+        return -1;
+    }
+    const float thresh =
+        g->internal.mods.cataclysm_thresh > 0.0f ? g->internal.mods.cataclysm_thresh : 0.30f;
+    if (peaks.fire <= thresh || peaks.storm <= thresh) {
         return -1;
     }
     float *ink_ch = fluid_channel_mut(&g->fluid, 0);
@@ -157,8 +199,6 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     }
 
     const uint8_t *solid = g->fluid.solid;
-    const float thresh =
-        g->internal.mods.cataclysm_thresh > 0.0f ? g->internal.mods.cataclysm_thresh : 0.30f;
     int32_t counts[GAME_THUNDERBURST_BLOCKS] = {0};
     float sum_val[GAME_THUNDERBURST_BLOCKS] = {0};
     float sum_x[GAME_THUNDERBURST_BLOCKS] = {0};
@@ -166,7 +206,6 @@ static int32_t elements_stage2_cataclysm(GameState *g)
 
     for (int y = 1; y < FLUID_H - 1; ++y) {
         const int row = y * FLUID_W;
-        const int by = y / 8;
         const float cy = ((float)y + 0.5f) * FLUID_CELL_PX;
         for (int x = 1; x < FLUID_W - 1; ++x) {
             const int idx = row + x;
@@ -180,18 +219,20 @@ static int32_t elements_stage2_cataclysm(GameState *g)
                 continue;
             }
             if (ink > thresh && fire > thresh && storm > thresh) {
-                const int b = by * GAME_THUNDERBURST_BLOCKS_X + (x / 8);
+                const float cx = ((float)x + 0.5f) * FLUID_CELL_PX;
+                const int b = reaction_block_index(cx, cy);
                 ++counts[b];
                 sum_val[b] += ink + fire + storm;
-                sum_x[b] += ((float)x + 0.5f) * FLUID_CELL_PX;
+                sum_x[b] += cx;
                 sum_y[b] += cy;
             }
         }
     }
 
+    const float min_cells = 8.0f * GAME_CELL_COUNT_SCALE;
     int32_t best_b = -1;
     for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
-        if (counts[b] < 8) {
+        if ((float)counts[b] < min_cells) {
             continue;
         }
         if (best_b < 0 || counts[b] > counts[best_b] ||
@@ -207,12 +248,13 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     const float cx_px = sum_x[best_b] / (float)count;
     const float cy_px = sum_y[best_b] / (float)count;
 
+    const float dye_rad_px = 96.0f;
     if (g->pending_impulse_count < GAME_MAX_PENDING_IMPULSE) {
         g->pending_impulses[g->pending_impulse_count++] = (PendingImpulse){
             .x = cx_px,
             .y = cy_px,
-            .rad_cells = 12.0f,
-            .peak_speed = 90.0f,
+            .rad_cells = GAME_PX_TO_CELLS(dye_rad_px),
+            .peak_speed = GAME_PX_TO_CELLS(720.0f),
         };
     }
 
@@ -315,7 +357,6 @@ static int32_t elements_stage2_cataclysm(GameState *g)
                                   0.0f);
     }
 
-    const float dye_rad_px = 12.0f * FLUID_CELL_PX;
     const float dye_rad_px2 = dye_rad_px * dye_rad_px;
     int gx0 = (int)floorf((cx_px - dye_rad_px) / FLUID_CELL_PX);
     int gx1 = (int)ceilf((cx_px + dye_rad_px) / FLUID_CELL_PX);
@@ -379,8 +420,12 @@ static int32_t elements_stage2_cataclysm(GameState *g)
     return best_b;
 }
 
-static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
+static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, ElementPeaks peaks)
 {
+    const float thresh = g->internal.mods.thunderburst_thresh;
+    if (peaks.fire <= thresh || peaks.storm <= thresh) {
+        return;
+    }
     float *fire_ch = fluid_channel_mut(&g->fluid, 1);
     float *storm_ch = fluid_channel_mut(&g->fluid, 2);
     if (fire_ch == NULL || storm_ch == NULL) {
@@ -388,7 +433,6 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
     }
 
     const uint8_t *solid = g->fluid.solid;
-    const float thresh = g->internal.mods.thunderburst_thresh;
     const float rmul = g->internal.mods.thunderburst_radius_mul > 0.0f
                            ? g->internal.mods.thunderburst_radius_mul
                            : 1.0f;
@@ -399,7 +443,6 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
 
     for (int y = 1; y < FLUID_H - 1; ++y) {
         const int row = y * FLUID_W;
-        const int by = y / 8;
         const float cy = ((float)y + 0.5f) * FLUID_CELL_PX;
         for (int x = 1; x < FLUID_W - 1; ++x) {
             const int idx = row + x;
@@ -412,9 +455,10 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
                 continue;
             }
             if (fire > thresh && storm > thresh) {
-                const int b = by * GAME_THUNDERBURST_BLOCKS_X + (x / 8);
+                const float cx = ((float)x + 0.5f) * FLUID_CELL_PX;
+                const int b = reaction_block_index(cx, cy);
                 ++counts[b];
-                sum_x[b] += ((float)x + 0.5f) * FLUID_CELL_PX;
+                sum_x[b] += cx;
                 sum_y[b] += cy;
             }
         }
@@ -427,8 +471,10 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
     BurstBlock top[3] = {0};
     int32_t top_n = 0;
 
+    const float min_cells = 6.0f * GAME_CELL_COUNT_SCALE;
     for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
-        if (b == cataclysm_block || g->internal.thunderburst_block_cd[b] > 0.0f || counts[b] < 6) {
+        if (b == cataclysm_block || g->internal.thunderburst_block_cd[b] > 0.0f ||
+            (float)counts[b] < min_cells) {
             continue;
         }
         int32_t pos = top_n;
@@ -447,8 +493,8 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
     }
 
     const float dmg_rad_px = 96.0f * rmul;
-    const float dye_rad_cells = 9.0f * rmul;
-    const float dye_rad_px = dye_rad_cells * FLUID_CELL_PX;
+    const float dye_rad_px = 72.0f * rmul;
+    const float dye_rad_cells = GAME_PX_TO_CELLS(dye_rad_px);
     const float dye_rad_px2 = dye_rad_px * dye_rad_px;
     const uint32_t hw = g->ecs.high_water;
 
@@ -463,7 +509,7 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block)
                 .x = cx_px,
                 .y = cy_px,
                 .rad_cells = dye_rad_cells,
-                .peak_speed = 60.0f,
+                .peak_speed = GAME_PX_TO_CELLS(480.0f),
             };
         }
 
@@ -625,7 +671,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         }
     }
 
-    if (storm_cells < 10 || g->internal.storm_zap_cd > 0.0f) {
+    if ((float)storm_cells < 10.0f * GAME_CELL_COUNT_SCALE || g->internal.storm_zap_cd > 0.0f) {
         return;
     }
 
@@ -634,6 +680,8 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         return;
     }
     const uint8_t *solid = g->fluid.solid;
+    const float zap_reach_px = 195.0f;
+    const int reach = fluid_cell_reach(zap_reach_px);
 
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
@@ -649,10 +697,10 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
 
         const int cx = (int)(tr->x / FLUID_CELL_PX);
         const int cy = (int)(tr->y / FLUID_CELL_PX);
-        const int x0 = cx - 25 < 1 ? 1 : cx - 25;
-        const int x1 = cx + 25 > FLUID_W - 2 ? FLUID_W - 2 : cx + 25;
-        const int y0 = cy - 25 < 1 ? 1 : cy - 25;
-        const int y1 = cy + 25 > FLUID_H - 2 ? FLUID_H - 2 : cy + 25;
+        const int x0 = cx - reach < 1 ? 1 : cx - reach;
+        const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+        const int y0 = cy - reach < 1 ? 1 : cy - reach;
+        const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
 
         float best_val = 0.28f;
         int best_idx = -1;
@@ -676,7 +724,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                 const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
                 const float dx = cell_x - tr->x;
                 const float d2 = dx * dx + dy * dy;
-                if (d2 <= 195.0f * 195.0f) {
+                if (d2 <= zap_reach_px * zap_reach_px) {
                     best_val = val;
                     best_idx = idx;
                     best_x = cell_x;
@@ -837,14 +885,31 @@ void elements_step(GameState *g)
         decay_cd(&g->internal.thunderburst_block_cd[b]);
     }
 
-    /* Stage 1: cell reactions (Blazing Inkstorm + Tempest Lightning growth). */
-    const int32_t storm_cells = elements_stage1_cells(g);
+    /* Stage 1: cell reactions (Blazing Inkstorm + Tempest Lightning growth). Its rules need fire or
+     * storm above 0.14 and stages 2-3 compare the same peaks with their own thresholds, so quiet
+     * frames skip the full-grid scans without changing any result. */
+    const float *fire_ch = fluid_channel_const(&g->fluid, 1);
+    const float *storm_ch = fluid_channel_const(&g->fluid, 2);
+    ElementPeaks peaks = {
+        .fire = fire_ch != NULL ? channel_peak(fire_ch) : 0.0f,
+        .storm = storm_ch != NULL ? channel_peak(storm_ch) : 0.0f,
+    };
+    int32_t storm_cells = 0;
+    if (peaks.fire > 0.14f || peaks.storm > 0.14f) {
+        storm_cells = elements_stage1_cells(g, &peaks);
+    } else {
+        g->internal.blazing_active = false;
+    }
 
-    /* Stage 2: Cataclysm (ink x fire x storm, 8x8 block, global 2.0s CD). */
-    const int32_t cataclysm_block = elements_stage2_cataclysm(g);
+    /* Stage 2: Cataclysm (ink x fire x storm, 64px block, global 2.0s CD). */
+    const int32_t cataclysm_block = elements_stage2_cataclysm(g, peaks);
+    if (cataclysm_block >= 0) {
+        /* Cataclysm damage and hooks may inject fire or storm before the thunderburst scan. */
+        peaks = (ElementPeaks){.fire = FLT_MAX, .storm = FLT_MAX};
+    }
 
-    /* Stage 3: Thunderburst (fire x storm, 8x8 block, max 3/tick, excludes cataclysm block). */
-    elements_stage3_thunderburst(g, cataclysm_block);
+    /* Stage 3: Thunderburst (fire x storm, 64px block, max 3/tick, excludes cataclysm block). */
+    elements_stage3_thunderburst(g, cataclysm_block, peaks);
 
     /* Stage 4: enemy statuses, burn ticks, and Tempest Lightning chains. */
     elements_stage4_enemies(g, storm_cells);

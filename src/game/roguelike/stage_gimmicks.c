@@ -94,7 +94,7 @@ static void inject_pillar_pulse(GameState *g, float x, float y, GimmickElemKind 
     } else {
         return;
     }
-    fluid_splat(&g->fluid, x, y, 4.0f, 0.0f, 0.0f, dye);
+    fluid_splat(&g->fluid, x, y, GAME_PX_TO_CELLS(32.0f), 0.0f, 0.0f, dye);
 }
 
 static void step_spirit_pillar(GameState *g, const TransformComp *tr, GimmickComp *gim)
@@ -105,17 +105,19 @@ static void step_spirit_pillar(GameState *g, const TransformComp *tr, GimmickCom
         return;
     }
 
+    const float max_r = 28.0f;
+    const int reach = fluid_cell_reach(max_r);
     const int cx = (int)(tr->x / FLUID_CELL_PX);
     const int cy = (int)(tr->y / FLUID_CELL_PX);
-    const int x0 = cx - 4 < 1 ? 1 : cx - 4;
-    const int x1 = cx + 4 > FLUID_W - 2 ? FLUID_W - 2 : cx + 4;
-    const int y0 = cy - 4 < 1 ? 1 : cy - 4;
-    const int y1 = cy + 4 > FLUID_H - 2 ? FLUID_H - 2 : cy + 4;
+    const int x0 = cx - reach < 1 ? 1 : cx - reach;
+    const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+    const int y0 = cy - reach < 1 ? 1 : cy - reach;
+    const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
 
     float max_fire = 0.0f;
     float max_storm = 0.0f;
     const float min_r2 = 16.0f * 16.0f;
-    const float max_r2 = 28.0f * 28.0f;
+    const float max_r2 = max_r * max_r;
 
     for (int gy = y0; gy <= y1; ++gy) {
         const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
@@ -179,12 +181,14 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
     const float *ink_ch = fluid_channel_const(&g->fluid, 0);
     float max_ink = 0.0f;
     if (ink_ch != NULL) {
+        const float rod_r = 40.0f;
+        const int reach = fluid_cell_reach(rod_r);
         const int cx = (int)(lx / FLUID_CELL_PX);
         const int cy = (int)(ly / FLUID_CELL_PX);
-        const int x0 = cx - 5 < 1 ? 1 : cx - 5;
-        const int x1 = cx + 5 > FLUID_W - 2 ? FLUID_W - 2 : cx + 5;
-        const int y0 = cy - 5 < 1 ? 1 : cy - 5;
-        const int y1 = cy + 5 > FLUID_H - 2 ? FLUID_H - 2 : cy + 5;
+        const int x0 = cx - reach < 1 ? 1 : cx - reach;
+        const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+        const int y0 = cy - reach < 1 ? 1 : cy - reach;
+        const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
         for (int gy = y0; gy <= y1; ++gy) {
             const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
             const float dy = cell_y - ly;
@@ -196,7 +200,7 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
                 }
                 const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
                 const float dx = cell_x - lx;
-                if (dx * dx + dy * dy <= 40.0f * 40.0f) {
+                if (dx * dx + dy * dy <= rod_r * rod_r) {
                     const float iv = ink_ch[idx];
                     if (isfinite(iv) && iv > max_ink) {
                         max_ink = iv;
@@ -209,7 +213,7 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
     if (max_ink > 0.30f) {
         /* Ink lightning rod: shrine unharmed, inject storm and zap nearest alive enemy. */
         static const float k_rod_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.0f, 1.1f, 0.0f};
-        fluid_splat(&g->fluid, lx, ly, 4.0f, 0.0f, 0.0f, k_rod_dye);
+        fluid_splat(&g->fluid, lx, ly, GAME_PX_TO_CELLS(32.0f), 0.0f, 0.0f, k_rod_dye);
 
         EntityId best = {ECS_INVALID_INDEX, 0};
         float best_d2 = 1e18f;
@@ -327,6 +331,8 @@ static void step_mountain_wind(GameState *g)
         g->internal.wind_active_t -= INK_FIXED_DT;
         const int32_t dir = g->internal.wind_dir;
         const float max_vel = g->fluid.cfg.max_vel;
+        const int band = fluid_cell_reach(160.0f);
+        const float wind = GAME_PX_TO_CELLS(96.0f);
         float target_u = 0.0f;
         float target_v = 0.0f;
         int x0 = 1;
@@ -335,20 +341,20 @@ static void step_mountain_wind(GameState *g)
         int y1 = FLUID_H - 2;
 
         if (dir == 0) {
-            target_u = 12.0f;
+            target_u = wind;
             x0 = 1;
-            x1 = 20;
+            x1 = band;
         } else if (dir == 1) {
-            target_u = -12.0f;
-            x0 = FLUID_W - 21;
+            target_u = -wind;
+            x0 = FLUID_W - 1 - band;
             x1 = FLUID_W - 2;
         } else if (dir == 2) {
-            target_v = 12.0f;
+            target_v = wind;
             y0 = 1;
-            y1 = 20;
+            y1 = band;
         } else {
-            target_v = -12.0f;
-            y0 = FLUID_H - 21;
+            target_v = -wind;
+            y0 = FLUID_H - 1 - band;
             y1 = FLUID_H - 2;
         }
 
@@ -390,8 +396,8 @@ static void step_boss_field_effects(GameState *g)
         const int steps = (int)ink_clampf(dist / 32.0f, 2.0f, 14.0f);
         for (int s = 0; s <= steps; ++s) {
             const float u = (float)s / (float)steps;
-            fluid_splat(&g->fluid, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, 2.8f, 0.0f, 0.0f,
-                        k_trail_dye);
+            fluid_splat(&g->fluid, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, GAME_PX_TO_CELLS(22.4f),
+                        0.0f, 0.0f, k_trail_dye);
         }
         if (g->internal.nue_trail_t[t] <= 1e-4f) {
             g->internal.nue_trail_t[t] = 0.0f;
@@ -403,7 +409,7 @@ static void step_boss_field_effects(GameState *g)
         g->internal.ryu_coil_t -= INK_FIXED_DT;
         const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
         const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
-        fluid_swirl(&g->fluid, sx, sy, 30.0f, -44.0f, NULL);
+        fluid_swirl(&g->fluid, sx, sy, GAME_PX_TO_CELLS(240.0f), GAME_PX_TO_CELLS(-352.0f), NULL);
         if (g->internal.ryu_coil_t <= 1e-4f) {
             g->internal.ryu_coil_t = 0.0f;
         }
@@ -430,7 +436,8 @@ void stage_gimmicks_step(GameState *g)
         if (gim->kind == (int32_t)GIMMICK_SPIRIT_PILLAR) {
             step_spirit_pillar(g, tr, gim);
         } else if (gim->kind == (int32_t)GIMMICK_KAMAITACHI_VORTEX) {
-            fluid_swirl(&g->fluid, tr->x, tr->y, 10.0f, -42.0f, NULL);
+            fluid_swirl(&g->fluid, tr->x, tr->y, GAME_PX_TO_CELLS(80.0f), GAME_PX_TO_CELLS(-336.0f),
+                        NULL);
             gim->timer -= INK_FIXED_DT;
             if (gim->timer <= 1e-4f) {
                 ecs_destroy(&g->ecs, id);

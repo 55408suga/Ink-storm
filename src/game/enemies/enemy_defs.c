@@ -286,12 +286,14 @@ static void step_elite_ink_repel(GameState *g, float ex, float ey)
     if (ink_ch == NULL) {
         return;
     }
+    const float repel_r = 48.0f;
+    const int reach = fluid_cell_reach(repel_r);
     const int cx = (int)(ex / FLUID_CELL_PX);
     const int cy = (int)(ey / FLUID_CELL_PX);
-    const int x0 = cx - 6 < 1 ? 1 : cx - 6;
-    const int x1 = cx + 6 > FLUID_W - 2 ? FLUID_W - 2 : cx + 6;
-    const int y0 = cy - 6 < 1 ? 1 : cy - 6;
-    const int y1 = cy + 6 > FLUID_H - 2 ? FLUID_H - 2 : cy + 6;
+    const int x0 = cx - reach < 1 ? 1 : cx - reach;
+    const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+    const int y0 = cy - reach < 1 ? 1 : cy - reach;
+    const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
     const float keep = 1.0f - 0.20f * INK_FIXED_DT;
 
     for (int gy = y0; gy <= y1; ++gy) {
@@ -305,7 +307,7 @@ static void step_elite_ink_repel(GameState *g, float ex, float ey)
             }
             const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
             const float dx = cell_x - ex;
-            if (dx * dx + dy * dy <= 48.0f * 48.0f && isfinite(ink_ch[idx])) {
+            if (dx * dx + dy * dy <= repel_r * repel_r && isfinite(ink_ch[idx])) {
                 ink_ch[idx] *= keep;
             }
         }

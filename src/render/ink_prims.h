@@ -26,5 +26,13 @@ void ink_dashed_stroke(RenderState *r, Vector2 a, Vector2 b, float dash_len, flo
 void ink_teardrop(RenderState *r, Vector2 at, Vector2 dir, float len, float wid, Color c);
 void ink_outline_tone(RenderState *r, const Vector2 *ctrl, int n, bool closed, float w_max,
                       Vector2 shade_dir, InkTone tone, uint32_t seed);
+/* 2 本の折れ線の間を上下でグラデーション塗り（山の稜線から霧へ消える帯など） */
+void ink_fill_gradient_strip(RenderState *r, const Vector2 *top, const Vector2 *bottom, int n,
+                             Color top_c, Color bottom_c);
+/* 頂点ごとの色で 2 本の折れ線の間を塗る（両端を霧に溶かす山並みなど） */
+void ink_fill_strip_shaded(RenderState *r, const Vector2 *top, const Vector2 *bottom,
+                           const Color *top_c, const Color *bottom_c, int n);
+/* 中心色から外周色へ放射状に変化する楕円（霧・落ち影・発光） */
+void ink_radial_glow(RenderState *r, Vector2 center, float rx, float ry, Color inner, Color outer);
 
 #endif

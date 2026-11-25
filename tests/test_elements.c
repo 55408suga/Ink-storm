@@ -561,6 +561,63 @@ static void test_thunderburst_trigger_impulse_decay_cd_and_cap(void)
     game_destroy(g);
 }
 
+static void test_thunderburst_in_bottom_right_block_uses_last_block(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* The bottom row of 64px blocks is only partly covered by the 720px screen. Painting the
+     * fixed screen region x >= 1216, y >= 704 fills that last partial block on any grid. */
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        for (int x = 1; x < FLUID_W - 1; ++x) {
+            if (cell_center_px(x) >= 1216.0f && cell_center_px(y) >= 704.0f) {
+                fire[cell_idx(x, y)] = 0.45f;
+                storm[cell_idx(x, y)] = 0.45f;
+            }
+        }
+    }
+    g->event_count = 0;
+    elements_step(g);
+
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_TRUE(g->internal.thunderburst_block_cd[GAME_THUNDERBURST_BLOCKS - 1] > 0.0f);
+    game_destroy(g);
+}
+
+static void test_field_without_fire_or_storm_leaves_ink_untouched(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    float *ink = fluid_channel_mut(&g->fluid, 0);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int x = 20; x < 60; ++x) {
+        ink[cell_idx(x, 30)] = 1.8f;
+    }
+    fire[cell_idx(30, 30)] = 0.14f;
+    storm[cell_idx(31, 30)] = 0.14f;
+    g->internal.blazing_active = true;
+    const uint64_t fluid_before = fluid_hash(&g->fluid);
+    g->event_count = 0;
+
+    elements_step(g);
+
+    TEST_ASSERT_FALSE(g->internal.blazing_active);
+    TEST_ASSERT_EQUAL_HEX64(fluid_before, fluid_hash(&g->fluid));
+    TEST_ASSERT_EQUAL_INT32(0, g->event_count);
+    TEST_ASSERT_EQUAL_INT32(0, g->pending_impulse_count);
+    game_destroy(g);
+}
+
 static void test_cataclysm_trigger_excludes_thunderburst_and_cd(void)
 {
     GameState *g = game_create(NULL);
@@ -986,6 +1043,8 @@ int main(void)
     RUN_TEST(test_processing_order_ignite_before_storm_zap);
     RUN_TEST(test_pending_impulse_applied_next_tick);
     RUN_TEST(test_thunderburst_trigger_impulse_decay_cd_and_cap);
+    RUN_TEST(test_thunderburst_in_bottom_right_block_uses_last_block);
+    RUN_TEST(test_field_without_fire_or_storm_leaves_ink_untouched);
     RUN_TEST(test_cataclysm_trigger_excludes_thunderburst_and_cd);
     RUN_TEST(test_thunderburst_fuse_upgrade);
     RUN_TEST(test_relic_seal_of_trinity);

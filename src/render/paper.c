@@ -2,74 +2,156 @@
 #include "render_internal.h"
 
 #include "core.h"
+#include "rlgl.h"
 
 #include <math.h>
 #include <stddef.h>
 
-enum { PAPER_TEX_SIZE = 256 };
+enum { PAPER_TEX_SIZE = 512 };
 
 static const float k_paper_two_pi = 6.28318530718f;
+
+/* ---------------------------------------------------------------- seamless washi */
+
+static uint32_t paper_mix(uint32_t x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static float lattice(uint32_t seed, int x, int y, int period_x, int period_y)
+{
+    const uint32_t xi = (uint32_t)(((x % period_x) + period_x) % period_x);
+    const uint32_t yi = (uint32_t)(((y % period_y) + period_y) % period_y);
+    const uint32_t h = paper_mix(seed ^ paper_mix(xi * 0x8da6b343u ^ paper_mix(yi * 0xd8163841u)));
+    return (float)(h >> 8) * (1.0f / 16777216.0f);
+}
+
+/* Value noise on a torus: lattice indices wrap with the period, so the tile repeats exactly. */
+static float torus_noise(uint32_t seed, float u, float v, int period_x, int period_y)
+{
+    const float x = u * (float)period_x;
+    const float y = v * (float)period_y;
+    const int x0 = (int)floorf(x);
+    const int y0 = (int)floorf(y);
+    const float fx = x - (float)x0;
+    const float fy = y - (float)y0;
+    const float sx = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+    const float sy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+    const float a = lattice(seed, x0, y0, period_x, period_y);
+    const float b = lattice(seed, x0 + 1, y0, period_x, period_y);
+    const float c = lattice(seed, x0, y0 + 1, period_x, period_y);
+    const float d = lattice(seed, x0 + 1, y0 + 1, period_x, period_y);
+    return (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy;
+}
+
+static void deposit(Color *px, float x, float y, float amount)
+{
+    /* Bilinear splat with wrap-around keeps fibres continuous across the tile seam. */
+    const int x0 = (int)floorf(x);
+    const int y0 = (int)floorf(y);
+    const float fx = x - (float)x0;
+    const float fy = y - (float)y0;
+    const float w[4] = {(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy};
+    for (int k = 0; k < 4; ++k) {
+        const int xx = ((x0 + (k & 1)) % PAPER_TEX_SIZE + PAPER_TEX_SIZE) % PAPER_TEX_SIZE;
+        const int yy = ((y0 + (k >> 1)) % PAPER_TEX_SIZE + PAPER_TEX_SIZE) % PAPER_TEX_SIZE;
+        Color *c = &px[yy * PAPER_TEX_SIZE + xx];
+        const float d = amount * w[k];
+        c->r = (unsigned char)ink_clampf((float)c->r + d, 0.0f, 255.0f);
+        c->g = (unsigned char)ink_clampf((float)c->g + d, 0.0f, 255.0f);
+        c->b = (unsigned char)ink_clampf((float)c->b + d * 1.08f, 0.0f, 255.0f);
+    }
+}
+
+static void lay_fibres(Color *px, uint64_t *rng)
+{
+    /* Curved kozo (mulberry) fibres: thin, long, slightly brighter or darker than the sheet. */
+    for (int f = 0; f < 420; ++f) {
+        float x = ink_rng_f01(rng) * (float)PAPER_TEX_SIZE;
+        float y = ink_rng_f01(rng) * (float)PAPER_TEX_SIZE;
+        float ang = ink_rng_f01(rng) * k_paper_two_pi;
+        const int len = 16 + (int)(ink_rng_f01(rng) * 70.0f);
+        const int steps = len * 2;
+        /* At most ~40 degrees of total bend: fibres sweep, they never curl into rings. */
+        const float bend = (ink_rng_f01(rng) - 0.5f) * 1.4f / (float)steps;
+        const bool bright = ink_rng_f01(rng) < 0.7f;
+        const float amount =
+            bright ? 2.0f + ink_rng_f01(rng) * 3.5f : -(1.2f + ink_rng_f01(rng) * 2.2f);
+        for (int s = 0; s < steps; ++s) {
+            const float taper = sinf(3.14159265f * (float)s / (float)steps);
+            deposit(px, x, y, amount * taper);
+            x += cosf(ang) * 0.5f;
+            y += sinf(ang) * 0.5f;
+            ang += bend;
+        }
+    }
+}
+
+static void build_washi(Color *px)
+{
+    for (int y = 0; y < PAPER_TEX_SIZE; ++y) {
+        const float v = ((float)y + 0.5f) / (float)PAPER_TEX_SIZE;
+        for (int x = 0; x < PAPER_TEX_SIZE; ++x) {
+            const float u = ((float)x + 0.5f) / (float)PAPER_TEX_SIZE;
+            const float mottle =
+                torus_noise(0x11u, u, v, 3, 3) * 0.6f + torus_noise(0x12u, u, v, 6, 6) * 0.4f;
+            const float cloud =
+                torus_noise(0x21u, u, v, 16, 16) * 0.6f + torus_noise(0x22u, u, v, 32, 32) * 0.4f;
+            const float tooth = torus_noise(0x31u, u, v, 128, 128) * 0.5f +
+                                lattice(0x32u, x, y, PAPER_TEX_SIZE, PAPER_TEX_SIZE) * 0.5f;
+            const float laid = torus_noise(0x41u, u, v, 4, 96);
+            const float lum = 245.0f + (mottle - 0.5f) * 8.0f + (cloud - 0.5f) * 7.0f +
+                              (tooth - 0.5f) * 6.0f + (laid - 0.5f) * 2.5f;
+            /* Darker mottles are a touch warmer, like sizing that settled unevenly. */
+            const float warm = (0.5f - mottle) * 3.0f;
+            px[y * PAPER_TEX_SIZE + x] = (Color){
+                (unsigned char)ink_clampf(lum, 224.0f, 255.0f),
+                (unsigned char)ink_clampf(lum - 0.5f, 224.0f, 255.0f),
+                (unsigned char)ink_clampf(lum - 1.5f - warm, 220.0f, 255.0f),
+                255,
+            };
+        }
+    }
+    uint64_t rng = UINT64_C(0x5741534849504150);
+    lay_fibres(px, &rng);
+}
 
 void render_paper_init(RenderState *r)
 {
     if (r == NULL) {
         return;
     }
-    /* Achromatic white-base washi grain texture so multiplying by pal_paper_for_act(act)
-     * preserves exact Act 1/2/3 lightness (L* >= 80) without double-multiplication darkening. */
-    Image img = GenImagePerlinNoise(PAPER_TEX_SIZE, PAPER_TEX_SIZE, 13, 29, 3.2f);
-    Color *px = LoadImageColors(img);
-    if (px != NULL) {
-        uint64_t rng = UINT64_C(0x5741534849504150);
-        for (int y = 0; y < PAPER_TEX_SIZE; ++y) {
-            for (int x = 0; x < PAPER_TEX_SIZE; ++x) {
-                const int idx = y * PAPER_TEX_SIZE + x;
-                const float n = ((float)px[idx].r / 255.0f) - 0.5f;
-                const float grain = n * 12.0f + (ink_rng_f01(&rng) - 0.5f) * 4.0f;
-                const unsigned char v = (unsigned char)ink_clampf(248.0f + grain, 232.0f, 255.0f);
-                px[idx].r = v;
-                px[idx].g = v;
-                px[idx].b = v;
-                px[idx].a = 255;
-            }
-        }
-        /* Subtle achromatic mulberry fiber lines */
-        for (int f = 0; f < 42; ++f) {
-            const int fx = (int)(ink_rng_next(&rng) % (uint64_t)PAPER_TEX_SIZE);
-            const int fy = (int)(ink_rng_next(&rng) % (uint64_t)PAPER_TEX_SIZE);
-            const int len = 10 + (int)(ink_rng_next(&rng) % 24u);
-            const bool horiz = (ink_rng_next(&rng) & 1u) != 0u;
-            const int delta = (ink_rng_next(&rng) & 2u) ? 5 : -6;
-            for (int k = 0; k < len; ++k) {
-                const int px_x = (fx + (horiz ? k : 0)) % PAPER_TEX_SIZE;
-                const int px_y = (fy + (horiz ? 0 : k)) % PAPER_TEX_SIZE;
-                Color *c = &px[px_y * PAPER_TEX_SIZE + px_x];
-                const unsigned char v =
-                    (unsigned char)ink_clampf((float)c->r + (float)delta, 228.0f, 255.0f);
-                c->r = v;
-                c->g = v;
-                c->b = v;
-            }
-        }
-
-        Image out = {
-            .data = px,
-            .width = PAPER_TEX_SIZE,
-            .height = PAPER_TEX_SIZE,
-            .mipmaps = 1,
-            .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
-        };
-        r->paper_tex = LoadTextureFromImage(out);
-        UnloadImageColors(px);
+    /* Near-white, almost achromatic sheet: multiplying by pal_paper_for_act(act) keeps each act's
+     * paper lightness instead of darkening it twice. */
+    Image img = GenImageColor(PAPER_TEX_SIZE, PAPER_TEX_SIZE, pal_white());
+    if (img.data != NULL) {
+        build_washi((Color *)img.data);
+        r->paper_tex = LoadTextureFromImage(img);
+        UnloadImage(img);
     }
-    UnloadImage(img);
-
     if (r->paper_tex.id != 0) {
         SetTextureFilter(r->paper_tex, TEXTURE_FILTER_BILINEAR);
         SetTextureWrap(r->paper_tex, TEXTURE_WRAP_REPEAT);
     }
 
-    r->bg_cache = LoadRenderTexture(INK_SCREEN_W, INK_SCREEN_H);
+    r->bg_cache =
+        LoadRenderTexture(INK_SCREEN_W + 2 * RENDER_BG_PAD, INK_SCREEN_H + 2 * RENDER_BG_PAD);
+    if (!render_texture_usable(r->bg_cache)) {
+        if (r->bg_cache.id != 0) {
+            UnloadRenderTexture(r->bg_cache);
+        }
+        r->bg_cache = (RenderTexture2D){0};
+        TraceLog(LOG_WARNING, "INKSTORM: background cache unavailable; painting scenery directly");
+    } else {
+        SetTextureFilter(r->bg_cache.texture, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(r->bg_cache.texture, TEXTURE_WRAP_CLAMP);
+    }
+    r->bg_cached_kind = -1;
     r->bg_cached_act = -1;
 }
 
@@ -86,352 +168,269 @@ void render_paper_close(RenderState *r)
         UnloadRenderTexture(r->bg_cache);
         r->bg_cache = (RenderTexture2D){0};
     }
+    r->bg_cached_kind = -1;
     r->bg_cached_act = -1;
 }
 
-void render_paper_draw_base(RenderState *r, int act_index)
+static PaletteId paper_for_key(BgKey key)
 {
-    const PaletteId paper_pal = pal_paper_for_act(act_index);
-    const Color tint = pal_color(paper_pal);
-    ClearBackground(tint);
+    return key.kind == BG_LOBBY ? PAL_PAPER_ACT1 : pal_paper_for_act(key.act_index);
+}
+
+/* Paints paper + scenery in world coordinates over the padded area around the screen. */
+static void paint_background(RenderState *r, BgKey key)
+{
+    const Color tint = pal_color(paper_for_key(key));
+    const Rectangle area = {-(float)RENDER_BG_PAD, -(float)RENDER_BG_PAD,
+                            (float)(INK_SCREEN_W + 2 * RENDER_BG_PAD),
+                            (float)(INK_SCREEN_H + 2 * RENDER_BG_PAD)};
+    DrawRectangleRec(area, tint);
     if (r->paper_tex.id != 0) {
-        const Rectangle src = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
-        const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
-        DrawTexturePro(r->paper_tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, tint);
+        DrawTexturePro(r->paper_tex, area, area, (Vector2){0.0f, 0.0f}, 0.0f, tint);
     }
+    render_scenery_draw(r, key);
 }
 
-static void bake_act1_background(RenderState *r)
+static void bake_background(RenderState *r, BgKey key)
 {
-    /* Act 1 edges only (within 120px margin, opacity <= 0.35, >= 80% empty paper) */
-    const InkTone mist_tone = {.color = PAL_SUMI_CLEAR, .alpha = 0.28f};
-    ink_wash(r, (Vector2){220.0f, 44.0f}, 190.0f, 38.0f, -0.05f, mist_tone, 2, 1001u);
-    ink_wash(r, (Vector2){650.0f, 36.0f}, 240.0f, 34.0f, 0.04f, mist_tone, 2, 1002u);
-    ink_wash(r, (Vector2){1060.0f, 50.0f}, 180.0f, 42.0f, -0.06f, mist_tone, 2, 1003u);
-
-    static const float grass_x[4] = {96.0f, 152.0f, 1110.0f, 1178.0f};
-    static const float grass_lean[4] = {36.0f, 52.0f, -44.0f, -28.0f};
-    static const float grass_h[4] = {94.0f, 76.0f, 102.0f, 82.0f};
-    const InkTone grass_tone = {.color = PAL_SUMI_LIGHT, .alpha = 0.30f};
-    for (int i = 0; i < 4; ++i) {
-        const float bx = grass_x[i];
-        const float by = (float)INK_SCREEN_H + 6.0f;
-        const Vector2 pts[4] = {
-            {bx, by},
-            {bx + grass_lean[i] * 0.25f, by - grass_h[i] * 0.38f},
-            {bx + grass_lean[i] * 0.65f, by - grass_h[i] * 0.74f},
-            {bx + grass_lean[i], by - grass_h[i]},
-        };
-        const BrushProfile prof = {.w_max = 4.2f,
-                                   .w_min_ratio = 0.28f,
-                                   .entry = 0.12f,
-                                   .exit = 0.55f,
-                                   .dry = 0.45f,
-                                   .seed = 2000u + (uint32_t)i * 31u};
-        ink_stroke(r, pts, 4, prof, grass_tone, 1.0f);
-    }
-}
-
-static void bake_act2_background(RenderState *r)
-{
-    /* Act 2 dusk edges: bamboo stalks on left/right 120px margins + crow flock on top edge */
-    static const float bamboo_x[6] = {28.0f, 64.0f, 96.0f, 1184.0f, 1218.0f, 1252.0f};
-    static const float bamboo_lean[6] = {10.0f, -8.0f, 14.0f, -12.0f, 8.0f, -10.0f};
-    const InkTone stalk_tone = {.color = PAL_SUMI_LIGHT, .alpha = 0.30f};
-    const InkTone node_tone = {.color = PAL_SUMI_HEAVY, .alpha = 0.32f};
-
-    for (int i = 0; i < 6; ++i) {
-        const float bx = bamboo_x[i];
-        const float lean = bamboo_lean[i];
-        const Vector2 stalk[4] = {
-            {bx, (float)INK_SCREEN_H + 8.0f},
-            {bx + lean * 0.3f, 520.0f},
-            {bx + lean * 0.7f, 260.0f},
-            {bx + lean, 32.0f},
-        };
-        ink_stroke(r, stalk, 4,
-                   (BrushProfile){.w_max = (i % 2 == 0) ? 7.5f : 5.2f,
-                                  .w_min_ratio = 0.35f,
-                                  .entry = 0.08f,
-                                  .exit = 0.15f,
-                                  .dry = 0.35f,
-                                  .seed = 2100u + (uint32_t)i * 19u},
-                   stalk_tone, 1.0f);
-        /* Bamboo nodes & sparse edge leaves */
-        for (int seg = 1; seg <= 4; ++seg) {
-            const float ny = (float)INK_SCREEN_H - (float)seg * 145.0f;
-            const float nx = bx + lean * ((float)seg * 0.22f);
-            const Vector2 node[2] = {{nx - 7.0f, ny + 1.5f}, {nx + 7.0f, ny - 1.5f}};
-            ink_stroke(r, node, 2,
-                       (BrushProfile){.w_max = 3.2f,
-                                      .w_min_ratio = 0.35f,
-                                      .entry = 0.15f,
-                                      .exit = 0.25f,
-                                      .dry = 0.20f,
-                                      .seed = 2150u + (uint32_t)(i * 8 + seg)},
-                       node_tone, 1.0f);
-            if ((seg + i) % 2 == 0) {
-                const float dir = (i < 3) ? 1.0f : -1.0f;
-                const Vector2 leaf[3] = {
-                    {nx, ny},
-                    {nx + dir * 22.0f, ny - 10.0f},
-                    {nx + dir * 42.0f, ny - 4.0f},
-                };
-                ink_stroke(r, leaf, 3,
-                           (BrushProfile){.w_max = 3.4f,
-                                          .w_min_ratio = 0.20f,
-                                          .entry = 0.10f,
-                                          .exit = 0.65f,
-                                          .dry = 0.30f,
-                                          .seed = 2200u + (uint32_t)(i * 10 + seg)},
-                           stalk_tone, 1.0f);
-            }
-        }
-    }
-
-    /* Flock of 7 crows along top edge (< 120px) */
-    static const float crow_x[7] = {240.0f, 295.0f, 360.0f, 520.0f, 820.0f, 910.0f, 985.0f};
-    static const float crow_y[7] = {74.0f, 56.0f, 84.0f, 64.0f, 70.0f, 52.0f, 80.0f};
-    const InkTone crow_tone = {.color = PAL_SUMI_HEAVY, .alpha = 0.33f};
-    for (int c = 0; c < 7; ++c) {
-        const float cx = crow_x[c];
-        const float cy = crow_y[c];
-        const float s = 12.0f + (float)(c % 3) * 3.5f;
-        const Vector2 wing[3] = {
-            {cx - s, cy + s * 0.22f}, {cx, cy - s * 0.28f}, {cx + s, cy + s * 0.16f}};
-        ink_stroke(r, wing, 3,
-                   (BrushProfile){.w_max = 3.4f,
-                                  .w_min_ratio = 0.22f,
-                                  .entry = 0.25f,
-                                  .exit = 0.45f,
-                                  .dry = 0.25f,
-                                  .seed = 2300u + (uint32_t)c * 13u},
-                   crow_tone, 1.0f);
-    }
-}
-
-static void bake_act3_background(RenderState *r)
-{
-    /* Act 3 spirit peak storm: swirling dark ink clouds in top 15% + 1 dragon-vein ridge stroke */
-    const InkTone cloud_tone = {.color = PAL_SUMI_HEAVY, .alpha = 0.28f};
-    const InkTone cloud_pale = {.color = PAL_SUMI_LIGHT, .alpha = 0.25f};
-    ink_wash(r, (Vector2){180.0f, 42.0f}, 210.0f, 44.0f, -0.08f, cloud_tone, 2, 2401u);
-    ink_wash(r, (Vector2){520.0f, 32.0f}, 260.0f, 46.0f, 0.05f, cloud_pale, 2, 2402u);
-    ink_wash(r, (Vector2){910.0f, 38.0f}, 240.0f, 48.0f, -0.04f, cloud_tone, 2, 2403u);
-    ink_wash(r, (Vector2){1170.0f, 52.0f}, 180.0f, 40.0f, 0.08f, cloud_pale, 2, 2404u);
-
-    /* Continuous dragon-vein mountain ridge across top edge with dry-brush hihaku */
-    const Vector2 ridge[9] = {
-        {-12.0f, 108.0f}, {165.0f, 82.0f}, {340.0f, 96.0f},  {510.0f, 64.0f},  {648.0f, 52.0f},
-        {810.0f, 78.0f},  {960.0f, 62.0f}, {1120.0f, 88.0f}, {1292.0f, 72.0f},
-    };
-    ink_stroke(r, ridge, 9,
-               (BrushProfile){.w_max = 11.5f,
-                              .w_min_ratio = 0.22f,
-                              .entry = 0.10f,
-                              .exit = 0.22f,
-                              .dry = 0.45f,
-                              .seed = 2420u},
-               (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.34f}, 1.0f);
-
-    /* Dry-brush mountainside shading strokes within top 115px */
-    static const float slope_x[4] = {240.0f, 560.0f, 760.0f, 1030.0f};
-    for (int i = 0; i < 4; ++i) {
-        const Vector2 sl[3] = {
-            {slope_x[i], 68.0f},
-            {slope_x[i] - 32.0f, 92.0f},
-            {slope_x[i] - 74.0f, 114.0f},
-        };
-        ink_stroke(r, sl, 3,
-                   (BrushProfile){.w_max = 5.5f,
-                                  .w_min_ratio = 0.20f,
-                                  .entry = 0.12f,
-                                  .exit = 0.55f,
-                                  .dry = 0.65f,
-                                  .seed = 2440u + (uint32_t)i * 17u},
-                   (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.26f}, 1.0f);
-    }
-}
-
-static void bake_endless_sunago(RenderState *r, int loop_n, int act_index)
-{
-    int flecks = 20 * loop_n;
-    if (flecks > 120) {
-        flecks = 120;
-    }
-    uint64_t rng = UINT64_C(0x53554e41474f0001) ^
-                   ((uint64_t)(uint32_t)act_index * UINT64_C(0x9e3779b97f4a7c15));
-
-    for (int i = 0; i < flecks; ++i) {
-        const uint32_t edge = (uint32_t)(ink_rng_next(&rng) % 4u);
-        float fx = 0.0f;
-        float fy = 0.0f;
-        if (edge == 0u) {
-            fx = 12.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_W - 24.0f);
-            fy = 10.0f + ink_rng_f01(&rng) * 102.0f;
-        } else if (edge == 1u) {
-            fx = 12.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_W - 24.0f);
-            fy = (float)INK_SCREEN_H - 112.0f + ink_rng_f01(&rng) * 102.0f;
-        } else if (edge == 2u) {
-            fx = 10.0f + ink_rng_f01(&rng) * 102.0f;
-            fy = 116.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_H - 232.0f);
-        } else {
-            fx = (float)INK_SCREEN_W - 112.0f + ink_rng_f01(&rng) * 102.0f;
-            fy = 116.0f + ink_rng_f01(&rng) * ((float)INK_SCREEN_H - 232.0f);
-        }
-
-        const float rx = 2.4f + ink_rng_f01(&rng) * 3.4f;
-        const float ry = 2.0f + ink_rng_f01(&rng) * 2.8f;
-        const float ang = ink_rng_f01(&rng) * k_paper_two_pi;
-        const float ca = cosf(ang);
-        const float sa = sinf(ang);
-        const float skew = 0.72f + ink_rng_f01(&rng) * 0.45f;
-        const Vector2 local[4] = {
-            {-rx, -ry * 0.65f},
-            {rx * skew, -ry},
-            {rx, ry * 0.85f},
-            {-rx * 0.75f, ry * skew},
-        };
-        Vector2 poly[4];
-        for (int v = 0; v < 4; ++v) {
-            poly[v] = (Vector2){
-                fx + local[v].x * ca - local[v].y * sa,
-                fy + local[v].x * sa + local[v].y * ca,
-            };
-        }
-        const PaletteId pal = (ink_rng_next(&rng) & 1u) != 0u ? PAL_KIN : PAL_KIN_HOT;
-        const float alpha = 0.22f + ink_rng_f01(&rng) * 0.12f;
-        ink_fill_poly(r, poly, 4, pal_color_alpha(pal, alpha));
-    }
-}
-
-static void bake_act_background(RenderState *r, int act_index)
-{
-    if (r->bg_cache.id == 0) {
-        return;
-    }
     BeginTextureMode(r->bg_cache);
-    ClearBackground(pal_blank());
-
-    const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
-    if (stage_act == 1) {
-        bake_act2_background(r);
-    } else if (stage_act == 2) {
-        bake_act3_background(r);
-    } else {
-        bake_act1_background(r);
-    }
-
-    const int loop_n = act_index >= 0 ? (act_index / GAME_MAIN_ACT_COUNT) : 0;
-    if (loop_n >= 1) {
-        bake_endless_sunago(r, loop_n, act_index);
-    }
-
+    ClearBackground(pal_color(paper_for_key(key)));
+    /* Colour blends normally but destination alpha stays 1, so the cache is opaque and drawing
+     * it back never squares translucent stroke alpha. */
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_ADD,
+                              RL_FUNC_ADD);
+    render_set_blend(r, BLEND_CUSTOM_SEPARATE);
+    rlPushMatrix();
+    rlTranslatef((float)RENDER_BG_PAD, (float)RENDER_BG_PAD, 0.0f);
+    paint_background(r, key);
+    rlPopMatrix();
+    render_reset_blend(r);
     EndTextureMode();
-    r->bg_cached_act = act_index;
+    r->bg_cached_kind = (int32_t)key.kind;
+    r->bg_cached_act = key.act_index;
 }
 
-void render_paper_prepare_bg(RenderState *r, int act_index)
+void render_paper_prepare_bg(RenderState *r, BgKey key)
 {
     if (r == NULL || r->bg_cache.id == 0) {
         return;
     }
-    if (r->bg_cached_act != act_index) {
-        bake_act_background(r, act_index);
+    const BgKey cached = {.kind = (BgKind)r->bg_cached_kind, .act_index = r->bg_cached_act};
+    if (r->bg_cached_kind < 0 || !render_bg_key_equal(cached, key)) {
+        bake_background(r, key);
     }
 }
 
-void render_paper_draw_bg(RenderState *r, int act_index)
+void render_paper_draw_bg(RenderState *r, BgKey key)
 {
-    if (r->bg_cache.id == 0) {
+    if (r == NULL) {
         return;
     }
-    (void)act_index;
-    const Rectangle src = {0.0f, 0.0f, (float)r->bg_cache.texture.width,
-                           -(float)r->bg_cache.texture.height};
-    const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
-    DrawTexturePro(r->bg_cache.texture, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+    const BgKey cached = {.kind = (BgKind)r->bg_cached_kind, .act_index = r->bg_cached_act};
+    if (r->bg_cache.id == 0 || r->bg_cached_kind < 0 || !render_bg_key_equal(cached, key)) {
+        render_set_blend(r, BLEND_ALPHA);
+        paint_background(r, key);
+        return;
+    }
+    const Texture2D tex = r->bg_cache.texture;
+    const Rectangle src = {0.0f, 0.0f, (float)tex.width, -(float)tex.height};
+    const Rectangle dst = {-(float)RENDER_BG_PAD, -(float)RENDER_BG_PAD, (float)tex.width,
+                           (float)tex.height};
+    render_set_blend(r, BLEND_ALPHA);
+    DrawTexturePro(tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+}
+
+/* ---------------------------------------------------------------- terrain */
+
+static void fill_quad(RenderState *r, Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color col)
+{
+    const Vector2 q[4] = {a, b, c, d};
+    ink_fill_poly(r, q, 4, col);
+}
+
+static float rock_jitter(uint32_t seed, uint32_t i)
+{
+    return (float)(paper_mix(seed * 0x9e3779b9u ^ paper_mix(i + 17u)) >> 8) * (1.0f / 16777216.0f);
 }
 
 static void draw_rock_pillar(RenderState *r, Vector2 c, float rad, uint32_t seed)
 {
-    /* Mokkotsu pale-ink washes + 3 short shunpo cracks + bold dark sumi contour stroke */
-    ink_wash(r, (Vector2){c.x + 3.0f, c.y + 5.0f}, rad * 1.08f, rad * 0.94f, 0.18f,
-             (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.56f}, 2, seed + 1u);
-    ink_wash(r, (Vector2){c.x - 2.0f, c.y - 2.0f}, rad * 0.82f, rad * 0.78f, -0.22f,
-             (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.44f}, 2, seed + 2u);
+    /* A standing stone seen from above at a slight tilt: shaded side walls, a lit and uneven crown,
+     * shunpo veins, moss dots and a crisp contour, resting on pale mist with a shadow cast to the
+     * lower right. */
+    enum { V = 11 };
+    ink_radial_glow(r, c, rad * 1.9f, rad * 1.5f, pal_color_alpha(PAL_GOFUN, 0.6f),
+                    pal_color_alpha(PAL_GOFUN, 0.0f));
+    ink_radial_glow(r, (Vector2){c.x + rad * 0.5f, c.y + rad * 0.6f}, rad * 1.45f, rad * 1.0f,
+                    pal_color_alpha(PAL_SUMI_HEAVY, 0.36f), pal_color_alpha(PAL_SUMI_HEAVY, 0.0f));
 
-    const Vector2 poly[7] = {
-        {c.x - rad * 0.86f, c.y - rad * 0.48f}, {c.x - rad * 0.18f, c.y - rad * 1.02f},
-        {c.x + rad * 0.72f, c.y - rad * 0.72f}, {c.x + rad * 1.00f, c.y + rad * 0.12f},
-        {c.x + rad * 0.54f, c.y + rad * 0.96f}, {c.x - rad * 0.48f, c.y + rad * 0.88f},
-        {c.x - rad * 0.96f, c.y + rad * 0.24f},
-    };
-    ink_outline(r, poly, 7, true, 4.6f, (Vector2){0.707f, 0.707f}, seed + 3u);
+    Vector2 base[V];
+    Vector2 crown[V];
+    const float lift = rad * 0.30f;
+    for (int i = 0; i < V; ++i) {
+        const float a = k_paper_two_pi * (float)i / (float)V + 0.25f;
+        const float jb = 0.90f + 0.20f * rock_jitter(seed, (uint32_t)i);
+        const float jc = 0.68f + 0.22f * rock_jitter(seed + 1u, (uint32_t)i);
+        base[i] = (Vector2){c.x + cosf(a) * rad * jb, c.y + sinf(a) * rad * jb};
+        crown[i] = (Vector2){c.x - rad * 0.05f + cosf(a) * rad * jc,
+                             c.y - lift + sinf(a) * rad * jc * 0.82f};
+    }
+    ink_fill_poly(r, base, V, pal_color_alpha(PAL_SUMI_HEAVY, 0.97f));
+    for (int i = 0; i < V; ++i) {
+        const int n = (i + 1) % V;
+        const float mx = (base[i].x + base[n].x) * 0.5f - c.x;
+        const float my = (base[i].y + base[n].y) * 0.5f - c.y;
+        const float lit = ink_clampf(0.55f - 0.6f * (mx * 0.8f + my * 0.6f) / rad, 0.0f, 1.0f);
+        fill_quad(r, crown[i], base[i], base[n], crown[n],
+                  pal_lerp(PAL_SUMI_DARK, PAL_SUMI_LIGHT, lit, 0.96f));
+    }
+    ink_fill_poly(r, crown, V, pal_color_alpha(PAL_SUMI_CLEAR, 0.98f));
+    const Vector2 crown_c = {c.x - rad * 0.05f, c.y - lift};
+    const Vector2 shade[5] = {crown_c, crown[0], crown[1], crown[2], crown[3]};
+    ink_fill_poly(r, shade, 5, pal_color_alpha(PAL_SUMI_LIGHT, 0.42f));
+    ink_wash(r, (Vector2){crown_c.x - rad * 0.22f, crown_c.y - rad * 0.16f}, rad * 0.36f,
+             rad * 0.22f, -0.3f, (InkTone){.color = PAL_GOFUN, .alpha = 0.6f}, 1, seed + 1u);
 
-    /* 3 short Sesshu-style shunpo texture strokes */
-    const Vector2 s1[2] = {{c.x - rad * 0.42f, c.y - rad * 0.35f},
-                           {c.x + rad * 0.18f, c.y - rad * 0.52f}};
-    const Vector2 s2[2] = {{c.x - rad * 0.25f, c.y + rad * 0.18f},
-                           {c.x + rad * 0.45f, c.y - rad * 0.05f}};
-    const Vector2 s3[2] = {{c.x - rad * 0.10f, c.y + rad * 0.52f},
-                           {c.x + rad * 0.48f, c.y + rad * 0.38f}};
-    const BrushProfile sp = {.w_max = 3.2f,
-                             .w_min_ratio = 0.25f,
-                             .entry = 0.12f,
-                             .exit = 0.40f,
-                             .dry = 0.35f,
-                             .seed = seed + 10u};
-    ink_stroke(r, s1, 2, sp, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.82f}, 1.0f);
-    ink_stroke(r, s2, 2, sp, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.78f}, 1.0f);
-    ink_stroke(r, s3, 2, sp, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.76f}, 1.0f);
+    /* Shunpo: a few uneven curved veins of varying length rather than even stripes. */
+    for (int k = 0; k < 3; ++k) {
+        const float ox =
+            (-0.40f + 0.34f * (float)k + (rock_jitter(seed + 2u, (uint32_t)k) - 0.5f) * 0.2f) * rad;
+        const float top = -lift - rad * (0.25f + 0.35f * rock_jitter(seed + 3u, (uint32_t)k));
+        const float bot = rad * (0.15f + 0.55f * rock_jitter(seed + 4u, (uint32_t)k));
+        const float bend = (rock_jitter(seed + 5u, (uint32_t)k) - 0.5f) * rad * 0.35f;
+        const Vector2 v[3] = {{c.x + ox, c.y + top},
+                              {c.x + ox + bend, c.y + (top + bot) * 0.5f},
+                              {c.x + ox + bend * 0.4f, c.y + bot}};
+        ink_stroke(r, v, 3,
+                   (BrushProfile){.w_max = 2.4f,
+                                  .w_min_ratio = 0.2f,
+                                  .entry = 0.2f,
+                                  .exit = 0.5f,
+                                  .dry = 0.6f,
+                                  .seed = seed + 10u + (uint32_t)k},
+                   (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.6f}, 1.0f);
+    }
+    const Vector2 crack[3] = {{c.x + rad * 0.20f, c.y - lift - rad * 0.05f},
+                              {c.x + rad * 0.36f, c.y + rad * 0.18f},
+                              {c.x + rad * 0.30f, c.y + rad * 0.72f}};
+    ink_stroke(r, crack, 3,
+               (BrushProfile){.w_max = 3.0f,
+                              .w_min_ratio = 0.3f,
+                              .entry = 0.1f,
+                              .exit = 0.5f,
+                              .dry = 0.3f,
+                              .seed = seed + 30u},
+               (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.85f}, 1.0f);
+    for (int k = 0; k < 4; ++k) {
+        const Vector2 dot = crown[(seed + (uint32_t)k * 3u) % V];
+        ink_wash(
+            r, (Vector2){dot.x + (crown_c.x - dot.x) * 0.15f, dot.y + (crown_c.y - dot.y) * 0.15f},
+            2.2f, 1.6f, 0.3f, (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.8f}, 1,
+            seed + 50u + (uint32_t)k);
+    }
+    ink_outline_tone(r, crown, V, true, 2.0f, (Vector2){-0.6f, -0.8f},
+                     (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.7f}, seed + 40u);
+    ink_outline(r, base, V, true, 4.6f, (Vector2){0.707f, 0.707f}, seed + 3u);
 }
 
 static void draw_torii(RenderState *r, float cx, uint32_t seed)
 {
-    /* Solid pillars at (cx, 328) and (cx, 392) [16x16px], PAL_BENGARA (distinct from fire PAL_SHU).
-     * Kasagi & nuki crossbars are visual only (not solid). */
+    /* Solid pillars at (cx, 328) and (cx, 392) [16x16px]; the beams are visual only. Seen from
+     * above: foundation stones, round bengara posts (not PAL_SHU, which fire owns), a nuki tie-beam
+     * and the dark kasagi cap, all casting one soft shadow to the lower right. */
     const float py[2] = {328.0f, 392.0f};
+    const float kx = cx - 6.0f;
+    fill_quad(r, (Vector2){kx + 2.0f, 306.0f}, (Vector2){kx + 22.0f, 312.0f},
+              (Vector2){kx + 22.0f, 424.0f}, (Vector2){kx + 2.0f, 418.0f},
+              pal_color_alpha(PAL_SUMI_HEAVY, 0.16f));
     for (int i = 0; i < 2; ++i) {
-        const Vector2 p = {cx, py[i]};
-        ink_wash(r, p, 11.0f, 11.0f, 0.05f, (InkTone){.color = PAL_BENGARA, .alpha = 0.88f}, 2,
-                 seed + (uint32_t)i * 7u);
-        const Vector2 box[4] = {
-            {cx - 8.5f, py[i] - 8.5f},
-            {cx + 8.5f, py[i] - 8.0f},
-            {cx + 8.0f, py[i] + 8.5f},
-            {cx - 8.5f, py[i] + 8.0f},
-        };
-        ink_outline_tone(r, box, 4, true, 3.6f, (Vector2){0.707f, 0.707f},
-                         (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.92f},
-                         seed + 20u + (uint32_t)i);
+        ink_radial_glow(r, (Vector2){cx + 6.0f, py[i] + 6.0f}, 18.0f, 14.0f,
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.30f),
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.0f));
+        Vector2 stone[8];
+        for (int k = 0; k < 8; ++k) {
+            const float a = k_paper_two_pi * ((float)k + 0.5f) / 8.0f;
+            stone[k] = (Vector2){cx + cosf(a) * 14.0f, py[i] + sinf(a) * 13.0f};
+        }
+        ink_fill_poly(r, stone, 8, pal_color_alpha(PAL_SUMI_CLEAR, 0.95f));
+        ink_outline_tone(r, stone, 8, true, 1.8f, (Vector2){0.7f, 0.7f},
+                         (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.8f}, seed + (uint32_t)i);
+        ink_radial_glow(r, (Vector2){cx, py[i]}, 9.5f, 9.5f, pal_color_alpha(PAL_BENGARA, 1.0f),
+                        pal_lerp(PAL_BENGARA, PAL_SUMI_DARK, 0.25f, 1.0f));
+        ink_radial_glow(r, (Vector2){cx - 3.0f, py[i] - 3.0f}, 3.6f, 3.0f,
+                        pal_lerp(PAL_BENGARA, PAL_GOFUN, 0.45f, 0.55f),
+                        pal_lerp(PAL_BENGARA, PAL_GOFUN, 0.45f, 0.0f));
+        ink_arc_stroke(r, (Vector2){cx, py[i]}, 9.5f, -0.6f, 2.4f,
+                       (BrushProfile){.w_max = 2.6f,
+                                      .w_min_ratio = 0.3f,
+                                      .entry = 0.1f,
+                                      .exit = 0.2f,
+                                      .dry = 0.1f,
+                                      .seed = seed + 8u + (uint32_t)i},
+                       (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.85f});
     }
 
-    /* Subtle nuki tie-beam linking the two pillars vertically (side-view gate) */
-    const Vector2 nuki[2] = {{cx + 3.0f, 322.0f}, {cx + 3.0f, 398.0f}};
-    ink_stroke(r, nuki, 2,
-               (BrushProfile){.w_max = 4.6f,
-                              .w_min_ratio = 0.35f,
-                              .entry = 0.12f,
-                              .exit = 0.15f,
-                              .dry = 0.20f,
-                              .seed = seed + 30u},
-               (InkTone){.color = PAL_BENGARA, .alpha = 0.78f}, 1.0f);
+    /* Nuki: bengara tie-beam with a darker underside. */
+    const BrushProfile beam = {.w_max = 6.0f,
+                               .w_min_ratio = 0.6f,
+                               .entry = 0.04f,
+                               .exit = 0.04f,
+                               .dry = 0.1f,
+                               .seed = seed + 30u};
+    const Vector2 nuki[2] = {{cx + 3.0f, 316.0f}, {cx + 3.0f, 404.0f}};
+    ink_stroke(r, nuki, 2, beam, (InkTone){.color = PAL_BENGARA, .alpha = 0.95f}, 1.0f);
+    const Vector2 nuki_shade[2] = {{cx + 6.0f, 318.0f}, {cx + 6.0f, 402.0f}};
+    ink_stroke(r, nuki_shade, 2,
+               (BrushProfile){.w_max = 1.6f,
+                              .w_min_ratio = 0.5f,
+                              .entry = 0.05f,
+                              .exit = 0.05f,
+                              .dry = 0.2f,
+                              .seed = seed + 31u},
+               (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.6f}, 1.0f);
 
-    /* Sweeping dark sumi kasagi beam spanning across pillars (visual roof cap) */
-    const Vector2 kasagi[3] = {
-        {cx - 6.0f, 308.0f},
-        {cx - 2.0f, 360.0f},
-        {cx - 6.0f, 412.0f},
-    };
-    ink_stroke(r, kasagi, 3,
-               (BrushProfile){.w_max = 8.4f,
-                              .w_min_ratio = 0.28f,
-                              .entry = 0.14f,
-                              .exit = 0.16f,
-                              .dry = 0.25f,
+    /* Kasagi: lacquered cap beam with upswept ends, a lit edge and a shadowed edge. */
+    const Vector2 kasagi[4] = {
+        {kx - 4.0f, 300.0f}, {kx, 330.0f}, {kx, 390.0f}, {kx - 4.0f, 420.0f}};
+    ink_stroke(r, kasagi, 4,
+               (BrushProfile){.w_max = 12.0f,
+                              .w_min_ratio = 0.55f,
+                              .entry = 0.06f,
+                              .exit = 0.06f,
+                              .dry = 0.15f,
                               .seed = seed + 35u},
-               (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.92f}, 1.0f);
+               (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f}, 1.0f);
+    const Vector2 kasagi_lit[4] = {
+        {kx - 8.0f, 302.0f}, {kx - 4.5f, 330.0f}, {kx - 4.5f, 390.0f}, {kx - 8.0f, 418.0f}};
+    ink_stroke(r, kasagi_lit, 4,
+               (BrushProfile){.w_max = 2.0f,
+                              .w_min_ratio = 0.5f,
+                              .entry = 0.1f,
+                              .exit = 0.1f,
+                              .dry = 0.35f,
+                              .seed = seed + 36u},
+               (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.75f}, 1.0f);
+    const Vector2 shimaki[2] = {{kx + 7.0f, 310.0f}, {kx + 7.0f, 410.0f}};
+    ink_stroke(r, shimaki, 2,
+               (BrushProfile){.w_max = 5.0f,
+                              .w_min_ratio = 0.6f,
+                              .entry = 0.05f,
+                              .exit = 0.05f,
+                              .dry = 0.2f,
+                              .seed = seed + 37u},
+               (InkTone){.color = PAL_BENGARA, .alpha = 0.9f}, 1.0f);
+    for (int g = 0; g < 3; ++g) {
+        const float gy = 322.0f + (float)g * 34.0f;
+        const Vector2 grain[2] = {{kx + 1.0f, gy}, {kx + 1.0f, gy + 18.0f}};
+        ink_stroke(r, grain, 2,
+                   (BrushProfile){.w_max = 1.2f,
+                                  .w_min_ratio = 0.5f,
+                                  .entry = 0.2f,
+                                  .exit = 0.3f,
+                                  .dry = 0.5f,
+                                  .seed = seed + 40u + (uint32_t)g},
+                   (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.6f}, 1.0f);
+    }
 }
 
 static void draw_spirit_pillar(RenderState *r, Vector2 c, int32_t elem_kind, float timer,
