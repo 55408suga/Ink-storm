@@ -167,7 +167,19 @@ bool fluid_is_solid(const FluidState *f, float px, float py)
         py >= FLUID_H * FLUID_CELL_PX) {
         return true;
     }
-    return f->solid[(int)(py / FLUID_CELL_PX) * FLUID_W + (int)(px / FLUID_CELL_PX)] != 0;
+    /* With non power-of-two cell sizes the quotient of an in-range coordinate can round up to the
+     * grid size, so the index is clamped after the division. */
+    const int x = clamp_count((int)(px / FLUID_CELL_PX), FLUID_W - 1);
+    const int y = clamp_count((int)(py / FLUID_CELL_PX), FLUID_H - 1);
+    return f->solid[y * FLUID_W + x] != 0;
+}
+
+int fluid_cell_reach(float radius_px)
+{
+    if (isnan(radius_px) || radius_px <= 0.0f) {
+        return 0;
+    }
+    return clamp_count((int)ceilf(fminf(radius_px / FLUID_CELL_PX, (float)FLUID_W)), FLUID_W);
 }
 
 static void sum_fluid_offsets(const FluidState *f, int x, int y, int reach, int *sx, int *sy)
@@ -304,15 +316,23 @@ const float *fluid_channel_const(const FluidState *f, int ch)
 
 float *fluid_channel_mut(FluidState *f, int ch)
 {
-    return f && ch >= 0 && ch < FLUID_MAX_CHANNELS ? f->dye[ch] : NULL;
+    /* Inactive channels stay zero only while nothing outside the solver can write them, which lets
+     * fluid_sanitize_channels skip them. */
+    return f && ch >= 0 && ch < f->cfg.active_channels ? f->dye[ch] : NULL;
 }
+
+const float *fluid_u_const(const FluidState *f) { return f ? f->u : NULL; }
+
+const float *fluid_v_const(const FluidState *f) { return f ? f->v : NULL; }
+
+const uint8_t *fluid_solid_const(const FluidState *f) { return f ? f->solid : NULL; }
 
 void fluid_sanitize_channels(FluidState *f)
 {
     if (!f) {
         return;
     }
-    for (int ch = 0; ch < FLUID_MAX_CHANNELS; ++ch) {
+    for (int ch = 0; ch < f->cfg.active_channels; ++ch) {
         for (int i = 0; i < FLUID_N; ++i) {
             float value = f->dye[ch][i];
             f->dye[ch][i] =

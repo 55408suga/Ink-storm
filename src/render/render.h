@@ -18,6 +18,9 @@
 #define RENDER_MAX_INTRO_QUEUE 8
 #define RENDER_RYU_TRAIL_LEN 24
 #define SETTINGS_ROW_COUNT 9
+#define RENDER_INK_LUT_LEVELS 256
+#define RENDER_GRAD_LUT_LEVELS 24
+#define RENDER_ELEM_LUT_LEVELS 64
 
 typedef struct {
     bool use_post;
@@ -153,13 +156,22 @@ typedef struct {
     int post_res_loc;
     bool post_enabled;
     RenderTexture2D scene;
-    RenderTexture2D bg_cache;
+    RenderTexture2D bg_cache; /* 不透明な和紙＋山水背景（画面揺れ用に四辺 16px の余白付き） */
+    int32_t bg_cached_kind;   /* BgKind。未生成は -1 */
     int32_t bg_cached_act;
-    Texture2D paper_tex;
-    Texture2D fluid_ink_tex;
-    Texture2D fluid_elem_tex;
-    Color fluid_ink_pixels[FLUID_N];
-    Color fluid_elem_pixels[FLUID_N];
+    Texture2D paper_tex; /* 継ぎ目のない 512x512 和紙（REPEAT） */
+    Shader fluid_shader;
+    int fluid_paper_loc;
+    int fluid_max_dye_loc;
+    Texture2D fluid_field_tex; /* GPU 経路: (ink, fire, storm, solid) RGBA8 */
+    Texture2D fluid_ink_tex;   /* CPU 経路: 墨の乗算色 */
+    Texture2D fluid_elem_tex;  /* CPU 経路: 火・雷の乗算済みアルファ */
+    unsigned char fluid_field_px[FLUID_N * 4];
+    Color fluid_ink_px[FLUID_N];
+    Color fluid_elem_px[FLUID_N];
+    /* CPU 経路の色テーブル（濃度は sqrt 量子化）: 墨 [濃度][勾配]、火・雷 [火][雷] */
+    Color fluid_ink_lut[RENDER_INK_LUT_LEVELS * RENDER_GRAD_LUT_LEVELS];
+    Color fluid_elem_lut[RENDER_ELEM_LUT_LEVELS * RENDER_ELEM_LUT_LEVELS];
 
     Font font_body;
     Font font_title;

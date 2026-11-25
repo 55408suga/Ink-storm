@@ -1,15 +1,25 @@
 #ifndef INK_GAME_INTERNAL_H
 #define INK_GAME_INTERNAL_H
 
+#include "core.h"
 #include "ecs.h"
+#include "fluid.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 
 #define GAME_MAX_ACTIVE_CYCLONES 8
-#define GAME_THUNDERBURST_BLOCKS_X 20
-#define GAME_THUNDERBURST_BLOCKS_Y 12
+/* 反応ブロックは画面ピクセル基準（64px 四方）。格子解像度を変えても 20x12 のまま */
+#define GAME_REACTION_BLOCK_PX 64
+#define GAME_THUNDERBURST_BLOCKS_X                                                                 \
+    ((INK_SCREEN_W + GAME_REACTION_BLOCK_PX - 1) / GAME_REACTION_BLOCK_PX)
+#define GAME_THUNDERBURST_BLOCKS_Y                                                                 \
+    ((INK_SCREEN_H + GAME_REACTION_BLOCK_PX - 1) / GAME_REACTION_BLOCK_PX)
 #define GAME_THUNDERBURST_BLOCKS (GAME_THUNDERBURST_BLOCKS_X * GAME_THUNDERBURST_BLOCKS_Y)
+/* セル数の閾値は 8px セル（160x90）で調整済み。セル面積比で換算し 160x90 では厳密に 1.0f */
+#define GAME_REF_CELL_PX 8.0f
+#define GAME_CELL_COUNT_SCALE                                                                      \
+    ((GAME_REF_CELL_PX / FLUID_CELL_PX) * (GAME_REF_CELL_PX / FLUID_CELL_PX))
 
 typedef struct {
     float brush_radius_mul;

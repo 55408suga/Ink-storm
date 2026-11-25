@@ -3,6 +3,7 @@
 
 #include "palette.h"
 #include "render.h"
+#include "render_rules.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,17 +32,20 @@ void render_set_blend(RenderState *r, int mode);
 void render_reset_blend(RenderState *r);
 
 /* Paper, background cache & terrain (paper.c) */
+#define RENDER_BG_PAD 16
 void render_paper_init(RenderState *r);
 void render_paper_close(RenderState *r);
-void render_paper_draw_base(RenderState *r, int act_index);
-void render_paper_prepare_bg(RenderState *r, int act_index);
-void render_paper_draw_bg(RenderState *r, int act_index);
+void render_paper_prepare_bg(RenderState *r, BgKey key);
+void render_paper_draw_bg(RenderState *r, BgKey key);
 void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index);
 void render_paper_draw_weather(RenderState *r, const GameState *g, int act_index);
+/* Sumi-e landscapes baked into the background cache (scenery.c) */
+void render_scenery_draw(RenderState *r, BgKey key);
 
 /* Fluid visualization (fluid_view.c) */
-void render_fluid_init(RenderState *r);
+void render_fluid_init(RenderState *r, const RenderOptions *opt);
 void render_fluid_close(RenderState *r);
+bool render_fluid_gpu_active(const RenderState *r);
 void render_fluid_update_and_draw(RenderState *r, const GameState *g);
 
 /* Post-processing shader (post_fx.c) */

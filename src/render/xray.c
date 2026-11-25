@@ -172,6 +172,7 @@ void render_draw_xray(const RenderState *r, const GameState *g)
                         ecs_alive_count(&g->ecs), g->dropped_events, g->run.act_index + 1,
                         g->run.wave_index + 1),
              22, 176, 16, fg);
-    DrawText(TextFormat("post_shader : %s   font: %s", post_on ? "ON" : "DIRECT", font_lbl), 22,
-             196, 16, fg);
+    DrawText(TextFormat("post_shader : %s   fluid_shader: %s   font: %s", post_on ? "ON" : "DIRECT",
+                        render_fluid_gpu_active(r) ? "GPU" : "CPU", font_lbl),
+             22, 196, 16, fg);
 }

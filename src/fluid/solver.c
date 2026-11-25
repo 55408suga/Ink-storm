@@ -207,12 +207,12 @@ static void project_fast(FluidState *f)
     const uint8_t *restrict solid = f->solid;
     const uint8_t *restrict near_wall = f->near_wall;
 
-    float div_red[RB_N];
-    float div_blk[RB_N];
-    float p_red[RB_N];
-    float p_blk[RB_N];
-    memset(p_red, 0, sizeof p_red);
-    memset(p_blk, 0, sizeof p_blk);
+    float *restrict div_red = f->rb_div[0];
+    float *restrict div_blk = f->rb_div[1];
+    float *restrict p_red = f->rb_p[0];
+    float *restrict p_blk = f->rb_p[1];
+    memset(p_red, 0, sizeof(float) * RB_N);
+    memset(p_blk, 0, sizeof(float) * RB_N);
 
     for (int y = 1; y < FLUID_H - 1; ++y) {
         int row = y * FLUID_W;

@@ -105,17 +105,19 @@ static void step_spirit_pillar(GameState *g, const TransformComp *tr, GimmickCom
         return;
     }
 
+    const float max_r = 28.0f;
+    const int reach = fluid_cell_reach(max_r);
     const int cx = (int)(tr->x / FLUID_CELL_PX);
     const int cy = (int)(tr->y / FLUID_CELL_PX);
-    const int x0 = cx - 4 < 1 ? 1 : cx - 4;
-    const int x1 = cx + 4 > FLUID_W - 2 ? FLUID_W - 2 : cx + 4;
-    const int y0 = cy - 4 < 1 ? 1 : cy - 4;
-    const int y1 = cy + 4 > FLUID_H - 2 ? FLUID_H - 2 : cy + 4;
+    const int x0 = cx - reach < 1 ? 1 : cx - reach;
+    const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+    const int y0 = cy - reach < 1 ? 1 : cy - reach;
+    const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
 
     float max_fire = 0.0f;
     float max_storm = 0.0f;
     const float min_r2 = 16.0f * 16.0f;
-    const float max_r2 = 28.0f * 28.0f;
+    const float max_r2 = max_r * max_r;
 
     for (int gy = y0; gy <= y1; ++gy) {
         const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
@@ -179,12 +181,14 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
     const float *ink_ch = fluid_channel_const(&g->fluid, 0);
     float max_ink = 0.0f;
     if (ink_ch != NULL) {
+        const float rod_r = 40.0f;
+        const int reach = fluid_cell_reach(rod_r);
         const int cx = (int)(lx / FLUID_CELL_PX);
         const int cy = (int)(ly / FLUID_CELL_PX);
-        const int x0 = cx - 5 < 1 ? 1 : cx - 5;
-        const int x1 = cx + 5 > FLUID_W - 2 ? FLUID_W - 2 : cx + 5;
-        const int y0 = cy - 5 < 1 ? 1 : cy - 5;
-        const int y1 = cy + 5 > FLUID_H - 2 ? FLUID_H - 2 : cy + 5;
+        const int x0 = cx - reach < 1 ? 1 : cx - reach;
+        const int x1 = cx + reach > FLUID_W - 2 ? FLUID_W - 2 : cx + reach;
+        const int y0 = cy - reach < 1 ? 1 : cy - reach;
+        const int y1 = cy + reach > FLUID_H - 2 ? FLUID_H - 2 : cy + reach;
         for (int gy = y0; gy <= y1; ++gy) {
             const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
             const float dy = cell_y - ly;
@@ -196,7 +200,7 @@ static void resolve_lightning_strike(GameState *g, float lx, float ly)
                 }
                 const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
                 const float dx = cell_x - lx;
-                if (dx * dx + dy * dy <= 40.0f * 40.0f) {
+                if (dx * dx + dy * dy <= rod_r * rod_r) {
                     const float iv = ink_ch[idx];
                     if (isfinite(iv) && iv > max_ink) {
                         max_ink = iv;
@@ -327,6 +331,7 @@ static void step_mountain_wind(GameState *g)
         g->internal.wind_active_t -= INK_FIXED_DT;
         const int32_t dir = g->internal.wind_dir;
         const float max_vel = g->fluid.cfg.max_vel;
+        const int band = fluid_cell_reach(160.0f);
         float target_u = 0.0f;
         float target_v = 0.0f;
         int x0 = 1;
@@ -337,18 +342,18 @@ static void step_mountain_wind(GameState *g)
         if (dir == 0) {
             target_u = 12.0f;
             x0 = 1;
-            x1 = 20;
+            x1 = band;
         } else if (dir == 1) {
             target_u = -12.0f;
-            x0 = FLUID_W - 21;
+            x0 = FLUID_W - 1 - band;
             x1 = FLUID_W - 2;
         } else if (dir == 2) {
             target_v = 12.0f;
             y0 = 1;
-            y1 = 20;
+            y1 = band;
         } else {
             target_v = -12.0f;
-            y0 = FLUID_H - 21;
+            y0 = FLUID_H - 1 - band;
             y1 = FLUID_H - 2;
         }
 

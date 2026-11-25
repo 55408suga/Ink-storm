@@ -41,13 +41,14 @@ void render_init(RenderState *r, const RenderOptions *opt)
     }
     memset(r, 0, sizeof *r);
     r->cur_blend = BLEND_ALPHA;
+    r->bg_cached_kind = -1;
     r->bg_cached_act = -1;
     r->ryu_trail_id = (EntityId){ECS_INVALID_INDEX, 0};
     r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
 
     render_paper_init(r);
-    render_fluid_init(r);
     render_post_init(r, opt);
+    render_fluid_init(r, opt);
     render_fonts_init(r, opt);
     render_reset_vfx(r, UINT64_C(1));
 }
@@ -94,17 +95,14 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
     cam.zoom = 1.0f;
 
     BeginMode2D(cam);
-    /* 1. Washi paper base (always drawn, with or without post shader) */
-    render_paper_draw_base(r, act);
-    /* 2. Cached edge background (Act 1/2/3 edges) */
-    render_paper_draw_bg(r, act);
-    if (combat) {
-        /* 3. Terrain (Act 2 torii & rocks, Act 3 rocks & spirit pillars) */
-        render_paper_draw_terrain(r, g, act);
-    }
-    /* 4. Fluid (multiply ink + alpha fire/storm) */
+    /* 1 & 2. Opaque washi + sumi-e scenery (cached; padded so shake never exposes an edge) */
+    ClearBackground(pal_color(PAL_PAPER_ACT1));
+    render_paper_draw_bg(r, render_bg_key(combat, act));
+    /* 3. Fluid (GPU sumi shader, or multiply ink + premultiplied fire/storm on the CPU path) */
     render_fluid_update_and_draw(r, g);
     if (combat) {
+        /* 4. Terrain above the ink it parts (Act 2 torii & rocks, Act 3 rocks & spirit pillars) */
+        render_paper_draw_terrain(r, g, act);
         /* 5 & 6. Ink orbs, projectiles, shrines, enemies, boss */
         render_draw_entities(r, g, act);
         /* 7. World VFX & Act 3 rain / wind telegraph */
@@ -194,10 +192,10 @@ static void render_draw_internal(RenderState *r, const GameState *g, const UiVie
     ++r->frames_drawn;
 
     /* Bake act edge background into r->bg_cache BEFORE entering scene/target/window FBO
-     * so EndTextureMode() inside bake_act_background never unbinds the active render target. */
+     * so EndTextureMode() inside bake_background never unbinds the active render target. */
     const bool combat = scene_draws_combat_world(ui);
     const int act = combat ? g->run.act_index : 0;
-    render_paper_prepare_bg(r, act);
+    render_paper_prepare_bg(r, render_bg_key(combat, act));
 
     if (r->post_enabled && r->post_shader.id != 0 && r->scene.id != 0) {
         BeginTextureMode(r->scene);

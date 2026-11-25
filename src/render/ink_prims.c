@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 
+#include "render_rules.h"
 #include "text_layout.h"
 
 #include "core.h"
@@ -60,21 +61,23 @@ static int resample_polyline(const Vector2 *pts, int n, bool closed, Vector2 *ou
     if (n < 2 || cap < 2) {
         return 0;
     }
+    int segs = closed ? n : (n - 1);
+    segs = segs > INK_MAX_SAMPLES ? INK_MAX_SAMPLES : segs;
+    float seg_len[INK_MAX_SAMPLES] = {0};
+    int seg_steps[INK_MAX_SAMPLES] = {0};
+    for (int s = 0; s < segs; ++s) {
+        seg_len[s] = vec_dist(pts[s % n], pts[(s + 1) % n]);
+    }
+    /* Budgeting every segment up front keeps long strokes from running out of samples and
+     * closing with a straight chord to the last point. */
+    (void)render_polyline_plan(seg_len, segs, cap, seg_steps);
     int out_n = 0;
-    const int segs = closed ? n : (n - 1);
     for (int s = 0; s < segs && out_n < cap - 1; ++s) {
         const int i1 = s % n;
         const int i2 = (s + 1) % n;
         const int i0 = closed ? ((s + n - 1) % n) : (s > 0 ? s - 1 : 0);
         const int i3 = closed ? ((s + 2) % n) : (s + 2 < n ? s + 2 : n - 1);
-        const float d = vec_dist(pts[i1], pts[i2]);
-        int steps = (int)ceilf(d / 4.0f);
-        if (steps < 2) {
-            steps = 2;
-        }
-        if (steps > 24) {
-            steps = 24;
-        }
+        const int steps = seg_steps[s];
         for (int k = 0; k < steps && out_n < cap - 1; ++k) {
             const float t = (float)k / (float)steps;
             out[out_n++] = catmull_rom(pts[i0], pts[i1], pts[i2], pts[i3], t);
@@ -565,6 +568,17 @@ void seal_stamp(RenderState *r, TextId glyph, Vector2 at, float size, SealStyle 
     }
 }
 
+static void fill_rect_gradient(RenderState *r, Rectangle rc, Color c0, Color c1, bool vertical)
+{
+    const Vector2 a = {rc.x, rc.y};
+    const Vector2 b = {rc.x + rc.width, rc.y};
+    const Vector2 c = {rc.x + rc.width, rc.y + rc.height};
+    const Vector2 d = {rc.x, rc.y + rc.height};
+    const Vector2 top[2] = {a, vertical ? b : d};
+    const Vector2 bottom[2] = {vertical ? d : b, c};
+    ink_fill_gradient_strip(r, top, bottom, 2, c0, c1);
+}
+
 void ink_fill_panel(RenderState *r, Rectangle rect, PaletteId fill_pal, float fill_alpha,
                     PaletteId border_pal, float border_alpha, uint32_t seed)
 {
@@ -575,17 +589,40 @@ void ink_fill_panel(RenderState *r, Rectangle rect, PaletteId fill_pal, float fi
     const Vector2 tr = {rect.x + rect.width, rect.y};
     const Vector2 br = {rect.x + rect.width, rect.y + rect.height};
     const Vector2 bl = {rect.x, rect.y + rect.height};
+
+    /* Washi sheets lift slightly off the scene: a soft offset shadow under opaque panels. */
+    const float shadow_a = (fill_alpha - 0.5f) * 0.22f;
+    if (shadow_a > 0.01f) {
+        const Color s_in = pal_color_alpha(PAL_SUMI_HEAVY, shadow_a);
+        const Color s_out = pal_color_alpha(PAL_SUMI_HEAVY, 0.0f);
+        const float sx = rect.x + 3.0f;
+        const float sy = rect.y + 4.0f;
+        fill_rect_gradient(r, (Rectangle){sx, rect.y + rect.height, rect.width, 6.0f}, s_in, s_out,
+                           true);
+        fill_rect_gradient(r, (Rectangle){rect.x + rect.width, sy, 5.0f, rect.height}, s_in, s_out,
+                           false);
+    }
+
     const Vector2 corners[4] = {tl, tr, br, bl};
     ink_fill_poly(r, corners, 4, pal_color_alpha(fill_pal, fill_alpha));
+
+    /* Faint ink seeping in from the rim gives the sheet depth without a hard bevel. */
+    const float rim_a = (fill_alpha - 0.55f) * 0.16f;
+    if (rim_a > 0.01f && rect.width > 24.0f && rect.height > 16.0f) {
+        const float band = fminf(10.0f, rect.height * 0.25f);
+        const Color rim = pal_color_alpha(PAL_SUMI_LIGHT, rim_a);
+        const Color none = pal_color_alpha(PAL_SUMI_LIGHT, 0.0f);
+        fill_rect_gradient(r, (Rectangle){rect.x, rect.y + rect.height - band, rect.width, band},
+                           none, rim, true);
+        fill_rect_gradient(r, (Rectangle){rect.x + rect.width - band, rect.y, band, rect.height},
+                           none, rim, false);
+    }
 
     if (border_alpha > 0.001f) {
         const InkTone tone = {.color = border_pal, .alpha = border_alpha};
         const Vector2 edges[4][2] = {{tl, tr}, {tr, br}, {br, bl}, {bl, tl}};
         for (int e = 0; e < 4; ++e) {
-            const Vector2 a = edges[e][0];
-            const Vector2 b = edges[e][1];
-            const Vector2 mid = {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f};
-            const Vector2 pts[3] = {a, mid, b};
+            const Vector2 pts[2] = {edges[e][0], edges[e][1]};
             const BrushProfile prof = {
                 .w_max = 3.0f,
                 .w_min_ratio = 0.35f,
@@ -594,9 +631,61 @@ void ink_fill_panel(RenderState *r, Rectangle rect, PaletteId fill_pal, float fi
                 .dry = 0.22f,
                 .seed = seed + (uint32_t)e * 29u,
             };
-            ink_stroke(r, pts, 3, prof, tone, 1.0f);
+            ink_stroke(r, pts, 2, prof, tone, 1.0f);
         }
     }
+}
+
+void ink_fill_gradient_strip(RenderState *r, const Vector2 *top, const Vector2 *bottom, int n,
+                             Color top_c, Color bottom_c)
+{
+    if (r == NULL || top == NULL || bottom == NULL || n < 2 || (top_c.a == 0 && bottom_c.a == 0)) {
+        return;
+    }
+    rlCheckRenderBatchLimit((n - 1) * 6);
+    rlSetTexture(0);
+    rlBegin(RL_TRIANGLES);
+    for (int i = 0; i + 1 < n; ++i) {
+        emit_tri_ccw(r, top[i], top_c, bottom[i], bottom_c, top[i + 1], top_c);
+        emit_tri_ccw(r, top[i + 1], top_c, bottom[i], bottom_c, bottom[i + 1], bottom_c);
+    }
+    rlEnd();
+}
+
+void ink_fill_strip_shaded(RenderState *r, const Vector2 *top, const Vector2 *bottom,
+                           const Color *top_c, const Color *bottom_c, int n)
+{
+    if (r == NULL || top == NULL || bottom == NULL || top_c == NULL || bottom_c == NULL || n < 2) {
+        return;
+    }
+    rlCheckRenderBatchLimit((n - 1) * 6);
+    rlSetTexture(0);
+    rlBegin(RL_TRIANGLES);
+    for (int i = 0; i + 1 < n; ++i) {
+        emit_tri_ccw(r, top[i], top_c[i], bottom[i], bottom_c[i], top[i + 1], top_c[i + 1]);
+        emit_tri_ccw(r, top[i + 1], top_c[i + 1], bottom[i], bottom_c[i], bottom[i + 1],
+                     bottom_c[i + 1]);
+    }
+    rlEnd();
+}
+
+void ink_radial_glow(RenderState *r, Vector2 center, float rx, float ry, Color inner, Color outer)
+{
+    if (r == NULL || rx <= 0.5f || ry <= 0.5f || (inner.a == 0 && outer.a == 0)) {
+        return;
+    }
+    enum { GLOW_SEGS = 32 };
+    rlCheckRenderBatchLimit(GLOW_SEGS * 3);
+    rlSetTexture(0);
+    rlBegin(RL_TRIANGLES);
+    Vector2 prev = {center.x + rx, center.y};
+    for (int i = 1; i <= GLOW_SEGS; ++i) {
+        const float a = k_two_pi * (float)i / (float)GLOW_SEGS;
+        const Vector2 cur = {center.x + cosf(a) * rx, center.y + sinf(a) * ry};
+        emit_tri_ccw(r, center, inner, prev, outer, cur, outer);
+        prev = cur;
+    }
+    rlEnd();
 }
 
 void ink_arc_stroke(RenderState *r, Vector2 center, float radius, float a0, float a1,

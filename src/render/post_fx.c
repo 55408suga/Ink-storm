@@ -5,39 +5,44 @@
 
 #include <stddef.h>
 
-/* Single concatenated GLSL string literal (<= 4095 bytes for -Woverlength-strings) */
+/* Single concatenated GLSL string literal (<= 4095 bytes for -Woverlength-strings). Edge
+ * darkening and the vignette back off on bright saturated pixels so fire, storm and gold stay lit.
+ */
 static const char k_post_fragment[] =
     "#version 330\n"
     "in vec2 fragTexCoord;\n"
-    "in vec4 fragColor;\n"
     "uniform sampler2D texture0;\n"
     "uniform vec2 resolution;\n"
     "out vec4 finalColor;\n"
-    "float hash12(vec2 p) {\n"
-    "    vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n"
-    "    p3 += dot(p3, p3.yzx + 33.33);\n"
-    "    return fract((p3.x + p3.y) * p3.z);\n"
+    "float h(vec2 p){\n"
+    "  vec3 q=fract(vec3(p.xyx)*.1031);\n"
+    "  q+=dot(q,q.yzx+33.33);\n"
+    "  return fract((q.x+q.y)*q.z);\n"
     "}\n"
-    "void main() {\n"
-    "    vec2 uv = fragTexCoord;\n"
-    "    vec2 res = max(resolution, vec2(1.0));\n"
-    "    vec2 px = uv * res;\n"
-    "    vec2 texel = 1.0 / res;\n"
-    "    vec3 c = texture(texture0, uv).rgb;\n"
-    "    vec3 n = texture(texture0, uv + vec2(0.0, texel.y * 1.25)).rgb;\n"
-    "    vec3 s = texture(texture0, uv - vec2(0.0, texel.y * 1.25)).rgb;\n"
-    "    vec3 e = texture(texture0, uv + vec2(texel.x * 1.25, 0.0)).rgb;\n"
-    "    vec3 w = texture(texture0, uv - vec2(texel.x * 1.25, 0.0)).rgb;\n"
-    "    float edge = length(c - 0.25 * (n + s + e + w));\n"
-    "    c *= 1.0 - clamp(edge * 0.24, 0.0, 0.09);\n"
-    "    float f1 = hash12(floor(px * vec2(0.32, 1.35)));\n"
-    "    float f2 = hash12(floor(px * vec2(1.40, 0.28)) + 19.3);\n"
-    "    float grain = (f1 * 0.5 + f2 * 0.5 - 0.5) * 0.032;\n"
-    "    c += vec3(grain, grain * 0.94, grain * 0.80);\n"
-    "    vec2 d = (uv - 0.5) * vec2(1.12, 1.0);\n"
-    "    float vig = smoothstep(0.48, 0.98, length(d));\n"
-    "    c = mix(c, c * vec3(0.90, 0.86, 0.78), vig * 0.34);\n"
-    "    finalColor = vec4(clamp(c, 0.0, 1.0), 1.0);\n"
+    "float vn(vec2 p){\n"
+    "  vec2 i=floor(p),f=fract(p);\n"
+    "  f=f*f*(3.-2.*f);\n"
+    "  return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+1.),f.x),f.y);\n"
+    "}\n"
+    "void main(){\n"
+    "  vec2 uv=fragTexCoord;\n"
+    "  vec2 res=max(resolution,vec2(1.));\n"
+    "  vec2 px=uv*res;\n"
+    "  vec2 t=1./res;\n"
+    "  vec3 c=texture(texture0,uv).rgb;\n"
+    "  vec3 avg=.25*(texture(texture0,uv+vec2(0.,t.y)).rgb+texture(texture0,uv-vec2(0.,t.y)).rgb"
+    "+texture(texture0,uv+vec2(t.x,0.)).rgb+texture(texture0,uv-vec2(t.x,0.)).rgb);\n"
+    "  float lum=dot(c,vec3(.299,.587,.114));\n"
+    "  float sat=max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));\n"
+    "  float glow=smoothstep(.12,.42,sat)*smoothstep(.45,.85,lum);\n"
+    "  float edge=max(dot(avg-c,vec3(.3333)),0.);\n"
+    "  c*=1.-min(edge*1.8,.1)*(1.-glow)*smoothstep(.98,.4,lum);\n"
+    "  float g=(vn(px*.33)-.5)*.5+(vn(px*1.4+17.)-.5)*.35+(h(px)-.5)*.3;\n"
+    "  c+=vec3(1.,.97,.9)*g*.034*(.45+2.2*lum*(1.-lum));\n"
+    "  vec2 d=(uv-.5)*vec2(1.2,.92);\n"
+    "  float vig=smoothstep(.44,.98,length(d))*.30+smoothstep(.43,.5,abs(uv.x-.5))*.07;\n"
+    "  c=mix(c,c*vec3(.91,.86,.77),vig*(1.-.7*glow));\n"
+    "  finalColor=vec4(clamp(c,0.,1.),1.);\n"
     "}\n";
 
 void render_post_init(RenderState *r, const RenderOptions *opt)
@@ -77,6 +82,7 @@ void render_post_init(RenderState *r, const RenderOptions *opt)
         return;
     }
 
+    SetTextureWrap(scene.texture, TEXTURE_WRAP_CLAMP);
     r->post_shader = shader;
     r->scene = scene;
     r->post_enabled = true;
