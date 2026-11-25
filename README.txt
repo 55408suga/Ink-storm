@@ -105,6 +105,8 @@ CLI オプション
   BGM には assets/audio/bgm_*.ogg（ロビー・通常戦・ボス戦・勝利ジングル）を使用します。
   音源が見つからない、または読み込めない場合は、組み込みのプロシージャル和風 BGM へ
   自動的に切り替わります。
+  筆音と渦印・風斬りの音には assets/audio/sfx_brush_flow.ogg と sfx_brush_swish.ogg を
+  使用し、見つからない場合は組み込みの合成音へ自動的に切り替わります。
 
-  同梱フォント 2 書体および外部 BGM のライセンス・出典は assets/LICENSES.txt と
+  同梱フォント 2 書体と外部 BGM・効果音素材のライセンス・出典は assets/LICENSES.txt と
   assets/fonts/OFL.txt を参照してください。

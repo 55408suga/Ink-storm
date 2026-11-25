@@ -3,6 +3,7 @@
 #include "synth_voices.h"
 #include "unity.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -621,6 +622,218 @@ static void test_audio_skill_voices_reflect_dry_and_surge(void)
     game_destroy(g);
 }
 
+static double rms_of(const int16_t *samples, size_t n)
+{
+    double sum = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        sum += (double)samples[i] * (double)samples[i];
+    }
+    return n > 0 ? sqrt(sum / (double)n) : 0.0;
+}
+
+static void test_audio_brush_rides_through_a_still_tick_and_a_one_tick_lift(void)
+{
+    enum { TICKS = 60, STILL_TICK = 20, LIFT_TICK = 30, RELEASE_TICK = 40 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc((size_t)TICKS * AUDIO_SAMPLES_PER_TICK, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+    audio_init(a, UINT64_C(11));
+    audio_set_volumes(a, 100, 0, 100);
+    audio_set_lobby_mode(a, true);
+    g->config.brush_style = BRUSH_STYLE_HEAVY;
+    g->event_count = 0;
+
+    double tick_rms[TICKS];
+    for (int t = 0; t < TICKS; ++t) {
+        g->player.painting = t < RELEASE_TICK && t != LIFT_TICK;
+        g->player.stroke_speed = t == STILL_TICK ? 0.0f : 600.0f;
+        audio_consume_lobby_events(a, g);
+        int16_t *tick = buf + (size_t)t * AUDIO_SAMPLES_PER_TICK;
+        audio_render(a, tick, AUDIO_SAMPLES_PER_TICK);
+        tick_rms[t] = rms_of(tick, AUDIO_SAMPLES_PER_TICK);
+    }
+    double steady = 0.0;
+    for (int t = 12; t < 18; ++t) {
+        steady += tick_rms[t] / 6.0;
+    }
+    TEST_ASSERT_TRUE(steady > 200.0);
+    TEST_ASSERT_TRUE(tick_rms[STILL_TICK] > 0.8 * steady);
+    TEST_ASSERT_TRUE(tick_rms[STILL_TICK + 1] > 0.8 * steady);
+    TEST_ASSERT_TRUE(tick_rms[LIFT_TICK] > 0.8 * steady);
+    TEST_ASSERT_TRUE(tick_rms[LIFT_TICK + 1] > 0.8 * steady);
+    TEST_ASSERT_TRUE(tick_rms[TICKS - 1] < 0.5 * steady);
+
+    g->player.painting = false;
+    for (int t = 0; t < 120; ++t) {
+        audio_consume_lobby_events(a, g);
+        audio_render(a, buf, AUDIO_SAMPLES_PER_TICK);
+    }
+    TEST_ASSERT_EQUAL_INT32(0, peak_abs(buf, AUDIO_SAMPLES_PER_TICK));
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void fill_test_loop(int16_t *pcm, size_t n, uint64_t seed)
+{
+    uint64_t s = seed;
+    float lp = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        s = s * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        const float white = (float)(s >> 40) * (2.0f / 16777216.0f) - 1.0f;
+        lp += 0.2f * (white - lp);
+        pcm[i] = (int16_t)lroundf(lp * 9000.0f);
+    }
+}
+
+typedef struct {
+    const int16_t *flow;
+    size_t flow_len;
+    const int16_t *swish;
+    size_t swish_len;
+} TestLoops;
+
+static void start_brush_audio(AudioState *a, const TestLoops *loops)
+{
+    audio_init(a, UINT64_C(21));
+    audio_set_volumes(a, 100, 0, 100);
+    if (loops != NULL) {
+        audio_set_brush_samples(a, loops->flow, loops->flow_len, loops->swish, loops->swish_len);
+    }
+}
+
+static void paint_held_stroke(AudioState *a, int32_t style, bool dry, bool surge, int16_t *buf,
+                              size_t n)
+{
+    a->brush_target = 1.0f;
+    a->brush_env = 1.0f;
+    a->brush_active = true;
+    a->brush_speed = 0.8f;
+    a->brush_style = style;
+    a->brush_dry = dry;
+    a->brush_surge = surge;
+    audio_render(a, buf, n);
+}
+
+static void render_brush_with(AudioState *a, const TestLoops *loops, int32_t style, bool dry,
+                              bool surge, int16_t *buf, size_t n)
+{
+    start_brush_audio(a, loops);
+    paint_held_stroke(a, style, dry, surge, buf, n);
+}
+
+static void test_audio_brush_loops_shape_the_stroke_and_fall_back_cleanly(void)
+{
+    enum {
+        N = AUDIO_SAMPLES_PER_TICK * 6,
+        VARIANTS = 5,
+        FLOW = AUDIO_SAMPLE_RATE * 3 / 2,
+        PAD = AUDIO_SAMPLE_RATE,
+        SWISH = AUDIO_SAMPLE_RATE / 3
+    };
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *flow = calloc(FLOW + PAD, sizeof *flow);
+    int16_t *swish = calloc(SWISH, sizeof *swish);
+    int16_t *silent = calloc(SWISH, sizeof *silent);
+    int16_t *bufs = calloc((size_t)N * VARIANTS, sizeof *bufs);
+    int16_t *other = calloc(N, sizeof *other);
+    int16_t *procedural = calloc(N, sizeof *procedural);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(flow);
+    TEST_ASSERT_NOT_NULL(swish);
+    TEST_ASSERT_NOT_NULL(silent);
+    TEST_ASSERT_NOT_NULL(bufs);
+    TEST_ASSERT_NOT_NULL(other);
+    TEST_ASSERT_NOT_NULL(procedural);
+    fill_test_loop(flow, FLOW, UINT64_C(0x51));
+    fill_test_loop(swish, SWISH, UINT64_C(0x52));
+    const TestLoops padded = {flow, FLOW + PAD, swish, SWISH};
+
+    render_brush_with(a, &padded, BRUSH_STYLE_HEAVY, false, false, bufs, N);
+    render_brush_with(a, &padded, BRUSH_STYLE_EMBER, false, false, bufs + N, N);
+    render_brush_with(a, &padded, BRUSH_STYLE_QUILL, false, false, bufs + 2 * N, N);
+    render_brush_with(a, &padded, BRUSH_STYLE_HEAVY, true, false, bufs + 3 * N, N);
+    render_brush_with(a, &padded, BRUSH_STYLE_HEAVY, false, true, bufs + 4 * N, N);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    for (int i = 0; i < VARIANTS; ++i) {
+        TEST_ASSERT_TRUE(peak_abs(bufs + i * N, N) > 200);
+        for (int j = i + 1; j < VARIANTS; ++j) {
+            TEST_ASSERT_TRUE(memcmp(bufs + i * N, bufs + j * N, N * sizeof *bufs) != 0);
+        }
+    }
+
+    render_brush_with(a, &padded, BRUSH_STYLE_HEAVY, false, false, other, N);
+    TEST_ASSERT_EQUAL_MEMORY(bufs, other, N * sizeof *other);
+    const TestLoops trimmed = {flow, FLOW, swish, SWISH};
+    render_brush_with(a, &trimmed, BRUSH_STYLE_HEAVY, false, false, other, N);
+    TEST_ASSERT_EQUAL_MEMORY(bufs, other, N * sizeof *other);
+
+    render_brush_with(a, NULL, BRUSH_STYLE_HEAVY, false, false, procedural, N);
+    TEST_ASSERT_TRUE(peak_abs(procedural, N) > 200);
+    TEST_ASSERT_TRUE(memcmp(bufs, procedural, N * sizeof *procedural) != 0);
+    const TestLoops all_silent = {silent, SWISH, silent, SWISH};
+    render_brush_with(a, &all_silent, BRUSH_STYLE_HEAVY, false, false, other, N);
+    TEST_ASSERT_EQUAL_MEMORY(procedural, other, N * sizeof *other);
+    start_brush_audio(a, &trimmed);
+    TEST_ASSERT_NOT_NULL(a->brush_flow_pcm);
+    audio_set_brush_samples(a, NULL, 0u, NULL, 0u);
+    paint_held_stroke(a, BRUSH_STYLE_HEAVY, false, false, other, N);
+    TEST_ASSERT_NULL(a->brush_flow_pcm);
+    TEST_ASSERT_NULL(a->brush_swish_pcm);
+    TEST_ASSERT_EQUAL_MEMORY(procedural, other, N * sizeof *other);
+
+    free(procedural);
+    free(other);
+    free(bufs);
+    free(silent);
+    free(swish);
+    free(flow);
+    free(a);
+}
+
+static void test_audio_skill_voices_blend_attached_loops(void)
+{
+    enum { N = AUDIO_SAMPLE_RATE, FLOW = AUDIO_SAMPLE_RATE * 3 / 2, SWISH = AUDIO_SAMPLE_RATE / 3 };
+    static const GameEventType k_skills[2] = {EV_CYCLONE, EV_GALE};
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *flow = calloc(FLOW, sizeof *flow);
+    int16_t *swish = calloc(SWISH, sizeof *swish);
+    int16_t *loaded = calloc(N, sizeof *loaded);
+    int16_t *procedural = calloc(N, sizeof *procedural);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(flow);
+    TEST_ASSERT_NOT_NULL(swish);
+    TEST_ASSERT_NOT_NULL(loaded);
+    TEST_ASSERT_NOT_NULL(procedural);
+    fill_test_loop(flow, FLOW, UINT64_C(0x61));
+    fill_test_loop(swish, SWISH, UINT64_C(0x62));
+    for (int k = 0; k < 2; ++k) {
+        render_skill(a, g, k_skills[k], false, 0.0f, procedural, N);
+        audio_init(a, UINT64_C(6));
+        audio_set_volumes(a, 100, 0, 100);
+        audio_set_brush_samples(a, flow, FLOW, swish, SWISH);
+        one_event(g, k_skills[k]);
+        audio_consume_events(a, g);
+        audio_render(a, loaded, N);
+        const int32_t peak = peak_abs(loaded, N);
+        TEST_ASSERT_TRUE(peak >= 1000 && peak <= 32767);
+        TEST_ASSERT_TRUE(memcmp(loaded, procedural, N * sizeof *loaded) != 0);
+        TEST_ASSERT_TRUE(audio_validate_finite(a));
+    }
+    free(procedural);
+    free(loaded);
+    free(swish);
+    free(flow);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -640,5 +853,8 @@ int main(void)
     RUN_TEST(test_audio_batched_same_kind_voices_match_per_tick);
     RUN_TEST(test_audio_scene_change_drops_unplayed_combat_voice_but_keeps_ui);
     RUN_TEST(test_audio_skill_voices_reflect_dry_and_surge);
+    RUN_TEST(test_audio_brush_rides_through_a_still_tick_and_a_one_tick_lift);
+    RUN_TEST(test_audio_brush_loops_shape_the_stroke_and_fall_back_cleanly);
+    RUN_TEST(test_audio_skill_voices_blend_attached_loops);
     return UNITY_END();
 }

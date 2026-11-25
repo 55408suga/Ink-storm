@@ -268,6 +268,64 @@ static void test_latch_move_first_tick_only(void)
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.0f, t2.my);
 }
 
+static void test_latch_catch_up_ticks_share_motion_and_fire_skills_once(void)
+{
+    static const int32_t k_tick_counts[] = {2, 3};
+    for (size_t c = 0; c < sizeof k_tick_counts / sizeof k_tick_counts[0]; ++c) {
+        const int32_t ticks = k_tick_counts[c];
+        InputLatch l;
+        input_latch_init(&l, 0.0f, 0.0f);
+        RawInput raw = make_raw(90.0f, -60.0f);
+        raw.left_down = true;
+        raw.cyclone_pressed = true;
+        raw.gale_pressed = true;
+        input_latch_feed(&l, &raw);
+
+        for (int32_t t = 0; t < ticks; ++t) {
+            const BrushInput in = input_latch_take_subtick(&l, ticks - t);
+            const float from = (float)t / (float)ticks;
+            const float to = (float)(t + 1) / (float)ticks;
+            TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f * from, in.pmx);
+            TEST_ASSERT_FLOAT_WITHIN(1e-3f, -60.0f * from, in.pmy);
+            TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f * to, in.mx);
+            TEST_ASSERT_FLOAT_WITHIN(1e-3f, -60.0f * to, in.my);
+            TEST_ASSERT_TRUE(in.paint);
+            TEST_ASSERT_EQUAL(t == 0, in.cyclone);
+            TEST_ASSERT_EQUAL(t == 0, in.gale);
+        }
+
+        const BrushInput rest = input_latch_take_tick(&l);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, rest.pmx);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, rest.mx);
+    }
+}
+
+static void test_latch_single_subtick_matches_take_tick(void)
+{
+    InputLatch a;
+    InputLatch b;
+    input_latch_init(&a, 5.0f, 5.0f);
+    input_latch_init(&b, 5.0f, 5.0f);
+    RawInput raw = make_raw(40.0f, 20.0f);
+    raw.left_down = true;
+    raw.gale_pressed = true;
+    input_latch_feed(&a, &raw);
+    input_latch_feed(&b, &raw);
+
+    const BrushInput whole = input_latch_take_tick(&a);
+    const BrushInput sub = input_latch_take_subtick(&b, 1);
+    TEST_ASSERT_EQUAL_FLOAT(whole.pmx, sub.pmx);
+    TEST_ASSERT_EQUAL_FLOAT(whole.pmy, sub.pmy);
+    TEST_ASSERT_EQUAL_FLOAT(whole.mx, sub.mx);
+    TEST_ASSERT_EQUAL_FLOAT(whole.my, sub.my);
+    TEST_ASSERT_EQUAL(whole.paint, sub.paint);
+    TEST_ASSERT_EQUAL(whole.cyclone, sub.cyclone);
+    TEST_ASSERT_EQUAL(whole.gale, sub.gale);
+    TEST_ASSERT_EQUAL_FLOAT(a.prev_x, b.prev_x);
+    TEST_ASSERT_EQUAL_FLOAT(a.prev_y, b.prev_y);
+    TEST_ASSERT_EQUAL(a.gale_pending, b.gale_pending);
+}
+
 static void test_latch_zero_tick_frame_preserves_motion(void)
 {
     InputLatch l;
@@ -665,6 +723,8 @@ int main(void)
     RUN_TEST(test_frame_clock);
     RUN_TEST(test_latch_move_first_tick_only);
     RUN_TEST(test_latch_zero_tick_frame_preserves_motion);
+    RUN_TEST(test_latch_catch_up_ticks_share_motion_and_fire_skills_once);
+    RUN_TEST(test_latch_single_subtick_matches_take_tick);
     RUN_TEST(test_latch_edge_press_held_and_coalesced);
     RUN_TEST(test_latch_reward_commands_and_priority);
     RUN_TEST(test_latch_paint_suppression_after_ui_click);

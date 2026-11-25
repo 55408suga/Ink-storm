@@ -1,6 +1,8 @@
 #ifndef INK_AUDIO_H
 #define INK_AUDIO_H
 
+#include "audio_dsp.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -12,6 +14,10 @@
 #define AUDIO_PENDING_VOICE_CAP 256
 #define AUDIO_SKILL_PARAM_DRY 4
 #define AUDIO_SKILL_PARAM_SURGE 8
+#define AUDIO_BRUSH_DELAY_LEN 1024
+#define AUDIO_BRUSH_SVF_COUNT 13
+#define AUDIO_BRUSH_WALK_COUNT 6
+#define AUDIO_VOICE_SVF_COUNT 5
 
 typedef enum { BGM_NONE = 0, BGM_LOBBY, BGM_BATTLE, BGM_BOSS, BGM_VICTORY } BgmTrack;
 
@@ -58,6 +64,9 @@ typedef struct {
     float param;
     float lp;
     float bp;
+    AudioSvf svf[AUDIO_VOICE_SVF_COUNT];
+    AudioPink pink;
+    float sample_pos;
     uint32_t age;
     bool releasing;
     bool ui;
@@ -74,6 +83,8 @@ typedef struct {
     uint64_t at_sample;
     BgmTrack bgm;
     float brush_target;
+    float brush_speed;
+    bool brush_active;
     float wind_target;
     int32_t brush_style;
     bool brush_dry;
@@ -101,15 +112,35 @@ typedef struct {
     bool external_bgm;
     bool paused;
 
-    /* Continuous brush scrape & ambient wind */
+    /* Continuous brush stroke */
     float brush_target;
     float brush_env;
-    float brush_lp;
-    float brush_bp;
-    float brush_ph;
+    float brush_speed;
+    float brush_speed_smooth;
+    float brush_hold_speed;
+    float brush_surge_env;
+    uint32_t brush_hold;
+    bool brush_active;
+    bool brush_fast_release;
+    bool brush_dsp_live;
     int32_t brush_style;
     bool brush_dry;
     bool brush_surge;
+    uint64_t brush_rng;
+    uint32_t brush_delay_pos;
+    AudioPink brush_pink[2];
+    AudioWalk brush_walk[AUDIO_BRUSH_WALK_COUNT];
+    AudioSvf brush_svf[AUDIO_BRUSH_SVF_COUNT];
+    AudioGrainLoop brush_flow_grain;
+    AudioGrainLoop brush_swish_grain;
+    float brush_delay[2][AUDIO_BRUSH_DELAY_LEN];
+    /* Borrowed 16-bit mono loops at AUDIO_SAMPLE_RATE; NULL selects the procedural fallback. */
+    const int16_t *brush_flow_pcm;
+    size_t brush_flow_len;
+    const int16_t *brush_swish_pcm;
+    size_t brush_swish_len;
+
+    /* Ambient wind */
     float bgm_duck;
     float wind_target;
     float wind_env;
@@ -143,6 +174,9 @@ void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t s
 void audio_set_lobby_mode(AudioState *audio, bool lobby);
 void audio_set_external_bgm(AudioState *audio, bool external_active);
 void audio_set_paused(AudioState *audio, bool paused);
+/* The caller keeps both buffers alive until it clears them with (NULL, 0, NULL, 0). */
+void audio_set_brush_samples(AudioState *audio, const int16_t *flow_pcm, size_t flow_len,
+                             const int16_t *swish_pcm, size_t swish_len);
 void audio_trigger_ui_stamp(AudioState *audio);
 void audio_trigger_ui_cue(AudioState *audio, AudioUiCue cue);
 void audio_consume_events(AudioState *audio, const struct GameState *game);

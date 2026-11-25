@@ -147,6 +147,9 @@ typedef struct {
 
     /* Phase 5-A fields */
     float thunderfire_gem_cd;
+
+    /* Lobby test brush */
+    bool sandbox_infinite_ink;
 } GameInternal;
 
 #endif

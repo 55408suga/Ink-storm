@@ -1,5 +1,6 @@
 #include "synth_voices.h"
 
+#include "audio_dsp.h"
 #include "core.h"
 #include "meta.h"
 
@@ -163,7 +164,120 @@ static void start_due_voices(AudioState *audio, uint64_t sample_idx)
     }
 }
 
-static float step_single_voice(AudioVoice *v, float nz)
+typedef struct {
+    int style;
+    bool dry;
+    bool surge;
+} SkillFlavor;
+
+/* param carries the caster's BrushStyleId plus AUDIO_SKILL_PARAM_* flags. */
+static SkillFlavor skill_flavor(const AudioVoice *v)
+{
+    const int bits = (int)lroundf(v->param);
+    return (SkillFlavor){
+        .style = bits & 3,
+        .dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0,
+        .surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0,
+    };
+}
+
+/* Breath through two narrow resonators on the D Yo scale: a halo that rides the airflow. */
+static float skill_surge_halo(AudioVoice *v, float pink, float lo_hz, float hi_hz)
+{
+    return audio_svf_step(&v->svf[2], pink, lo_hz, 13.0f).bp * 0.10f +
+           audio_svf_step(&v->svf[3], pink, hi_hz, 14.0f).bp * 0.08f;
+}
+
+/* Two airflow bands spin around a rising-then-settling centre. Pink noise (and, when the
+ * recorded loop is attached, a slowed read of it) excites them, so the vortex has body without
+ * any audible oscillator. */
+static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float nz)
+{
+    static const float k_lo[3] = {220.0f, 300.0f, 400.0f};
+    static const float k_hi[3] = {640.0f, 820.0f, 1080.0f};
+    static const float k_flow_rate[3] = {0.70f, 0.82f, 0.94f};
+    const SkillFlavor fl = skill_flavor(v);
+    const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
+    const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
+
+    const float onset = audio_smoothstep(0.0f, 0.030f, t);
+    const float bloom = 0.55f + 0.45f * audio_smoothstep(0.02f, 0.24f, t);
+    if (t > 0.18f) {
+        v->env *= 0.99984f;
+    }
+    const float sweep =
+        audio_smoothstep(0.0f, 0.30f, t) * (1.0f - 0.45f * audio_smoothstep(0.30f, 1.10f, t));
+    v->phase += (2.4f + 2.2f * sweep) / (float)AUDIO_SAMPLE_RATE;
+    const float spin = sinf(v->phase * k_two_pi);
+    const float spin2 = sinf(v->phase * k_two_pi + 1.7f);
+
+    const float pink = audio_pink_step(&v->pink, nz);
+    const bool has_flow = audio->brush_flow_pcm != NULL;
+    float src = pink * (has_flow ? 1.0f : 1.6f);
+    if (has_flow) {
+        if (v->age == 1u) {
+            v->sample_pos = (float)(audio->brush_flow_len / 6u);
+        }
+        src +=
+            audio_pcm_read(audio->brush_flow_pcm, audio->brush_flow_len, v->sample_pos, 2048.0f) *
+            1.1f;
+        v->sample_pos += k_flow_rate[style] * (fl.dry ? 1.15f : 1.0f);
+    }
+
+    const float thin = fl.dry ? 1.35f : 1.0f;
+    const float lo = k_lo[style] * thin * (1.0f + 0.85f * sweep) * (1.0f + 0.16f * spin);
+    const float hi = k_hi[style] * thin * (1.0f + 0.30f * sweep) * (1.0f - 0.14f * spin2);
+    const float q = fl.dry ? 1.5f : 0.9f;
+    float body = audio_svf_step(&v->svf[0], src, ink_clampf(lo, 220.0f, 1400.0f), q).bp * 0.95f +
+                 audio_svf_step(&v->svf[1], src, ink_clampf(hi, 220.0f, 1400.0f), q).bp * 0.70f;
+    if (fl.surge && !fl.dry) {
+        body += skill_surge_halo(v, pink, 587.33f, 880.00f);
+    }
+    body = audio_svf_step(&v->svf[4], body, fl.dry ? 2000.0f : 2600.0f, 0.71f).lp;
+    return body * onset * bloom * v->env * (fl.dry ? 0.60f : 1.0f) * 0.85f;
+}
+
+/* A silk-fan stroke: the recorded swish, pitched per brush, over a velvet band of pink noise that
+ * sweeps up and back down; low Q keeps the sweep from turning into a whistle. */
+static float gale_slash_sample(const AudioState *audio, AudioVoice *v, float nz)
+{
+    static const float k_from[3] = {380.0f, 480.0f, 620.0f};
+    static const float k_peak[3] = {1500.0f, 1900.0f, 2600.0f};
+    static const float k_decay[3] = {0.99975f, 0.99970f, 0.99962f};
+    static const float k_swish_rate[3] = {0.78f, 0.92f, 1.12f};
+    const SkillFlavor fl = skill_flavor(v);
+    const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
+    const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
+
+    const float onset = audio_smoothstep(0.0f, 0.015f, t);
+    v->env *= k_decay[style];
+    const float rise = audio_smoothstep(0.0f, 0.07f, t);
+    const float fall = audio_smoothstep(0.08f, 0.42f, t);
+    const float centre =
+        k_from[style] + (k_peak[style] - k_from[style]) * rise * (1.0f - 0.65f * fall);
+
+    const float pink = audio_pink_step(&v->pink, nz);
+    const bool has_swish = audio->brush_swish_pcm != NULL;
+    const float q = fl.dry ? 1.6f : 1.1f;
+    float body = audio_svf_step(&v->svf[0], pink, centre * (fl.dry ? 1.25f : 1.0f), q).bp *
+                 (has_swish ? 1.5f : 2.6f);
+    if (has_swish) {
+        const float sw =
+            audio_pcm_read(audio->brush_swish_pcm, audio->brush_swish_len, v->sample_pos, 512.0f);
+        v->sample_pos += k_swish_rate[style] * (fl.dry ? 1.12f : 1.0f);
+        body += audio_svf_step(&v->svf[1], sw, 1800.0f + 1400.0f * rise * (1.0f - fall), 0.71f).lp *
+                1.9f;
+    }
+    if (fl.surge && !fl.dry) {
+        body += skill_surge_halo(v, pink, 440.00f, 659.25f);
+    }
+    if (fl.dry) {
+        body = audio_svf_step(&v->svf[4], body, 520.0f, 0.71f).hp;
+    }
+    return body * onset * v->env * (fl.dry ? 0.62f : 1.0f) * 0.95f;
+}
+
+static float step_single_voice(const AudioState *audio, AudioVoice *v, float nz)
 {
     const float sr = (float)AUDIO_SAMPLE_RATE;
     float out = 0.0f;
@@ -273,60 +387,12 @@ static float step_single_voice(AudioVoice *v, float nz)
         v->env *= 0.99985f;
         break;
     }
-    case AUDIO_VOICE_CYCLONE_SWIRL: {
-        /* param carries the caster's BrushStyleId plus AUDIO_SKILL_PARAM_* flags. */
-        const int bits = (int)lroundf(v->param);
-        const int style = bits & 3;
-        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
-        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
-        const bool heavy = style == BRUSH_STYLE_HEAVY;
-        const bool quill = style == BRUSH_STYLE_QUILL;
-        const float lp_k = dry ? 0.30f : (heavy ? 0.07f : (quill ? 0.18f : 0.10f));
-        v->lp += lp_k * (nz - v->lp);
-        v->bp += 0.045f * (v->lp - v->bp);
-        const float f = heavy   ? 105.0f + 190.0f * (1.0f - v->env)
-                        : quill ? 230.0f + 420.0f * (1.0f - v->env)
-                                : 145.0f + 260.0f * (1.0f - v->env);
-        v->phase += f / sr;
-        float body = sinf(v->phase * k_two_pi) * 0.34f + (v->lp - v->bp) * 0.95f;
-        if (style == BRUSH_STYLE_EMBER && nz > 0.86f) {
-            body += nz * 0.45f;
-        } else if (quill) {
-            v->phase2 += (f * 3.01f) / sr;
-            body += sinf(v->phase2 * k_two_pi) * 0.14f * v->env;
-        }
-        if (surge) {
-            body += sinf(v->phase * k_two_pi * 2.0f) * 0.18f * v->env;
-        }
-        out = body * v->env * (dry ? 0.36f : (heavy ? 0.60f : 0.52f));
-        v->env *= 0.99968f;
+    case AUDIO_VOICE_CYCLONE_SWIRL:
+        out = cyclone_swirl_sample(audio, v, nz);
         break;
-    }
-    case AUDIO_VOICE_GALE_SLASH: {
-        const int bits = (int)lroundf(v->param);
-        const int style = bits & 3;
-        const bool dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0;
-        const bool surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0;
-        const bool heavy = style == BRUSH_STYLE_HEAVY;
-        const bool quill = style == BRUSH_STYLE_QUILL;
-        v->lp += (dry ? 0.40f : (heavy ? 0.10f : (quill ? 0.26f : 0.16f))) * (nz - v->lp);
-        const float f = heavy   ? 120.0f + 320.0f * v->env
-                        : quill ? 260.0f + 640.0f * v->env
-                                : 175.0f + 460.0f * v->env;
-        v->phase += f / sr;
-        float body = (nz - v->lp) * 0.56f + sinf(v->phase * k_two_pi) * 0.28f;
-        if (heavy) {
-            body += sinf(v->phase * k_two_pi * 0.5f) * 0.22f * v->env;
-        } else if (style == BRUSH_STYLE_EMBER && nz > 0.82f) {
-            body += nz * 0.40f * v->env;
-        }
-        if (surge) {
-            body += sinf(v->phase * k_two_pi * 2.0f) * 0.16f * v->env;
-        }
-        out = body * v->env * (dry ? 0.34f : 0.50f);
-        v->env *= quill ? 0.99915f : 0.99935f;
+    case AUDIO_VOICE_GALE_SLASH:
+        out = gale_slash_sample(audio, v, nz);
         break;
-    }
     case AUDIO_VOICE_ORB_DROP: {
         const float f = 640.0f + 420.0f * (1.0f - v->env);
         v->phase += f / sr;
@@ -499,58 +565,6 @@ static float step_single_voice(AudioVoice *v, float nz)
     return out;
 }
 
-static float brush_scrape_sample(AudioState *audio, float nz)
-{
-    const int style = audio->brush_style;
-    float lp_k = 0.22f;
-    float bp_k = 0.07f;
-    float gain = 0.24f;
-    if (audio->brush_dry) {
-        lp_k = 0.46f;
-        bp_k = 0.18f;
-        gain = 0.17f;
-    } else if (style == BRUSH_STYLE_HEAVY) {
-        lp_k = 0.12f;
-        bp_k = 0.035f;
-        gain = 0.34f;
-    } else if (style == BRUSH_STYLE_QUILL) {
-        lp_k = 0.34f;
-        bp_k = 0.12f;
-        gain = 0.20f;
-    }
-    audio->brush_lp += lp_k * (nz - audio->brush_lp);
-    audio->brush_bp += bp_k * (audio->brush_lp - audio->brush_bp);
-    float s = (audio->brush_lp - audio->brush_bp) * gain;
-
-    float tone_hz = 0.0f;
-    float tone_amp = 0.0f;
-    if (audio->brush_dry) {
-        s *= 0.55f + 0.45f * (nz > 0.2f ? 1.0f : 0.0f);
-    } else if (style == BRUSH_STYLE_HEAVY) {
-        tone_hz = 82.0f;
-        tone_amp = 0.05f;
-    } else if (style == BRUSH_STYLE_EMBER) {
-        if (nz > 0.93f) {
-            s += nz * 0.22f;
-        }
-    } else if (style == BRUSH_STYLE_QUILL) {
-        tone_hz = 880.0f;
-        tone_amp = 0.025f;
-    }
-    if (audio->brush_surge && !audio->brush_dry) {
-        tone_hz = tone_hz > 0.0f ? tone_hz * 2.0f : 523.25f;
-        tone_amp += 0.035f;
-    }
-    if (tone_amp > 0.0f) {
-        audio->brush_ph += tone_hz / (float)AUDIO_SAMPLE_RATE;
-        if (audio->brush_ph > 1000.0f) {
-            audio->brush_ph -= 1000.0f;
-        }
-        s += sinf(audio->brush_ph * k_two_pi) * tone_amp;
-    }
-    return s * audio->brush_env;
-}
-
 float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
 {
     start_due_voices(audio, sample_idx);
@@ -560,14 +574,8 @@ float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
         if (!v->active || sample_idx < v->start_sample) {
             continue;
         }
-        mix += step_single_voice(v, nz);
+        mix += step_single_voice(audio, v, nz);
     }
 
-    const float target = audio->paused ? 0.0f : audio->brush_target;
-    audio->brush_env += (target - audio->brush_env) * 0.0045f;
-    if (audio->brush_env > 0.001f) {
-        mix += brush_scrape_sample(audio, nz);
-    }
-
-    return mix;
+    return mix + audio_brush_step(audio);
 }

@@ -97,6 +97,33 @@ BrushInput input_latch_take_tick(InputLatch *l)
     return in;
 }
 
+/* A catch-up frame that runs several ticks hands each one an equal slice of the frame's pointer
+ * motion; giving it all to the first tick left the rest with zero stroke speed, which chopped the
+ * brush sound on every slow frame. */
+BrushInput input_latch_take_subtick(InputLatch *l, int32_t remaining_ticks)
+{
+    if (l == NULL || remaining_ticks <= 1) {
+        return input_latch_take_tick(l);
+    }
+    const float share = 1.0f / (float)remaining_ticks;
+    const float x = l->prev_x + (l->cur_x - l->prev_x) * share;
+    const float y = l->prev_y + (l->cur_y - l->prev_y) * share;
+    const BrushInput in = {
+        .mx = x,
+        .my = y,
+        .pmx = l->prev_x,
+        .pmy = l->prev_y,
+        .paint = l->left_down && !l->paint_suppressed,
+        .cyclone = l->cyclone_pending,
+        .gale = l->gale_pending,
+    };
+    l->prev_x = x;
+    l->prev_y = y;
+    l->cyclone_pending = false;
+    l->gale_pending = false;
+    return in;
+}
+
 GameCommand input_latch_take_command(InputLatch *l, RunPhase phase)
 {
     GameCommand cmd = {.type = CMD_NONE, .arg = 0};

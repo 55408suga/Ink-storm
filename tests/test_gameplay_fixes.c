@@ -619,6 +619,75 @@ static void test_lobby_sandbox_paints_with_combat_brush_and_no_waves(void)
     game_destroy(g);
 }
 
+static void assert_ink_full(const GameState *g)
+{
+    TEST_ASSERT_EQUAL_FLOAT(g->player.ink_max, g->player.ink);
+    TEST_ASSERT_FALSE(g->player.dry);
+}
+
+static void test_lobby_sandbox_never_runs_dry_but_keeps_skill_cooldowns(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(1));
+    game_init_sandbox(g, &cfg);
+    assert_ink_full(g);
+
+    for (int t = 0; t < 600; ++t) {
+        const float x = 200.0f + (float)(t % 30) * 30.0f;
+        const BrushInput stroke = {
+            .pmx = x, .pmy = 300.0f, .mx = x + 30.0f, .my = 340.0f, .paint = true};
+        game_step_sandbox(g, &stroke);
+        TEST_ASSERT_TRUE(g->player.painting);
+        assert_ink_full(g);
+    }
+
+    const BrushInput cyclone = {
+        .pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f, .cyclone = true};
+    game_step_sandbox(g, &cyclone);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, 0));
+    assert_ink_full(g);
+    game_step_sandbox(g, &cyclone);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CYCLONE, 0));
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SKILL_DENIED, 0));
+    TEST_ASSERT_TRUE(g->player.cyclone_cd > 0.0f);
+    assert_ink_full(g);
+    const int wait_ticks = (int)ceilf(g->player.cyclone_cd * (float)INK_TICK_HZ) + 1;
+    for (int t = 0; t < wait_ticks; ++t) {
+        game_step_sandbox(g, NULL);
+    }
+    game_step_sandbox(g, &cyclone);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, 0));
+
+    const BrushInput gale = {
+        .pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f, .gale = true};
+    const int32_t charges = g->player.gale_charges;
+    TEST_ASSERT_TRUE(charges > 0);
+    for (int32_t i = 0; i < charges; ++i) {
+        game_step_sandbox(g, &gale);
+        TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_GALE, 0));
+        assert_ink_full(g);
+    }
+    game_step_sandbox(g, &gale);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_GALE, 0));
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SKILL_DENIED, 0));
+    assert_ink_full(g);
+
+    RunConfig bought = cfg;
+    bought.meta_upgrade_lv[META_UPG_INK_MAX] = 2;
+    game_sandbox_apply_config(g, &bought);
+    game_sandbox_set_brush(g, BRUSH_STYLE_QUILL);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 120.0f, g->player.ink_max);
+    assert_ink_full(g);
+
+    game_init(g, &cfg);
+    const BrushInput run_stroke = {
+        .pmx = 300.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .paint = true};
+    game_step_sandbox(g, &run_stroke);
+    TEST_ASSERT_TRUE(g->player.ink < g->player.ink_max);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -645,5 +714,6 @@ int main(void)
     RUN_TEST(test_stroke_force_keeps_direction_and_scales_cap_with_brush_force);
     RUN_TEST(test_long_ember_stroke_keeps_every_ember_and_huge_input_stays_finite);
     RUN_TEST(test_lobby_sandbox_paints_with_combat_brush_and_no_waves);
+    RUN_TEST(test_lobby_sandbox_never_runs_dry_but_keeps_skill_cooldowns);
     return UNITY_END();
 }

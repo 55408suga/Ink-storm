@@ -437,6 +437,7 @@ static uint64_t hash_internal(const GameInternal *in)
     }
     h = ink_hash_f32(h, in->ryu_coil_t);
     h = ink_hash_f32(h, in->thunderfire_gem_cd);
+    h = hash_bool(h, in->sandbox_infinite_ink);
     return h;
 }
 
