@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 
 static FluidState *f;
@@ -104,6 +105,62 @@ static void test_pale_ink_survives_eight_bit_encoding(void)
         render_fluid_encode_field(f, field);
         const float back = render_fluid_decode_channel(field[i * 4], f->cfg.max_dye);
         TEST_ASSERT_FLOAT_WITHIN(0.0035f, v, back);
+    }
+}
+
+static void assert_rgb_within(float delta, RenderRgba expected, RenderRgba actual)
+{
+    TEST_ASSERT_FLOAT_WITHIN(delta, expected.r, actual.r);
+    TEST_ASSERT_FLOAT_WITHIN(delta, expected.g, actual.g);
+    TEST_ASSERT_FLOAT_WITHIN(delta, expected.b, actual.b);
+}
+
+static void test_ink_curve_hits_art_direction_tones_and_opacities(void)
+{
+    const RenderFluidPalette pal = test_palette();
+    const struct {
+        float ink;
+        RenderRgba tone;
+        float alpha;
+    } cases[] = {
+        {0.04f, {1.0f, 1.0f, 1.0f, 0.0f}, 0.0f}, /* paper untouched */
+        {0.05f, pal.sumi_clear, 0.15f},          {0.25f, pal.sumi_light, 0.45f},
+        {0.80f, pal.sumi_scorch, 0.92f},         {1.50f, pal.sumi_scorch, 0.92f},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        const RenderRgba c = render_fluid_ink_curve(&pal, cases[i].ink, 0.0f);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, cases[i].alpha, c.a);
+        assert_rgb_within(1e-5f, cases[i].tone, c);
+    }
+}
+
+static void test_ink_curve_darkens_monotonically_without_steps_above_paper(void)
+{
+    const RenderFluidPalette pal = test_palette();
+    RenderRgba prev = render_fluid_ink_curve(&pal, 0.05f, 0.0f);
+    for (int k = 1; k <= 1950; ++k) {
+        const RenderRgba cur = render_fluid_ink_curve(&pal, 0.05f + 0.001f * (float)k, 0.0f);
+        TEST_ASSERT_TRUE(cur.a >= prev.a - 1e-6f);
+        TEST_ASSERT_FLOAT_WITHIN(0.003f, prev.a, cur.a);
+        TEST_ASSERT_TRUE(luminance(cur) <= luminance(prev) + 1e-6f);
+        TEST_ASSERT_FLOAT_WITHIN(0.003f, luminance(prev), luminance(cur));
+        prev = cur;
+    }
+}
+
+static void test_wet_edge_pooling_only_darkens_and_stays_within_scorch_opacity(void)
+{
+    const RenderFluidPalette pal = test_palette();
+    const float grads[] = {0.1f, 0.4f, 0.85f};
+    for (int k = 5; k <= 200; ++k) {
+        const float ink = 0.01f * (float)k;
+        const RenderRgba flat = render_fluid_ink_curve(&pal, ink, 0.0f);
+        for (size_t i = 0; i < sizeof grads / sizeof grads[0]; ++i) {
+            const RenderRgba pooled = render_fluid_ink_curve(&pal, ink, grads[i]);
+            TEST_ASSERT_TRUE(pooled.a >= flat.a - 1e-6f);
+            TEST_ASSERT_TRUE(pooled.a <= 0.92f + 1e-6f);
+            TEST_ASSERT_TRUE(luminance(pooled) <= luminance(flat) + 1e-6f);
+        }
     }
 }
 
@@ -215,6 +272,9 @@ int main(void)
     RUN_TEST(test_field_packs_ink_fire_storm_and_solid_per_texel);
     RUN_TEST(test_extreme_max_dye_keeps_density_ratios);
     RUN_TEST(test_pale_ink_survives_eight_bit_encoding);
+    RUN_TEST(test_ink_curve_hits_art_direction_tones_and_opacities);
+    RUN_TEST(test_ink_curve_darkens_monotonically_without_steps_above_paper);
+    RUN_TEST(test_wet_edge_pooling_only_darkens_and_stays_within_scorch_opacity);
     RUN_TEST(test_cpu_ink_darkens_steadily_without_pooling_steps);
     RUN_TEST(test_cpu_glow_is_premultiplied_and_blends_fire_with_storm);
     RUN_TEST(test_polyline_plan_gives_each_segment_its_length_share);

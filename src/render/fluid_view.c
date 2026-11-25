@@ -48,22 +48,19 @@ static const char k_fluid_fragment[] =
     "  vec3 v=min(F.rgb*F.rgb*u_maxDye,vec3(4.));\n"
     "  ivec2 cell=ivec2(clamp(uv*u_fluidSize,vec2(0.),u_fluidSize-1.));\n"
     "  float open=1.-texelFetch(texture0,cell,0).a;\n"
-    "  float gr=clamp((.975-pp)*9.,-.4,1.);\n"
-    "  float d=v.r*(1.+.22*gr);\n"
-    "  float cov=smoothstep(.05,.1,d);\n"
-    "  float dep=smoothstep(.08,1.6,d);\n"
-    "  vec3 c=mix(vec3(.79,.76,.70),vec3(.55,.52,.48),smoothstep(0.,.3,dep));\n"
-    "  c=mix(c,vec3(.29,.27,.24),smoothstep(.25,.62,dep));\n"
-    "  c=mix(c,vec3(.17,.15,.14),smoothstep(.55,.88,dep));\n"
-    "  c=mix(c,vec3(.10,.09,.08),smoothstep(.85,1.,dep));\n"
+    "  float d=v.r,on=step(.05,d);\n"
+    "  float pa=smoothstep(.05,.25,d),hv=smoothstep(.25,.5,d),dn=smoothstep(.25,.8,d);\n"
+    "  vec3 c=mix(vec3(.79,.76,.70),vec3(.55,.52,.48),pa);\n"
+    "  c=mix(c,vec3(.29,.27,.24),hv);\n"
+    "  c=mix(c,vec3(.17,.15,.14),smoothstep(.5,.72,d));\n"
+    "  c=mix(c,vec3(.10,.09,.08),smoothstep(.72,.8,d));\n"
     "  float cpp=max(abs(dFdx(uv.x))*u_fluidSize.x,1e-4);\n"
     "  float g=length(vec2(dFdx(d),dFdy(d)))/cpp;\n"
-    "  float band=cov*(1.-smoothstep(.1,.36,d));\n"
-    "  float rim=clamp(band*(.18+g*2.4),0.,1.)*(1.-.7*dep);\n"
-    "  c=mix(c,vec3(.15,.13,.12),rim*.55);\n"
-    "  c*=1.-.16*gr*cov*(1.-.5*dep);\n"
-    "  c*=mix(1.,pp/.95,.4);\n"
-    "  float ai=min(.95,cov*(.34+.62*dep)+rim*.3)*open;\n"
+    "  float pool=smoothstep(.02,.45,g*.55)*(1.-hv);\n"
+    "  c=mix(c,vec3(.29,.27,.24),pool*.6);\n"
+    "  float gr=clamp((.975-pp)*9.,-.4,1.);\n"
+    "  c*=(1.-.16*gr*(1.-.5*dn))*mix(1.,pp/.95,.4);\n"
+    "  float ai=on*(.15+.3*pa+.47*dn+.28*pool)*open;\n"
     "  float af=smoothstep(.05,.5,v.g),as=smoothstep(.05,.46,v.b);\n"
     "  vec3 fc=mix(vec3(.78,.27,.17),vec3(.94,.54,.24),smoothstep(.3,.95,v.g));\n"
     "  fc=mix(fc,vec3(1.,.9,.66),smoothstep(.9,2.,v.g)*.7);\n"
@@ -210,18 +207,23 @@ void render_fluid_init(RenderState *r, const RenderOptions *opt)
     }
 }
 
+static void unload_field_texture(Texture2D *tex)
+{
+    if (tex->id != 0) {
+        UnloadTexture(*tex);
+        *tex = (Texture2D){0};
+    }
+}
+
 void render_fluid_close(RenderState *r)
 {
     if (r == NULL) {
         return;
     }
-    Texture2D *texes[6] = {&r->fluid_field_tex[0], &r->fluid_field_tex[1], &r->fluid_ink_tex[0],
-                           &r->fluid_ink_tex[1],   &r->fluid_elem_tex[0],  &r->fluid_elem_tex[1]};
-    for (int i = 0; i < 6; ++i) {
-        if (texes[i]->id != 0) {
-            UnloadTexture(*texes[i]);
-            *texes[i] = (Texture2D){0};
-        }
+    for (int i = 0; i < 2; ++i) {
+        unload_field_texture(&r->fluid_field_tex[i]);
+        unload_field_texture(&r->fluid_ink_tex[i]);
+        unload_field_texture(&r->fluid_elem_tex[i]);
     }
     if (r->fluid_shader.id != 0) {
         UnloadShader(r->fluid_shader);

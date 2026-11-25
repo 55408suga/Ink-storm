@@ -1,7 +1,6 @@
 #ifndef INK_GAME_INTERNAL_H
 #define INK_GAME_INTERNAL_H
 
-#include "core.h"
 #include "ecs.h"
 #include "fluid.h"
 

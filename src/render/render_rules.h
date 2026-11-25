@@ -39,7 +39,10 @@ typedef struct {
     RenderRgba shu, shu_hot, ao, ao_hot, kin_hot;
 } RenderFluidPalette;
 
-/* CPU フォールバックの墨: 乗算合成用の色（a=1）。grad はセル単位の濃度勾配の大きさ */
+/* 墨の濃度曲線（art-direction §9.4）: rgb はトーン、a は不透明度。濃度 0.05 未満は a=0。
+ * grad はセル単位の濃度勾配の大きさで、墨溜まりを足す。GPU シェーダも同じ式で評価する */
+RenderRgba render_fluid_ink_curve(const RenderFluidPalette *pal, float ink, float grad);
+/* CPU フォールバックの墨: 濃度曲線を紙へ乗算合成する色（a=1） */
 RenderRgba render_fluid_cpu_ink(const RenderFluidPalette *pal, float ink, float grad);
 /* CPU フォールバックの火・雷: 乗算済みアルファ（rgb <= a）。透明域が黒く滲まない */
 RenderRgba render_fluid_cpu_elem(const RenderFluidPalette *pal, float fire, float storm);

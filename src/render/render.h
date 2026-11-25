@@ -156,8 +156,9 @@ typedef struct {
     int post_res_loc;
     bool post_enabled;
     RenderTexture2D scene;
-    RenderTexture2D bg_cache; /* 不透明な和紙＋山水背景（画面揺れ用に四辺 16px の余白付き） */
-    int32_t bg_cached_kind;   /* BgKind。未生成は -1 */
+    /* 不透明な和紙＋山水背景（画面揺れ用に四辺 16px の余白付き） */
+    RenderTexture2D bg_cache;
+    int32_t bg_cached_kind; /* BgKind。未生成は -1 */
     int32_t bg_cached_act;
     Texture2D paper_tex; /* 継ぎ目のない 512x512 和紙（REPEAT） */
     Shader fluid_shader;

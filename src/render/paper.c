@@ -336,8 +336,8 @@ static void draw_rock_pillar(RenderState *r, Vector2 c, float rad, uint32_t seed
 static void draw_torii(RenderState *r, float cx, uint32_t seed)
 {
     /* Solid pillars at (cx, 328) and (cx, 392) [16x16px]; the beams are visual only. Seen from
-     * above: foundation stones, round vermilion posts, a nuki tie-beam and the dark kasagi cap,
-     * all casting one soft shadow to the lower right. */
+     * above: foundation stones, round bengara posts (not PAL_SHU, which fire owns), a nuki tie-beam
+     * and the dark kasagi cap, all casting one soft shadow to the lower right. */
     const float py[2] = {328.0f, 392.0f};
     const float kx = cx - 6.0f;
     fill_quad(r, (Vector2){kx + 2.0f, 306.0f}, (Vector2){kx + 22.0f, 312.0f},
@@ -355,10 +355,11 @@ static void draw_torii(RenderState *r, float cx, uint32_t seed)
         ink_fill_poly(r, stone, 8, pal_color_alpha(PAL_SUMI_CLEAR, 0.95f));
         ink_outline_tone(r, stone, 8, true, 1.8f, (Vector2){0.7f, 0.7f},
                          (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.8f}, seed + (uint32_t)i);
-        ink_radial_glow(r, (Vector2){cx, py[i]}, 9.5f, 9.5f, pal_color_alpha(PAL_SHU, 1.0f),
-                        pal_color_alpha(PAL_BENGARA, 1.0f));
-        ink_wash(r, (Vector2){cx - 3.0f, py[i] - 3.0f}, 3.6f, 2.6f, -0.6f,
-                 (InkTone){.color = PAL_SHU_HOT, .alpha = 0.55f}, 1, seed + 5u + (uint32_t)i);
+        ink_radial_glow(r, (Vector2){cx, py[i]}, 9.5f, 9.5f, pal_color_alpha(PAL_BENGARA, 1.0f),
+                        pal_lerp(PAL_BENGARA, PAL_SUMI_DARK, 0.25f, 1.0f));
+        ink_radial_glow(r, (Vector2){cx - 3.0f, py[i] - 3.0f}, 3.6f, 3.0f,
+                        pal_lerp(PAL_BENGARA, PAL_GOFUN, 0.45f, 0.55f),
+                        pal_lerp(PAL_BENGARA, PAL_GOFUN, 0.45f, 0.0f));
         ink_arc_stroke(r, (Vector2){cx, py[i]}, 9.5f, -0.6f, 2.4f,
                        (BrushProfile){.w_max = 2.6f,
                                       .w_min_ratio = 0.3f,
@@ -369,7 +370,7 @@ static void draw_torii(RenderState *r, float cx, uint32_t seed)
                        (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.85f});
     }
 
-    /* Nuki: vermilion tie-beam with a darker underside. */
+    /* Nuki: bengara tie-beam with a darker underside. */
     const BrushProfile beam = {.w_max = 6.0f,
                                .w_min_ratio = 0.6f,
                                .entry = 0.04f,

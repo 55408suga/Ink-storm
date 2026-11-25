@@ -83,28 +83,32 @@ float render_fluid_decode_channel(unsigned char texel, float max_dye)
     return n * n * max_dye;
 }
 
+RenderRgba render_fluid_ink_curve(const RenderFluidPalette *pal, float ink, float grad)
+{
+    if (pal == NULL || !(ink >= 0.05f)) {
+        return (RenderRgba){1.0f, 1.0f, 1.0f, 0.0f};
+    }
+    const float pale = smooth(0.05f, 0.25f, ink);
+    const float heavy = smooth(0.25f, 0.50f, ink);
+    const float dense = smooth(0.25f, 0.80f, ink);
+    RenderRgba tone = mix(pal->sumi_clear, pal->sumi_light, pale);
+    tone = mix(tone, pal->sumi_heavy, heavy);
+    tone = mix(tone, pal->sumi_dark, smooth(0.50f, 0.72f, ink));
+    tone = mix(tone, pal->sumi_scorch, smooth(0.72f, 0.80f, ink));
+
+    /* Pooling stops where the tone reaches sumi_heavy, so mixing towards it only ever darkens. */
+    const float pool =
+        smooth(0.02f, 0.45f, (isfinite(grad) ? grad : 0.0f) * 0.55f) * (1.0f - heavy);
+    tone = mix(tone, pal->sumi_heavy, pool * 0.60f);
+    tone.a = 0.15f + 0.30f * pale + 0.47f * dense + 0.28f * pool;
+    return tone;
+}
+
 RenderRgba render_fluid_cpu_ink(const RenderFluidPalette *pal, float ink, float grad)
 {
-    const RenderRgba white = {1.0f, 1.0f, 1.0f, 1.0f};
-    if (pal == NULL || !(ink > 0.0f)) {
-        return white;
-    }
-    const float d = fminf(ink, 3.0f);
-    const float cover = smooth(0.03f, 0.30f, d);
-    const float depth = smooth(0.12f, 1.70f, d);
-
-    RenderRgba tone = mix(pal->sumi_clear, pal->sumi_light, smooth(0.0f, 0.30f, depth));
-    tone = mix(tone, pal->sumi_heavy, smooth(0.25f, 0.62f, depth));
-    tone = mix(tone, pal->sumi_dark, smooth(0.55f, 0.88f, depth));
-    tone = mix(tone, pal->sumi_scorch, smooth(0.85f, 1.0f, depth));
-
-    /* Wet-edge pooling grows continuously with the density gradient; dense cores barely pool. */
-    const float pool = smooth(0.02f, 0.45f, (isfinite(grad) ? grad : 0.0f) * 0.55f) *
-                       (1.0f - 0.65f * depth) * cover;
-    tone = mix(tone, pal->sumi_dark, pool * 0.60f);
-    const float alpha = fminf(0.94f, cover * (0.30f + 0.62f * depth) + pool * 0.28f);
-    return (RenderRgba){1.0f + (tone.r - 1.0f) * alpha, 1.0f + (tone.g - 1.0f) * alpha,
-                        1.0f + (tone.b - 1.0f) * alpha, 1.0f};
+    const RenderRgba t = render_fluid_ink_curve(pal, ink, grad);
+    return (RenderRgba){1.0f + (t.r - 1.0f) * t.a, 1.0f + (t.g - 1.0f) * t.a,
+                        1.0f + (t.b - 1.0f) * t.a, 1.0f};
 }
 
 RenderRgba render_fluid_cpu_elem(const RenderFluidPalette *pal, float fire, float storm)

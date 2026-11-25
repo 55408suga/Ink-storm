@@ -603,10 +603,10 @@ static void scene_act1(RenderState *r)
 {
     /* Dawn shrine: layered peaks under a pale sun, waterfall mist at the upper right and an old
      * pine at the lower left. */
-    ink_radial_glow(r, (Vector2){300.0f, 78.0f}, 64.0f, 64.0f, tone_c(PAL_SHU_HOT, 0.20f),
-                    tone_c(PAL_SHU_HOT, 0.0f));
-    ink_radial_glow(r, (Vector2){300.0f, 78.0f}, 24.0f, 24.0f, tone_c(PAL_SHU, 0.30f),
-                    tone_c(PAL_SHU, 0.10f));
+    ink_radial_glow(r, (Vector2){300.0f, 78.0f}, 64.0f, 64.0f, tone_c(PAL_GOFUN, 0.35f),
+                    tone_c(PAL_GOFUN, 0.0f));
+    ink_radial_glow(r, (Vector2){300.0f, 78.0f}, 24.0f, 24.0f, tone_c(PAL_GOFUN, 0.35f),
+                    tone_c(PAL_SUMI_CLEAR, 0.30f));
     draw_peak(r, (PeakSpec){150.0f, 120.0f, 70.0f, 240.0f, PAL_SUMI_LIGHT, 0.18f, 0.0f, 1010u});
     draw_peak(r, (PeakSpec){620.0f, 116.0f, 64.0f, 300.0f, PAL_SUMI_LIGHT, 0.18f, 0.0f, 1011u});
     draw_peak(r, (PeakSpec){980.0f, 122.0f, 78.0f, 260.0f, PAL_SUMI_LIGHT, 0.18f, 0.0f, 1012u});
@@ -615,8 +615,8 @@ static void scene_act1(RenderState *r)
     draw_peak(r, (PeakSpec){40.0f, 150.0f, 80.0f, 170.0f, PAL_SUMI_HEAVY, 0.30f, 2.6f, 1015u});
     mist_drift(r, 162.0f, 86.0f, 0.75f, 1050u);
 
-    draw_stone_column(r, 1166.0f, 70.0f, 330.0f, 58.0f, 0.7f, 1100u);
-    draw_stone_column(r, 1262.0f, 50.0f, 420.0f, 70.0f, 0.75f, 1101u);
+    draw_stone_column(r, 1166.0f, 70.0f, 330.0f, 58.0f, 0.33f, 1100u);
+    draw_stone_column(r, 1262.0f, 50.0f, 420.0f, 70.0f, 0.35f, 1101u);
     draw_waterfall(r, 1214.0f, 84.0f, 330.0f, 22.0f, 1102u);
 
     draw_pine(r, (Vector2){-6.0f, 760.0f}, 1.05f, 1.0f, 0.9f, 1200u);
@@ -674,10 +674,10 @@ static void scene_act3(RenderState *r)
     draw_cloud(r, (Vector2){820.0f, 62.0f}, 270.0f, 60.0f, PAL_SUMI_HEAVY, 0.22f, 3030u);
     mist_drift(r, 174.0f, 84.0f, 0.7f, 3050u);
 
-    draw_stone_column(r, 30.0f, 60.0f, 700.0f, 78.0f, 0.8f, 3100u);
-    draw_stone_column(r, 116.0f, 300.0f, 700.0f, 52.0f, 0.6f, 3101u);
-    draw_stone_column(r, 1250.0f, 40.0f, 700.0f, 84.0f, 0.8f, 3110u);
-    draw_stone_column(r, 1164.0f, 380.0f, 720.0f, 56.0f, 0.6f, 3111u);
+    draw_stone_column(r, 30.0f, 60.0f, 700.0f, 78.0f, 0.35f, 3100u);
+    draw_stone_column(r, 116.0f, 300.0f, 700.0f, 52.0f, 0.27f, 3101u);
+    draw_stone_column(r, 1250.0f, 40.0f, 700.0f, 84.0f, 0.35f, 3110u);
+    draw_stone_column(r, 1164.0f, 380.0f, 720.0f, 56.0f, 0.27f, 3111u);
     draw_pine(r, (Vector2){1250.0f, 300.0f}, 0.62f, -1.0f, 0.9f, 3200u);
     mist_band(r, 610.0f, 740.0f, 0.55f);
     draw_boulder(r, (Vector2){210.0f, 712.0f}, 64.0f, 24.0f, 0.7f, 3300u);
@@ -687,8 +687,7 @@ static void scene_act3(RenderState *r)
 
 static void scene_sunago(RenderState *r, int loop_n, int act_index)
 {
-    int flecks = 24 * loop_n;
-    flecks = flecks > 140 ? 140 : flecks;
+    const int flecks = 20 * (loop_n < 1 ? 1 : (loop_n > 6 ? 6 : loop_n));
     uint64_t rng = UINT64_C(0x53554e41474f0001) ^
                    ((uint64_t)(uint32_t)act_index * UINT64_C(0x9e3779b97f4a7c15));
     for (int i = 0; i < flecks; ++i) {
