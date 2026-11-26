@@ -13,6 +13,8 @@
 
 #define SPRITE_ATLAS_PX 2048
 #define SPRITE_CANVAS_MAX 512
+#define SPRITE_BG_W 960
+#define SPRITE_BG_H 540
 #define SPRITE_TURN_TICKS 6
 #define RENDER_RYU_SPINE_PTS 64
 #define SPRITE_PNG_MAX_IDAT_BYTES (2u * 1024u * 1024u)
@@ -43,6 +45,8 @@ typedef enum {
     SPR_HOJU_FIRE,
     SPR_HOJU_STORM,
     SPR_HOJU_WIND,
+    SPR_TERRAIN_ROCK,
+    SPR_TERRAIN_TORII,
     SPR_COUNT
 } SpriteId;
 
@@ -60,8 +64,11 @@ typedef enum {
     SPR_GROUP_NUE,
     SPR_GROUP_RYU,
     SPR_GROUP_HOJU,
+    SPR_GROUP_TERRAIN,
     SPR_GROUP_COUNT
 } SpriteGroupId;
+
+typedef enum { SPR_BG_LOBBY = 0, SPR_BG_ACT1, SPR_BG_ACT2, SPR_BG_ACT3, SPR_BG_COUNT } SpriteBgId;
 
 typedef enum {
     SPR_ORIENT_NONE = 0,
@@ -107,7 +114,7 @@ typedef struct {
     int32_t canvas;   /* 256 または 512 */
     SpriteGroupId group;
     bool group_required; /* 欠けると、その群のキャラクター全体を手続き描画に戻す */
-    bool optional;       /* 中核 23 枚に数えない差分 */
+    bool optional;       /* 中核 25 枚に数えない差分 */
     SpriteId fallback;   /* 状態差分が欠けたときに使う基本スプライト */
     float body_frac;     /* k: 当たり判定の直径 / キャンバス幅 */
     float fixed_size_px; /* > 0 なら 2r/k の代わりに使う（社） */
@@ -219,6 +226,9 @@ bool sprite_png_validate(const uint8_t *data, size_t size, int32_t expect_w, int
  * tile_x が true のときは上下の余白だけを検査し、左右端までの描画を許す */
 bool sprite_alpha_usable_ex(const uint8_t *rgba, int32_t w, int32_t h, bool tile_x);
 bool sprite_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h);
+/* 背景外周 PNG の相対名と中央余白アルファ検査（40% 以上が透明・淡霞） */
+const char *sprite_bg_file(SpriteBgId id);
+bool sprite_bg_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h);
 
 float sprite_polyline_length(const GameVec2 *pts, int32_t n);
 /* 弧長で等間隔に out_n 点へ置き直す。長さ 0 や点不足では 0 を返す */

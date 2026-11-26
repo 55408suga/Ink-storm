@@ -139,6 +139,63 @@ static Texture2D upload_atlas_cell_repeat(const unsigned char *atlas, SpriteRect
     return tex;
 }
 
+static void load_backgrounds(SpriteBank *bank, const char *dir, int32_t *rejected)
+{
+    const size_t bg_rgba_bytes = (size_t)SPRITE_BG_W * (size_t)SPRITE_BG_H * 4u;
+    const size_t bg_raw_bytes = ((size_t)SPRITE_BG_W * 4u + 1u) * (size_t)SPRITE_BG_H;
+    uint8_t *bg_work = malloc(bg_rgba_bytes + bg_raw_bytes);
+    if (bg_work == NULL) {
+        TraceLog(LOG_WARNING,
+                 "INKSTORM: background buffer allocation failed; drawing procedural scenery");
+        return;
+    }
+    uint8_t *bg_rgba = bg_work;
+    uint8_t *bg_raw = bg_work + bg_rgba_bytes;
+    for (int32_t k = 0; k < SPR_BG_COUNT; ++k) {
+        const char *file = sprite_bg_file((SpriteBgId)k);
+        char path[SPRITE_PATH_MAX];
+        if (file == NULL || !sprite_join_path(dir, file, path, sizeof path) || !FileExists(path)) {
+            continue;
+        }
+        int size = 0;
+        unsigned char *data = read_whole_file(path, &size);
+        const bool decoded =
+            data != NULL && png_rgba_decode(data, (size_t)size, SPRITE_BG_W, SPRITE_BG_H, bg_rgba,
+                                            bg_rgba_bytes, bg_raw, bg_raw_bytes);
+        free(data);
+        if (!decoded || !sprite_bg_alpha_usable(bg_rgba, SPRITE_BG_W, SPRITE_BG_H)) {
+            ++(*rejected);
+            TraceLog(LOG_WARNING, "INKSTORM: background rejected (%s)", file);
+            continue;
+        }
+        const Image img = {.data = bg_rgba,
+                           .width = SPRITE_BG_W,
+                           .height = SPRITE_BG_H,
+                           .mipmaps = 1,
+                           .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        Texture2D bg_tex = LoadTextureFromImage(img);
+        if (bg_tex.id != 0) {
+            SetTextureFilter(bg_tex, TEXTURE_FILTER_BILINEAR);
+            SetTextureWrap(bg_tex, TEXTURE_WRAP_CLAMP);
+            bank->bg_tex[k] = bg_tex;
+            ++bank->bgs_loaded;
+        }
+    }
+    free(bg_work);
+}
+
+static void finish_sprites_init(SpriteBank *bank, const char *dir, double t0, int32_t loaded_core,
+                                int32_t core_total, int32_t rejected, int32_t fallback_groups)
+{
+    load_backgrounds(bank, dir, &rejected);
+    bank->load_ms = (GetTime() - t0) * 1000.0;
+    TraceLog(LOG_INFO,
+             "INKSTORM: sprites %d/%d (%d rejected; procedural fallback for %d groups; "
+             "bg %d/%d; %.1f ms)",
+             (int)loaded_core, (int)core_total, (int)rejected, (int)fallback_groups,
+             (int)bank->bgs_loaded, (int)SPR_BG_COUNT, bank->load_ms);
+}
+
 void render_sprites_init(RenderState *r, const RenderOptions *opt)
 {
     if (r == NULL) {
@@ -169,6 +226,7 @@ void render_sprites_init(RenderState *r, const RenderOptions *opt)
         free(atlas);
         free(work);
         TraceLog(LOG_WARNING, "INKSTORM: sprite atlas allocation failed; drawing procedural ink");
+        finish_sprites_init(bank, opt->sprite_dir, t0, 0, core_total, 0, SPR_GROUP_COUNT);
         return;
     }
     const SpriteLoadBuffers buf = {
@@ -240,9 +298,8 @@ void render_sprites_init(RenderState *r, const RenderOptions *opt)
     free(atlas);
     if (tex.id == 0) {
         memset(bank, 0, sizeof *bank);
-        TraceLog(LOG_INFO,
-                 "INKSTORM: sprites %d/%d (%d rejected; procedural fallback for %d groups)",
-                 (int)loaded_core, (int)core_total, (int)rejected, (int)SPR_GROUP_COUNT);
+        finish_sprites_init(bank, opt->sprite_dir, t0, loaded_core, core_total, rejected,
+                            SPR_GROUP_COUNT);
         return;
     }
     GenTextureMipmaps(&tex);
@@ -253,11 +310,8 @@ void render_sprites_init(RenderState *r, const RenderOptions *opt)
     bank->ryu_band_halo_tex = band_halo_tex;
     bank->enabled = true;
     bank->groups_ok = groups_ok;
-    bank->load_ms = (GetTime() - t0) * 1000.0;
-    TraceLog(LOG_INFO,
-             "INKSTORM: sprites %d/%d (%d rejected; procedural fallback for %d groups; %.1f ms)",
-             (int)loaded_core, (int)core_total, (int)rejected, (int)(SPR_GROUP_COUNT - groups_ok),
-             bank->load_ms);
+    finish_sprites_init(bank, opt->sprite_dir, t0, loaded_core, core_total, rejected,
+                        SPR_GROUP_COUNT - groups_ok);
 }
 
 void render_sprites_close(RenderState *r)
@@ -273,6 +327,11 @@ void render_sprites_close(RenderState *r)
     }
     if (r->sprites.ryu_band_halo_tex.id != 0) {
         UnloadTexture(r->sprites.ryu_band_halo_tex);
+    }
+    for (int32_t k = 0; k < SPR_BG_COUNT; ++k) {
+        if (r->sprites.bg_tex[k].id != 0) {
+            UnloadTexture(r->sprites.bg_tex[k]);
+        }
     }
     memset(&r->sprites, 0, sizeof r->sprites);
 }
@@ -322,6 +381,20 @@ void render_sprite_draw(RenderState *r, SpriteId id, const SpriteXform *xf, Colo
 void render_sprite_draw_halo(RenderState *r, SpriteId id, const SpriteXform *xf, Color tint)
 {
     draw_cell(r, id, true, xf, tint);
+}
+
+bool render_sprite_draw_bg(RenderState *r, SpriteBgId id)
+{
+    if (r == NULL || id < 0 || id >= SPR_BG_COUNT || r->sprites.bg_tex[id].id == 0) {
+        return false;
+    }
+    const Texture2D tex = r->sprites.bg_tex[id];
+    const Rectangle src = {0.0f, 0.0f, (float)tex.width, (float)tex.height};
+    const Rectangle dst = {-(float)RENDER_BG_PAD, -(float)RENDER_BG_PAD,
+                           (float)(INK_SCREEN_W + 2 * RENDER_BG_PAD),
+                           (float)(INK_SCREEN_H + 2 * RENDER_BG_PAD)};
+    DrawTexturePro(tex, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, pal_white());
+    return true;
 }
 
 static void emit_band_tri(RenderState *r, unsigned int tex_id, Color tint, GameVec2 p0, GameVec2 p1,

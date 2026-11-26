@@ -33,16 +33,22 @@ typedef struct {
 } RenderOptions;
 
 typedef struct {
-    bool enabled;    /* アトラスを転送済みで、1 群以上が揃っている */
-    Texture2D atlas; /* render_close で解放する */
+    /* アトラスを転送済みで、1 群以上が揃っている */
+    bool enabled;
+    /* render_close で解放する */
+    Texture2D atlas;
     /* 一筆龍の帯胴体・縁の専用反復テクスチャ（render_close で解放する） */
     Texture2D ryu_band_tex;
     Texture2D ryu_band_halo_tex;
+    /* 水墨外周背景テクスチャ（render_close で解放する） */
+    Texture2D bg_tex[SPR_BG_COUNT];
     bool present[SPR_COUNT];
     bool group_ok[SPR_GROUP_COUNT];
     int32_t loaded;
     int32_t groups_ok;
-    double load_ms; /* 起動時の読み込み・縁取り・転送にかかった時間 */
+    int32_t bgs_loaded;
+    /* 起動時の読み込み・縁取り・転送にかかった時間 */
+    double load_ms;
 } SpriteBank;
 
 /* 1 フレームの描画計画。毎フレーム作り直し、縁取り・体・乗算・芯の各段で共有する */

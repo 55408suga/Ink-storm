@@ -445,11 +445,14 @@ static bool unfilter_rgba8(const uint8_t *raw, int32_t w, int32_t h, uint8_t *rg
     return true;
 }
 
+_Static_assert(SPRITE_BG_W >= SPRITE_CANVAS_MAX && SPRITE_BG_H >= SPRITE_CANVAS_MAX,
+               "background PNG bounds must cover sprite canvases");
+
 bool png_rgba_decode(const uint8_t *png, size_t png_size, int32_t expect_w, int32_t expect_h,
                      uint8_t *rgba_out, size_t rgba_cap, uint8_t *raw_scratch, size_t raw_cap)
 {
     if (png == NULL || rgba_out == NULL || raw_scratch == NULL || expect_w <= 0 || expect_h <= 0 ||
-        expect_w > SPRITE_CANVAS_MAX || expect_h > SPRITE_CANVAS_MAX ||
+        expect_w > SPRITE_BG_W || expect_h > SPRITE_BG_H ||
         !sprite_png_validate(png, png_size, expect_w, expect_h)) {
         return false;
     }
