@@ -13,23 +13,57 @@ static const int k_battle_melody[8] = {0, 2, 3, 2, 4, 3, 2, 0};
 static const int k_boss_melody[8] = {0, 4, 3, 5, 2, 4, 5, 7};
 static const int k_victory_notes[5] = {0, 2, 4, 5, 7};
 
+static bool track_is_external(const AudioState *audio, BgmTrack track)
+{
+    if (audio->external_bgm_mask != 0u) {
+        const int t = (int)track;
+        return t > 0 && t < 32 && (audio->external_bgm_mask & (UINT32_C(1) << (unsigned)t)) != 0u;
+    }
+    return audio->external_bgm;
+}
+
+static bool track_has_proc_bgm(const AudioState *audio, BgmTrack track)
+{
+    return track != BGM_NONE && !track_is_external(audio, track);
+}
+
 void audio_bgm_apply_track(AudioState *audio, BgmTrack next)
 {
     if (next == audio->active_bgm) {
         return;
     }
-    if (next != BGM_NONE && next == audio->prev_bgm && audio->xfade_t < 1.0f) {
+    const bool fading = audio->xfade_t < 1.0f;
+    const float u = fading ? ink_clampf(audio->xfade_t, 0.0f, 1.0f) : 1.0f;
+    const float cur_gain = u;
+    const float prev_gain =
+        fading ? ink_clampf(audio->bgm_prev_start_gain * (1.0f - u), 0.0f, 1.0f) : 0.0f;
+
+    if (next != BGM_NONE && next == audio->prev_bgm && fading) {
         const AudioBgmSynth tmp = audio->bgm_cur;
         audio->bgm_cur = audio->bgm_prev;
         audio->bgm_prev = tmp;
         audio->prev_bgm = audio->active_bgm;
         audio->active_bgm = next;
-        audio->xfade_t = 1.0f - audio->xfade_t;
+        if (prev_gain >= 1.0f - 1e-6f) {
+            audio->xfade_t = 1.0f;
+            audio->bgm_prev_start_gain = 0.0f;
+        } else {
+            audio->xfade_t = prev_gain;
+            audio->bgm_prev_start_gain = ink_clampf(cur_gain / (1.0f - prev_gain), 0.0f, 1.0f);
+        }
         return;
     }
-    audio->bgm_prev = audio->bgm_cur;
+
+    const float cur_loud = track_has_proc_bgm(audio, audio->active_bgm) ? cur_gain : 0.0f;
+    const float prev_loud = track_has_proc_bgm(audio, audio->prev_bgm) ? prev_gain : 0.0f;
+    if (cur_loud >= prev_loud) {
+        audio->bgm_prev = audio->bgm_cur;
+        audio->prev_bgm = audio->active_bgm;
+        audio->bgm_prev_start_gain = cur_gain;
+    } else {
+        audio->bgm_prev_start_gain = prev_gain;
+    }
     memset(&audio->bgm_cur, 0, sizeof audio->bgm_cur);
-    audio->prev_bgm = audio->active_bgm;
     audio->active_bgm = next;
     audio->xfade_t = 0.0f;
 }
@@ -45,15 +79,6 @@ static void wrap_deck_phases(AudioBgmSynth *deck)
     if (deck->koto_ph > 1000.0f) {
         deck->koto_ph -= 1000.0f;
     }
-}
-
-static bool track_is_external(const AudioState *audio, BgmTrack track)
-{
-    if (audio->external_bgm_mask != 0u) {
-        const int t = (int)track;
-        return t > 0 && t < 32 && (audio->external_bgm_mask & (UINT32_C(1) << (unsigned)t)) != 0u;
-    }
-    return audio->external_bgm;
 }
 
 static float sample_track(const AudioState *audio, AudioBgmSynth *deck, BgmTrack track,
@@ -196,10 +221,11 @@ float audio_bgm_step(AudioState *audio, float nz)
         const float prev = audio->prev_bgm == BGM_NONE
                                ? wind_sig * 0.35f
                                : sample_track(audio, &audio->bgm_prev, audio->prev_bgm, wind_sig);
-        out = prev * (1.0f - audio->xfade_t) + cur * audio->xfade_t;
+        out = prev * (audio->bgm_prev_start_gain * (1.0f - audio->xfade_t)) + cur * audio->xfade_t;
         audio->xfade_t += k_xfade_step;
-        if (audio->xfade_t > 1.0f) {
+        if (audio->xfade_t >= 1.0f) {
             audio->xfade_t = 1.0f;
+            audio->bgm_prev_start_gain = 0.0f;
         }
     } else {
         out = sample_track(audio, &audio->bgm_cur, audio->active_bgm, wind_sig);

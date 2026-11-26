@@ -1190,12 +1190,13 @@ static void test_esc_resume_with_held_lmb_suppresses_paint(void)
     TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
 }
 
-static int g_fail_once_fopen_calls = 0;
+static int g_fail_fopen_calls = 0;
+static int g_fail_fopen_limit = 0;
 
-static FILE *test_fail_once_fopen(const char *path, const char *mode)
+static FILE *test_fail_n_fopen(const char *path, const char *mode)
 {
-    ++g_fail_once_fopen_calls;
-    if (g_fail_once_fopen_calls == 1) {
+    ++g_fail_fopen_calls;
+    if (g_fail_fopen_calls <= g_fail_fopen_limit) {
         errno = EIO;
         return NULL;
     }
@@ -1242,15 +1243,16 @@ static void test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save
     meta_init_default(&meta);
     bool dirty = false;
     MetaSettleBreakdown br = {0};
-    g_fail_once_fopen_calls = 0;
-    const SaveIoOps fail_once_ops = {.fopen = test_fail_once_fopen};
+    g_fail_fopen_calls = 0;
+    g_fail_fopen_limit = 1;
+    const SaveIoOps fail_once_ops = {.fopen = test_fail_n_fopen};
 
-    /* Production exit helper drains hitstop + victory aftermath and settles 1 campaign clear,
-     * leaving dirty=true when the first save write fails transiently. */
-    TEST_ASSERT_FALSE(
+    /* Production exit helper drains hitstop + victory aftermath, settles 1 campaign clear, and
+     * retries a transient first write failure before shutdown so one exit call persists on disk. */
+    TEST_ASSERT_TRUE(
         save_finish_run_on_exit(path, true, &meta, &dirty, g, true, &br, &fail_once_ops));
-    TEST_ASSERT_EQUAL_INT(1, g_fail_once_fopen_calls);
-    TEST_ASSERT_TRUE(dirty);
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
+    TEST_ASSERT_FALSE(dirty);
     TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, g->phase);
     TEST_ASSERT_TRUE(g->run.run_settled);
     TEST_ASSERT_EQUAL_INT32(1, meta.clears);
@@ -1262,18 +1264,10 @@ static void test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save
     TEST_ASSERT_EQUAL_INT32(expected.total_crystals, br.total_crystals);
     TEST_ASSERT_EQUAL_INT32(expected.total_crystals, meta.ink_crystals);
 
-    MetaState missing_check;
-    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_MISSING, save_load(path, &missing_check));
-
-    /* Production dirty-save retry succeeds on the next write and flushes the settled clear. */
-    TEST_ASSERT_TRUE(save_retry_if_dirty(path, true, &meta, &dirty, &fail_once_ops));
-    TEST_ASSERT_EQUAL_INT(2, g_fail_once_fopen_calls);
-    TEST_ASSERT_FALSE(dirty);
-
     /* Calling exit settlement again on an already-settled run is an idempotent no-op. */
     TEST_ASSERT_TRUE(
         save_finish_run_on_exit(path, true, &meta, &dirty, g, true, NULL, &fail_once_ops));
-    TEST_ASSERT_EQUAL_INT(2, g_fail_once_fopen_calls);
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
     TEST_ASSERT_EQUAL_INT32(1, meta.clears);
     TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
     TEST_ASSERT_EQUAL_INT32(expected.total_crystals, meta.ink_crystals);
@@ -1305,6 +1299,66 @@ static void test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save
     TEST_ASSERT_EQUAL_INT32(1, meta.clears);
     TEST_ASSERT_EQUAL_INT32(2, meta.runs_played);
     game_destroy(mid);
+
+    game_destroy(g);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_exit_settlement_double_write_failure_recovers_on_dirty_retry(void)
+{
+    const char *base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    char dir[PATH_MAX];
+    const int dn = snprintf(dir, sizeof dir, "%s/inkstorm-exit2-XXXXXX", base);
+    TEST_ASSERT_TRUE(dn > 0 && (size_t)dn < sizeof dir);
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+
+    char path[PATH_MAX + 32];
+    const int pn = snprintf(path, sizeof path, "%s/save.txt", dir);
+    TEST_ASSERT_TRUE(pn > 0 && (size_t)pn < sizeof path);
+
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+
+    MetaState meta;
+    meta_init_default(&meta);
+    bool dirty = false;
+    g_fail_fopen_calls = 0;
+    g_fail_fopen_limit = 2;
+    const SaveIoOps fail_twice_ops = {.fopen = test_fail_n_fopen};
+
+    /* Initial exit write and built-in exit retry both fail: run settles in memory, dirty stays
+     * set, and nothing is written to disk yet. */
+    TEST_ASSERT_FALSE(
+        save_finish_run_on_exit(path, true, &meta, &dirty, g, true, NULL, &fail_twice_ops));
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
+    TEST_ASSERT_TRUE(dirty);
+    TEST_ASSERT_TRUE(g->run.run_settled);
+    TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
+
+    MetaState missing_check;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_MISSING, save_load(path, &missing_check));
+
+    /* A later retry via save_retry_if_dirty flushes the settled state cleanly. */
+    TEST_ASSERT_TRUE(save_retry_if_dirty(path, true, &meta, &dirty, &fail_twice_ops));
+    TEST_ASSERT_EQUAL_INT(3, g_fail_fopen_calls);
+    TEST_ASSERT_FALSE(dirty);
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(1, loaded.runs_played);
+
+    /* An earlier mid-run dirty flag (without settling a new run) is also flushed on exit. */
+    meta.ink_crystals += 55;
+    dirty = true;
+    TEST_ASSERT_TRUE(save_finish_run_on_exit(path, true, &meta, &dirty, g, false, NULL, NULL));
+    TEST_ASSERT_FALSE(dirty);
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(meta.ink_crystals, loaded.ink_crystals);
 
     game_destroy(g);
     (void)remove(path);
@@ -1349,5 +1403,6 @@ int main(void)
     RUN_TEST(test_bgm_pause_duck_ramps_smoothly);
     RUN_TEST(test_esc_resume_with_held_lmb_suppresses_paint);
     RUN_TEST(test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save);
+    RUN_TEST(test_exit_settlement_double_write_failure_recovers_on_dirty_retry);
     return UNITY_END();
 }

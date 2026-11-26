@@ -249,10 +249,12 @@ bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bo
         }
     }
 
-    if (settled_now) {
-        return save_persist_meta(path, enabled, meta, dirty, ops);
+    bool local_dirty = false;
+    bool *dirty_flag = dirty != NULL ? dirty : &local_dirty;
+    if (settled_now && save_persist_meta(path, enabled, meta, dirty_flag, ops)) {
+        return true;
     }
-    return save_retry_if_dirty(path, enabled, meta, dirty, ops);
+    return save_retry_if_dirty(path, enabled, meta, dirty_flag, ops);
 }
 
 static bool files_identical(const char *a, const char *b)

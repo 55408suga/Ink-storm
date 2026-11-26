@@ -1920,6 +1920,162 @@ static void test_audio_mixed_procedural_to_external_crossfade_fades_out_smoothly
     game_destroy(g);
 }
 
+static void test_audio_procedural_bgm_rapid_mid_fade_switch_preserves_outgoing_gain(void)
+{
+    enum {
+        WARMUP = AUDIO_SAMPLE_RATE * 2 + 256,
+        EARLY_STEP = AUDIO_SAMPLE_RATE / 10,
+        LATE_STEP = AUDIO_SAMPLE_RATE / 3 + 256,
+        WIN = 256,
+        FADE_TAIL = AUDIO_SAMPLE_RATE * 3 / 5
+    };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *ref = calloc(1, sizeof *ref);
+    AudioState *ref_full = calloc(1, sizeof *ref_full);
+    int16_t *warm = calloc(WARMUP, sizeof *warm);
+    int16_t *step_buf = calloc(LATE_STEP, sizeof *step_buf);
+    int16_t *xfade = calloc(WIN, sizeof *xfade);
+    int16_t *cont = calloc(WIN, sizeof *cont);
+    int16_t *full_b = calloc(WIN, sizeof *full_b);
+    int16_t *tail = calloc(FADE_TAIL, sizeof *tail);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(ref);
+    TEST_ASSERT_NOT_NULL(ref_full);
+    TEST_ASSERT_NOT_NULL(warm);
+    TEST_ASSERT_NOT_NULL(step_buf);
+    TEST_ASSERT_NOT_NULL(xfade);
+    TEST_ASSERT_NOT_NULL(cont);
+    TEST_ASSERT_NOT_NULL(full_b);
+    TEST_ASSERT_NOT_NULL(tail);
+
+    /* Case 1: Early mid-fade A (Lobby) -> B (Battle) -> C (Boss) while A (~0.8) is still louder
+     * than B (~0.2). A must keep fading monotonically from ~0.8 instead of cutting off or jumping
+     * B to 1.0. */
+    audio_init(a, UINT64_C(44));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    a->wind_target = 0.0f;
+    audio_render(a, warm, WARMUP);
+    TEST_ASSERT_TRUE(a->bgm_cur.koto_env > 0.10f);
+
+    game_debug_start_wave(g, 0);
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    a->state_q[a->state_q_head].wind_target = 0.0f;
+    audio_render(a, step_buf, EARLY_STEP);
+
+    const float prev_gain_early = a->bgm_prev_start_gain * (1.0f - a->xfade_t);
+    const uint64_t lobby_sample_before = a->bgm_prev.sample;
+    TEST_ASSERT_TRUE(prev_gain_early > 0.70f && prev_gain_early < 0.85f);
+
+    /* Reference renders outgoing Lobby deck A alone at prev_gain_early. */
+    *ref = *a;
+    ref->active_bgm = BGM_NONE;
+    ref->xfade_t = 0.0f;
+    ref->bgm_prev_start_gain = prev_gain_early;
+
+    g->run.wave_index = GAME_BOSS_WAVE_INDEX;
+    audio_consume_events(a, g);
+    a->state_q[a->state_q_head].wind_target = 0.0f;
+    a->state_q[a->state_q_head].at_sample = a->samples_rendered;
+    audio_render(a, xfade, WIN);
+    audio_render(ref, cont, WIN);
+
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, a->active_bgm);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, a->prev_bgm);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, prev_gain_early, a->bgm_prev_start_gain);
+    TEST_ASSERT_EQUAL_UINT64(lobby_sample_before + WIN, a->bgm_prev.sample);
+    TEST_ASSERT_INT32_WITHIN(2, (int32_t)cont[0], (int32_t)xfade[0]);
+    TEST_ASSERT_TRUE(rms_of(cont, WIN) > 300.0);
+    TEST_ASSERT_TRUE(rms_of(xfade, WIN) > rms_of(cont, WIN) * 0.85);
+
+    /* Outgoing gain decreases monotonically across the remainder of the fade. */
+    float last_out_gain = a->bgm_prev_start_gain * (1.0f - a->xfade_t);
+    for (int step = 0; step < 12; ++step) {
+        audio_render(a, tail, AUDIO_SAMPLES_PER_TICK);
+        const float out_gain = a->bgm_prev_start_gain * (1.0f - a->xfade_t);
+        TEST_ASSERT_TRUE(out_gain <= last_out_gain + 1e-6f);
+        last_out_gain = out_gain;
+    }
+
+    /* Mid-fade return C -> A preserves both decks' instantaneous gains cleanly. */
+    const float cur_before_ret = a->xfade_t;
+    const float prev_before_ret = a->bgm_prev_start_gain * (1.0f - a->xfade_t);
+    TEST_ASSERT_TRUE(cur_before_ret > 0.10f && cur_before_ret < 0.90f);
+    TEST_ASSERT_TRUE(prev_before_ret > 0.05f && prev_before_ret < 0.80f);
+    audio_set_lobby_mode(a, true);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, a->active_bgm);
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, a->prev_bgm);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, prev_before_ret, a->xfade_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, cur_before_ret, a->bgm_prev_start_gain * (1.0f - a->xfade_t));
+    audio_render(a, tail, FADE_TAIL);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, a->xfade_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, a->bgm_prev_start_gain);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    /* Case 2: Late mid-fade A (Lobby) -> B (Boss) -> C (Battle) when B (~0.68) is louder than A
+     * (~0.32). B is promoted to outgoing at ~0.68 rather than jumping to 1.0. */
+    audio_init(a, UINT64_C(45));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    a->wind_target = 0.0f;
+    audio_render(a, warm, WARMUP);
+
+    g->run.wave_index = GAME_BOSS_WAVE_INDEX;
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    a->state_q[a->state_q_head].wind_target = 0.0f;
+    audio_render(a, step_buf, LATE_STEP);
+
+    const float cur_gain_late = a->xfade_t;
+    TEST_ASSERT_TRUE(cur_gain_late > 0.62f && cur_gain_late < 0.74f);
+
+    *ref = *a;
+    ref->prev_bgm = BGM_BOSS;
+    ref->bgm_prev = ref->bgm_cur;
+    ref->active_bgm = BGM_NONE;
+    ref->xfade_t = 0.0f;
+    ref->bgm_prev_start_gain = cur_gain_late;
+
+    *ref_full = *ref;
+    ref_full->bgm_prev_start_gain = 1.0f;
+
+    g->run.wave_index = 0;
+    audio_consume_events(a, g);
+    a->state_q[a->state_q_head].wind_target = 0.0f;
+    a->state_q[a->state_q_head].at_sample = a->samples_rendered;
+    audio_render(a, xfade, WIN);
+    audio_render(ref, cont, WIN);
+    audio_render(ref_full, full_b, WIN);
+
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, a->active_bgm);
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, a->prev_bgm);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, cur_gain_late, a->bgm_prev_start_gain);
+    TEST_ASSERT_INT32_WITHIN(2, (int32_t)cont[0], (int32_t)xfade[0]);
+    const double full_rms = rms_of(full_b, WIN);
+    TEST_ASSERT_TRUE(full_rms > 1000.0);
+    TEST_ASSERT_TRUE(rms_of(xfade, WIN) < full_rms * 0.80);
+
+    audio_render(a, tail, FADE_TAIL);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, a->xfade_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, a->bgm_prev_start_gain);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, a->active_bgm);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(tail);
+    free(full_b);
+    free(cont);
+    free(xfade);
+    free(step_buf);
+    free(warm);
+    free(ref_full);
+    free(ref);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1965,5 +2121,6 @@ int main(void)
     RUN_TEST(test_audio_procedural_bgm_crossfade_preserves_outgoing_melody);
     RUN_TEST(test_audio_external_bgm_headroom_prevents_live_clipping);
     RUN_TEST(test_audio_mixed_procedural_to_external_crossfade_fades_out_smoothly);
+    RUN_TEST(test_audio_procedural_bgm_rapid_mid_fade_switch_preserves_outgoing_gain);
     return UNITY_END();
 }

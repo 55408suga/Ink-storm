@@ -44,6 +44,7 @@ void audio_init(AudioState *audio, uint64_t seed)
     audio->active_bgm = BGM_NONE;
     audio->prev_bgm = BGM_NONE;
     audio->xfade_t = 1.0f;
+    audio->bgm_prev_start_gain = 0.0f;
     audio->bgm_duck = 1.0f;
     audio->brush_rng = seed ^ UINT64_C(0x8f1bbcdcca62c1d6);
     audio_brush_reset_dsp(audio);
@@ -742,8 +743,9 @@ bool audio_validate_finite(const AudioState *audio)
     if (audio == NULL) {
         return false;
     }
-    if (!isfinite(audio->xfade_t) || !isfinite(audio->wind_target) || !isfinite(audio->wind_env) ||
-        !isfinite(audio->wind_lp) || !isfinite(audio->wind_bp) || !isfinite(audio->bgm_duck) ||
+    if (!isfinite(audio->xfade_t) || !isfinite(audio->bgm_prev_start_gain) ||
+        !isfinite(audio->wind_target) || !isfinite(audio->wind_env) || !isfinite(audio->wind_lp) ||
+        !isfinite(audio->wind_bp) || !isfinite(audio->bgm_duck) ||
         !bgm_synth_finite(&audio->bgm_cur) || !bgm_synth_finite(&audio->bgm_prev)) {
         return false;
     }

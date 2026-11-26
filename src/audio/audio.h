@@ -122,6 +122,7 @@ typedef struct {
     BgmTrack active_bgm;
     BgmTrack prev_bgm;
     float xfade_t;
+    float bgm_prev_start_gain;
     bool has_consumed;
     bool lobby_mode;
     bool external_bgm;
