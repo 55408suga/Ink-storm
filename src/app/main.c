@@ -1,5 +1,6 @@
 #include "app_loop.h"
 #include "audio.h"
+#include "audio_out.h"
 #include "cli.h"
 #include "demo.h"
 #include "game.h"
@@ -57,8 +58,14 @@ int main(int argc, char **argv)
             if (opts.mode == APP_MODE_SHOWCASE) {
                 status = app_run_showcase(game, render, &opts, fault_mask);
             } else if (opts.mode == APP_MODE_DEMO) {
+                if (opts.smoke_frames == 0 && opts.snap_dir == NULL) {
+                    audio_out_configure_env();
+                }
                 status = app_run_demo(game, audio, render, &opts, fault_mask);
             } else {
+                if (opts.smoke_frames == 0) {
+                    audio_out_configure_env();
+                }
                 status = app_run_window_loop(game, audio, render, &opts, fault_mask);
             }
             free(render);

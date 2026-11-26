@@ -95,6 +95,7 @@ typedef struct {
 typedef struct {
     uint64_t samples_rendered;
     uint64_t next_tick_sample;
+    uint64_t last_state_sample;
     uint64_t consumed_ticks;
     uint64_t events_consumed;
     uint64_t voice_seq;
@@ -110,7 +111,9 @@ typedef struct {
     bool has_consumed;
     bool lobby_mode;
     bool external_bgm;
+    uint32_t external_bgm_mask;
     bool paused;
+    bool realtime_mode;
 
     /* Continuous brush stroke */
     float brush_target;
@@ -139,6 +142,8 @@ typedef struct {
     size_t brush_flow_len;
     const int16_t *brush_swish_pcm;
     size_t brush_swish_len;
+    /* The grains keep the whole swish for texture; only the one-shot skips its quiet lead-in. */
+    size_t brush_swish_onset;
 
     /* Ambient wind */
     float bgm_duck;
@@ -179,7 +184,12 @@ void audio_init(AudioState *audio, uint64_t seed);
 void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t se);
 void audio_set_lobby_mode(AudioState *audio, bool lobby);
 void audio_set_external_bgm(AudioState *audio, bool external_active);
+/* Bitmask of loaded external BgmTrack slots (1u << track) so scene transitions suppress the
+ * procedural fallback on the very next callback without waiting for the main-thread pump. */
+void audio_set_external_bgm_mask(AudioState *audio, uint32_t track_mask);
 void audio_set_paused(AudioState *audio, bool paused);
+/* Off by default so offline and batched rendering keep their full sub-tick schedule. */
+void audio_set_realtime_mode(AudioState *audio, bool realtime);
 /* The caller keeps both buffers alive until it clears them with (NULL, 0, NULL, 0). */
 void audio_set_brush_samples(AudioState *audio, const int16_t *flow_pcm, size_t flow_len,
                              const int16_t *swish_pcm, size_t swish_len);

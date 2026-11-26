@@ -29,6 +29,34 @@ typedef struct {
     HintQueue hints;
 } AppRunContext;
 
+static void play_ui_cue(AudioState *audio, AudioUiCue cue)
+{
+    audio_out_lock();
+    audio_trigger_ui_cue(audio, cue);
+    audio_out_unlock();
+}
+
+static void play_ui_stamp(AudioState *audio)
+{
+    audio_out_lock();
+    audio_trigger_ui_stamp(audio);
+    audio_out_unlock();
+}
+
+static void set_audio_paused(AudioState *audio, bool paused)
+{
+    audio_out_lock();
+    audio_set_paused(audio, paused);
+    audio_out_unlock();
+}
+
+static void consume_run_audio(AudioState *audio, const GameState *game)
+{
+    audio_out_lock();
+    audio_consume_events(audio, game);
+    audio_out_unlock();
+}
+
 static void sync_meta_view(AppRunContext *ctx)
 {
     ctx->ui.meta_view = ctx->meta;
@@ -40,7 +68,9 @@ static void sync_meta_view(AppRunContext *ctx)
 static void apply_all_settings(AppRunContext *ctx, RenderState *render, AudioState *audio)
 {
     const SettingsState *st = &ctx->meta.settings;
+    audio_out_lock();
     audio_set_volumes(audio, st->master_vol, st->bgm_vol, st->se_vol);
+    audio_out_unlock();
     render_set_post_enabled(render, ctx->cli_use_post && st->post_shader_on);
     render_set_lang_mode(render, (UiLangMode)st->ui_lang);
     sync_meta_view(ctx);
@@ -88,8 +118,10 @@ static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *rend
     clear_hint_queue(ctx);
     sync_meta_view(ctx);
     if (audio != NULL) {
+        audio_out_lock();
         audio_set_paused(audio, false);
         audio_set_lobby_mode(audio, false);
+        audio_out_unlock();
     }
 }
 
@@ -108,8 +140,10 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
     render_reset_vfx(render, UINT64_C(1));
     sync_meta_view(ctx);
     if (audio != NULL) {
+        audio_out_lock();
         audio_set_paused(audio, false);
         audio_set_lobby_mode(audio, true);
+        audio_out_unlock();
     }
 }
 
@@ -308,9 +342,9 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
     apply_all_settings(ctx, render, audio);
     persist_meta(ctx);
     if (row == 0 || row == 2) {
-        audio_trigger_ui_cue(audio, AUDIO_UI_PREVIEW);
+        play_ui_cue(audio, AUDIO_UI_PREVIEW);
     } else {
-        audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
+        play_ui_cue(audio, AUDIO_UI_CLICK);
     }
 }
 
@@ -323,7 +357,9 @@ static void step_lobby_sandbox(const AppRunContext *ctx, GameState *game, Render
     game_sandbox_set_brush(game, ctx->ui.selected_brush);
     const BrushInput in = input_latch_take_subtick(latch, remaining_ticks);
     game_step_sandbox(game, interactive ? &in : NULL);
+    audio_out_lock();
     audio_consume_lobby_events(audio, game);
+    audio_out_unlock();
     render_consume_events(render, game);
     render_update_vfx(render, game, INK_FIXED_DT);
 }
@@ -335,7 +371,7 @@ static void cycle_lobby_brush(AppRunContext *ctx, AudioState *audio, int32_t ste
     }
     const int32_t n = BRUSH_STYLE_COUNT;
     ctx->ui.selected_brush = (BrushStyleId)((((int32_t)ctx->ui.selected_brush + step) % n + n) % n);
-    audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
+    play_ui_cue(audio, AUDIO_UI_CLICK);
 }
 
 static void on_scene_entered(AppRunContext *ctx, InputLatch *latch, const MenuInput *menu)
@@ -360,19 +396,19 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
 {
     switch (menu->action) {
     case MENU_ACT_LOBBY_SORTIE:
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         ctx->ui.scene = UI_SCENE_BRUSH_SELECT;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
     case MENU_ACT_LOBBY_BOKUAN:
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         ctx->ui.scene = UI_SCENE_BOKUAN;
         ctx->ui.shop_cursor = 0;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         sync_meta_view(ctx);
         break;
     case MENU_ACT_LOBBY_SETTINGS:
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         ctx->ui.settings_return_scene = UI_SCENE_TITLE_LOBBY;
         ctx->ui.scene = UI_SCENE_SETTINGS;
         ctx->ui.settings_cursor = 0;
@@ -385,13 +421,13 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->quit_requested = true;
         break;
     case MENU_ACT_BRUSH_PICK:
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         start_new_run(ctx, game, render, audio, (BrushStyleId)menu->arg);
         frame_clock_reset(clock);
         input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y, menu->left_down);
         break;
     case MENU_ACT_BACK:
-        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
+        play_ui_cue(audio, AUDIO_UI_BACK);
         if (ctx->ui.scene == UI_SCENE_SETTINGS) {
             persist_meta(ctx);
             ctx->ui.settings_notice_t = 0.0f;
@@ -406,22 +442,22 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_SHOP_BUY_UPG:
         if (meta_buy_upgrade(&ctx->meta, (MetaUpgradeKind)menu->arg)) {
-            audio_trigger_ui_stamp(audio);
+            play_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
             refresh_sandbox_meta(ctx, game);
         } else {
-            audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
+            play_ui_cue(audio, AUDIO_UI_DENY);
         }
         break;
     case MENU_ACT_SHOP_BUY_RELIC:
         if (meta_buy_relic_unlock(&ctx->meta, (uint32_t)menu->arg)) {
-            audio_trigger_ui_stamp(audio);
+            play_ui_stamp(audio);
             sync_meta_view(ctx);
             persist_meta(ctx);
             refresh_sandbox_meta(ctx, game);
         } else {
-            audio_trigger_ui_cue(audio, AUDIO_UI_DENY);
+            play_ui_cue(audio, AUDIO_UI_DENY);
         }
         break;
     case MENU_ACT_SETTINGS_CHANGE:
@@ -429,7 +465,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_SETTINGS_RESET_HINTS:
         ctx->meta.seen_hints_mask = 0u;
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         ctx->ui.settings_notice_kind = 1;
         ctx->ui.settings_notice_t = 1.8f;
         sync_meta_view(ctx);
@@ -438,25 +474,25 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_SETTINGS_RESET_DEFAULTS:
         ctx->meta.settings = meta_settings_default();
         apply_all_settings(ctx, render, audio);
-        audio_trigger_ui_stamp(audio);
+        play_ui_stamp(audio);
         ctx->ui.settings_notice_kind = 2;
         ctx->ui.settings_notice_t = 1.8f;
         persist_meta(ctx);
         break;
     case MENU_ACT_TOGGLE_PAUSE:
-        audio_trigger_ui_cue(audio, AUDIO_UI_CLICK);
+        play_ui_cue(audio, AUDIO_UI_CLICK);
         ctx->ui.paused = true;
         ctx->ui.pause_cursor = 0;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
-        audio_set_paused(audio, true);
+        set_audio_paused(audio, true);
         break;
     case MENU_ACT_PAUSE_RESUME:
-        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
+        play_ui_cue(audio, AUDIO_UI_BACK);
         ctx->ui.paused = false;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
-        audio_set_paused(audio, false);
+        set_audio_paused(audio, false);
         frame_clock_reset(clock);
         /* Always re-anchor the latch: a stale pre-pause position would replay as one huge stroke
          * and a queued key would fire on the first resumed tick. */
@@ -483,7 +519,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
     case MENU_ACT_CONFIRM_NO:
-        audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
+        play_ui_cue(audio, AUDIO_UI_BACK);
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
@@ -505,14 +541,14 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_RESULT_ENDLESS:
         if (render->victory_scroll_t >= 0.75f && game->phase == RUN_PHASE_VICTORY &&
             !game->run.run_settled && game->run.endless_loop == 0) {
-            audio_trigger_ui_stamp(audio);
+            play_ui_stamp(audio);
             const GameCommand cmd = {.type = CMD_START_ENDLESS, .arg = 0};
             game_step(game, NULL, &cmd);
             ctx->ui.settle_preview = false;
             ctx->ui.settled = false;
             ctx->ui.hover_choice = UI_HOVER_NONE;
             render->victory_scroll_t = 0.0f;
-            audio_consume_events(audio, game);
+            consume_run_audio(audio, game);
             render_consume_events(render, game);
             frame_clock_reset(clock);
             input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
@@ -521,7 +557,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_RESULT_LOBBY:
         if (render->victory_scroll_t >= 0.75f) {
-            audio_trigger_ui_cue(audio, AUDIO_UI_BACK);
+            play_ui_cue(audio, AUDIO_UI_BACK);
             settle_victory_if_pending(ctx, game);
             enter_lobby_scene(ctx, game, render, audio);
             frame_clock_reset(clock);
@@ -529,7 +565,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         break;
     case MENU_ACT_RESULT_RETRY:
         if (render->victory_scroll_t >= 0.75f) {
-            audio_trigger_ui_stamp(audio);
+            play_ui_stamp(audio);
             settle_victory_if_pending(ctx, game);
             start_new_run(ctx, game, render, audio, ctx->ui.selected_brush);
             frame_clock_reset(clock);
@@ -605,7 +641,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
             const BrushInput in = game_autoplay_input(game);
             const GameCommand cmd = game_autoplay_command(game);
             game_step(game, &in, &cmd);
-            audio_consume_events(audio, game);
+            consume_run_audio(audio, game);
             render_consume_events(render, game);
             render_update_vfx(render, game, INK_FIXED_DT);
             app_after_tick(&ctx, game);
@@ -645,7 +681,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                         cmd = (GameCommand){.type = CMD_NONE, .arg = 0};
                     }
                     game_step(game, &in, &cmd);
-                    audio_consume_events(audio, game);
+                    consume_run_audio(audio, game);
                     render_consume_events(render, game);
                     render_update_vfx(render, game, INK_FIXED_DT);
                     app_after_tick(&ctx, game);

@@ -1194,6 +1194,354 @@ static void test_audio_skill_voices_blend_attached_loops(void)
     game_destroy(g);
 }
 
+enum { ONSET_WINDOW = AUDIO_SAMPLE_RATE / 200, SWISH_LEAD_IN = AUDIO_SAMPLE_RATE * 45 / 1000 };
+
+static double loudest_window_rms(const int16_t *buf, size_t from, size_t to)
+{
+    double loudest = 0.0;
+    for (size_t at = from; at + ONSET_WINDOW <= to; at += ONSET_WINDOW / 5u) {
+        const double r = rms_of(buf + at, ONSET_WINDOW);
+        loudest = r > loudest ? r : loudest;
+    }
+    return loudest;
+}
+
+static void render_cast(AudioState *a, GameState *g, const TestLoops *loops, GameEventType type,
+                        int32_t style, int16_t *buf, size_t n)
+{
+    start_brush_audio(a, loops);
+    g->config.brush_style = (BrushStyleId)style;
+    g->player.dry = false;
+    g->player.surge_t = 0.0f;
+    one_event(g, type);
+    audio_consume_events(a, g);
+    audio_render(a, buf, n);
+}
+
+static void test_audio_gale_and_cyclone_reach_full_voice_within_20ms_past_a_swish_lead_in(void)
+{
+    enum {
+        N = AUDIO_SAMPLE_RATE / 2,
+        EARLY = AUDIO_SAMPLE_RATE / 50,
+        PRE_ROLL = AUDIO_SAMPLE_RATE * 3 / 1000,
+        FLOW = AUDIO_SAMPLE_RATE * 3 / 2,
+        SWISH = AUDIO_SAMPLE_RATE / 3
+    };
+    static const GameEventType k_skills[2] = {EV_GALE, EV_CYCLONE};
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *flow = calloc(FLOW, sizeof *flow);
+    int16_t *swish = calloc(SWISH, sizeof *swish);
+    int16_t *buf = calloc(N, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(flow);
+    TEST_ASSERT_NOT_NULL(swish);
+    TEST_ASSERT_NOT_NULL(buf);
+    fill_test_loop(flow, FLOW, UINT64_C(0x71));
+    fill_test_loop(swish, SWISH, UINT64_C(0x72));
+    /* At the plain loop level the swish hides under the pink band, so a late swish would pass. */
+    for (size_t i = 0; i < SWISH; ++i) {
+        swish[i] = (int16_t)(i < SWISH_LEAD_IN ? swish[i] / 40 : swish[i] * 3);
+    }
+    const TestLoops loops = {flow, FLOW, swish, SWISH};
+
+    start_brush_audio(a, &loops);
+    TEST_ASSERT_NOT_NULL(a->brush_swish_pcm);
+    const size_t attack = SWISH_LEAD_IN - (size_t)(a->brush_swish_pcm - swish);
+    TEST_ASSERT_TRUE(a->brush_swish_onset + PRE_ROLL >= attack);
+    TEST_ASSERT_TRUE(a->brush_swish_onset < attack);
+    audio_set_brush_samples(a, NULL, 0u, NULL, 0u);
+    TEST_ASSERT_EQUAL_size_t(0u, a->brush_swish_onset);
+
+    for (int k = 0; k < 2; ++k) {
+        for (int32_t style = 0; style < BRUSH_STYLE_COUNT; ++style) {
+            for (int with_loops = 0; with_loops < 2; ++with_loops) {
+                render_cast(a, g, with_loops ? &loops : NULL, k_skills[k], style, buf, N);
+                const double early = loudest_window_rms(buf, 0u, EARLY);
+                const double loudest = loudest_window_rms(buf, 0u, N);
+                TEST_ASSERT_TRUE(loudest > 0.0);
+                TEST_ASSERT_TRUE_MESSAGE(early >= 0.9 * loudest, "skill voice slow to speak");
+                const int32_t peak = peak_abs(buf, N);
+                /* At full 100/100 gain the voice stays clear of hard saturation; at default 80/90
+                 * game gain (~0.72x) this leaves ample mixer headroom for external BGM. */
+                TEST_ASSERT_TRUE(peak >= 1000 && peak <= 29000);
+                TEST_ASSERT_TRUE(audio_validate_finite(a));
+            }
+        }
+    }
+    free(buf);
+    free(swish);
+    free(flow);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_swish_onset_ignores_early_spike_and_late_loud_tail(void)
+{
+    enum {
+        SWISH = AUDIO_SAMPLE_RATE / 3,
+        LATE_FROM = AUDIO_SAMPLE_RATE * 220 / 1000,
+        PRE_ROLL = AUDIO_SAMPLE_RATE * 3 / 1000,
+        MIN_REMAINING = 1024
+    };
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *swish = calloc(SWISH, sizeof *swish);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(swish);
+
+    /* Case 1: isolated full-scale click inside quiet lead-in must not anchor onset at 0. */
+    fill_test_loop(swish, SWISH, UINT64_C(0x91));
+    for (size_t i = 0; i < SWISH; ++i) {
+        swish[i] = (int16_t)(i < SWISH_LEAD_IN ? swish[i] / 40 : swish[i] * 3);
+    }
+    swish[10] = INT16_MAX;
+    audio_init(a, UINT64_C(1));
+    audio_set_brush_samples(a, NULL, 0u, swish, SWISH);
+    TEST_ASSERT_NOT_NULL(a->brush_swish_pcm);
+    const size_t attack1 = SWISH_LEAD_IN - (size_t)(a->brush_swish_pcm - swish);
+    TEST_ASSERT_TRUE(a->brush_swish_onset + PRE_ROLL >= attack1);
+    TEST_ASSERT_TRUE(a->brush_swish_onset < attack1);
+
+    /* Case 2: louder late tail must not pull onset past the useful opening body. */
+    fill_test_loop(swish, SWISH, UINT64_C(0x92));
+    for (size_t i = 0; i < SWISH; ++i) {
+        if (i < SWISH_LEAD_IN) {
+            swish[i] = (int16_t)(swish[i] / 50);
+        } else if (i < LATE_FROM) {
+            swish[i] = (int16_t)(swish[i] / 2);
+        } else {
+            const int32_t boosted = (int32_t)swish[i] * 6;
+            swish[i] =
+                (int16_t)(boosted > INT16_MAX ? INT16_MAX
+                                              : (boosted < -INT16_MAX ? -INT16_MAX : boosted));
+        }
+    }
+    audio_init(a, UINT64_C(2));
+    audio_set_brush_samples(a, NULL, 0u, swish, SWISH);
+    TEST_ASSERT_NOT_NULL(a->brush_swish_pcm);
+    const size_t attack2 = SWISH_LEAD_IN - (size_t)(a->brush_swish_pcm - swish);
+    TEST_ASSERT_TRUE(a->brush_swish_onset + PRE_ROLL >= attack2);
+    TEST_ASSERT_TRUE(a->brush_swish_onset < attack2 + 128u);
+    TEST_ASSERT_TRUE(a->brush_swish_len - a->brush_swish_onset >= (size_t)MIN_REMAINING);
+
+    /* Case 3: isolated full-scale click at index 0 over a quiet (+-256) body. */
+    enum { QUIET_N = 4096, QUIET_LEAD = 1500 };
+    int16_t *quiet = calloc(QUIET_N, sizeof *quiet);
+    TEST_ASSERT_NOT_NULL(quiet);
+    quiet[0] = INT16_MAX;
+    for (size_t i = QUIET_LEAD; i < QUIET_N; ++i) {
+        quiet[i] = (i & 1u) == 0u ? (int16_t)256 : (int16_t)-256;
+    }
+    audio_init(a, UINT64_C(3));
+    audio_set_brush_samples(a, NULL, 0u, quiet, QUIET_N);
+    TEST_ASSERT_NOT_NULL(a->brush_swish_pcm);
+    TEST_ASSERT_TRUE(a->brush_swish_onset + PRE_ROLL >= (size_t)QUIET_LEAD);
+    TEST_ASSERT_TRUE(a->brush_swish_onset < (size_t)QUIET_LEAD);
+
+    free(quiet);
+    free(swish);
+    free(a);
+}
+
+static void test_audio_realtime_mode_caps_queued_lead_at_two_ticks_offline_keeps_full_batch(void)
+{
+    enum { TICKS = 10, AHEAD = 100 };
+    const uint64_t realtime_cap = 2u * (uint64_t)AUDIO_SAMPLES_PER_TICK;
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t buf[AHEAD];
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    for (int realtime = 0; realtime < 2; ++realtime) {
+        audio_init(a, UINT64_C(8));
+        audio_set_realtime_mode(a, realtime != 0);
+        audio_render(a, buf, AHEAD);
+        for (int t = 0; t < TICKS; ++t) {
+            one_event(g, EV_KILL);
+            audio_consume_events(a, g);
+        }
+        const uint64_t now = a->samples_rendered;
+        TEST_ASSERT_EQUAL_INT32(TICKS, a->state_q_count);
+        TEST_ASSERT_EQUAL_INT32(TICKS - 1, a->pending_count);
+        uint64_t prev_at = 0u;
+        for (int t = 0; t < TICKS; ++t) {
+            const uint64_t at = a->state_q[(a->state_q_head + t) % AUDIO_STATE_QUEUE_CAP].at_sample;
+            if (realtime) {
+                TEST_ASSERT_TRUE(at >= now && at <= now + realtime_cap);
+                if (t > 0) {
+                    TEST_ASSERT_TRUE(at > prev_at);
+                }
+            } else {
+                TEST_ASSERT_EQUAL_UINT64(now + (uint64_t)t * AUDIO_SAMPLES_PER_TICK, at);
+            }
+            prev_at = at;
+        }
+        for (int i = 0; i < a->pending_count; ++i) {
+            const uint64_t start =
+                a->pending[(a->pending_head + i) % AUDIO_PENDING_VOICE_CAP].start_sample;
+            const uint64_t tick_at =
+                a->state_q[(a->state_q_head + i + 1) % AUDIO_STATE_QUEUE_CAP].at_sample;
+            if (realtime) {
+                TEST_ASSERT_EQUAL_UINT64(tick_at, start);
+            } else {
+                TEST_ASSERT_EQUAL_UINT64(now + (uint64_t)(i + 1) * AUDIO_SAMPLES_PER_TICK, start);
+            }
+        }
+        TEST_ASSERT_TRUE(audio_validate_finite(a));
+    }
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_realtime_catchup_preserves_brush_onset_at_unaligned_clock(void)
+{
+    enum { AHEAD = 100, BURST = 4, TAIL = AUDIO_SAMPLES_PER_TICK * 4 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(TAIL, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+
+    audio_init(a, UINT64_C(9));
+    audio_set_volumes(a, 100, 0, 100);
+    audio_set_external_bgm(a, true);
+    audio_set_realtime_mode(a, true);
+    audio_render(a, buf, AHEAD);
+
+    for (int t = 0; t < BURST; ++t) {
+        g->player.painting = (t == 0);
+        g->player.stroke_speed = (t == 0) ? 700.0f : 0.0f;
+        g->event_count = 0;
+        if (t == 0) {
+            one_event(g, EV_KILL);
+        } else if (t == 1) {
+            one_event(g, EV_GALE);
+        }
+        audio_consume_events(a, g);
+    }
+
+    TEST_ASSERT_EQUAL_INT32(BURST, a->state_q_count);
+    const uint64_t t0 = a->state_q[a->state_q_head].at_sample;
+    const uint64_t t1 = a->state_q[(a->state_q_head + 1) % AUDIO_STATE_QUEUE_CAP].at_sample;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)AHEAD, t0);
+    TEST_ASSERT_TRUE(t1 > t0);
+
+    /* Render only up to tick 1: tick 0's brush onset must remain active and build envelope. */
+    const size_t first_span = (size_t)(t1 - t0);
+    audio_render(a, buf, first_span);
+    TEST_ASSERT_TRUE(a->brush_active);
+    TEST_ASSERT_TRUE(a->brush_env > 0.05f);
+
+    audio_render(a, buf, TAIL);
+    TEST_ASSERT_FALSE(a->brush_active);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    /* Recompression after a partial drain must never postpone an already scheduled cue. */
+    audio_init(a, UINT64_C(12));
+    audio_set_realtime_mode(a, true);
+    audio_render(a, buf, AHEAD);
+    for (int t = 0; t < 15; ++t) {
+        g->player.painting = false;
+        g->event_count = 0;
+        if (t == 14) {
+            one_event(g, EV_GALE);
+        }
+        audio_consume_events(a, g);
+    }
+    TEST_ASSERT_EQUAL_INT32(1, a->pending_count);
+    const uint64_t gale_before = a->pending[a->pending_head].start_sample;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)AHEAD + 2u * (uint64_t)AUDIO_SAMPLES_PER_TICK, gale_before);
+
+    audio_render(a, buf, 512u);
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    TEST_ASSERT_EQUAL_INT32(1, a->pending_count);
+    TEST_ASSERT_TRUE(a->pending[a->pending_head].start_sample <= gale_before);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_realtime_stale_brush_releases_when_producer_stalls(void)
+{
+    enum {
+        WARMUP = AUDIO_SAMPLES_PER_TICK * 3,
+        STALL = AUDIO_SAMPLE_RATE / 2,
+        TAIL_WIN = AUDIO_SAMPLE_RATE / 20
+    };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(STALL, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+
+    for (int realtime = 0; realtime < 2; ++realtime) {
+        audio_init(a, UINT64_C(10));
+        audio_set_volumes(a, 100, 0, 100);
+        audio_set_external_bgm(a, true);
+        audio_set_realtime_mode(a, realtime != 0);
+        g->player.painting = true;
+        g->player.stroke_speed = 700.0f;
+        g->event_count = 0;
+        audio_consume_events(a, g);
+
+        audio_render(a, buf, WARMUP);
+        TEST_ASSERT_TRUE(a->brush_active);
+        TEST_ASSERT_TRUE(rms_of(buf, WARMUP) > 100.0);
+
+        audio_render(a, buf, STALL);
+        const double tail_rms = rms_of(buf + (STALL - TAIL_WIN), TAIL_WIN);
+        if (realtime) {
+            TEST_ASSERT_FALSE(a->brush_active);
+            TEST_ASSERT_EQUAL_FLOAT(0.0f, a->brush_target);
+            TEST_ASSERT_TRUE(tail_rms < 25.0);
+        } else {
+            TEST_ASSERT_TRUE(a->brush_active);
+            TEST_ASSERT_TRUE(tail_rms > 100.0);
+        }
+        TEST_ASSERT_TRUE(audio_validate_finite(a));
+    }
+
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_external_bgm_mask_suppresses_lobby_fallback(void)
+{
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *ref = calloc(1, sizeof *ref);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(ref);
+
+    /* Per-track mask suppresses procedural lobby BGM even when external_bgm starts false. */
+    audio_init(a, UINT64_C(11));
+    audio_set_realtime_mode(a, true);
+    audio_set_external_bgm(a, false);
+    audio_set_external_bgm_mask(a, UINT32_C(1) << (unsigned)BGM_LOBBY);
+    audio_set_lobby_mode(a, true);
+
+    audio_init(ref, UINT64_C(11));
+    audio_set_realtime_mode(ref, true);
+    audio_set_external_bgm(ref, true);
+    audio_set_lobby_mode(ref, true);
+
+    int16_t lobby_masked[512];
+    int16_t lobby_ext[512];
+    audio_render(a, lobby_masked, 512u);
+    audio_render(ref, lobby_ext, 512u);
+    TEST_ASSERT_EQUAL_MEMORY(lobby_ext, lobby_masked, sizeof lobby_ext);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(ref);
+    free(a);
+}
+
 static void fill_square_pcm(int16_t *pcm, size_t n)
 {
     for (size_t i = 0; i < n; ++i) {
@@ -1421,6 +1769,12 @@ int main(void)
     RUN_TEST(test_audio_fast_stroke_from_silence_reaches_full_level_by_its_second_tick);
     RUN_TEST(test_audio_brush_loops_shape_the_stroke_and_fall_back_cleanly);
     RUN_TEST(test_audio_skill_voices_blend_attached_loops);
+    RUN_TEST(test_audio_gale_and_cyclone_reach_full_voice_within_20ms_past_a_swish_lead_in);
+    RUN_TEST(test_audio_swish_onset_ignores_early_spike_and_late_loud_tail);
+    RUN_TEST(test_audio_realtime_mode_caps_queued_lead_at_two_ticks_offline_keeps_full_batch);
+    RUN_TEST(test_audio_realtime_catchup_preserves_brush_onset_at_unaligned_clock);
+    RUN_TEST(test_audio_realtime_stale_brush_releases_when_producer_stalls);
+    RUN_TEST(test_audio_external_bgm_mask_suppresses_lobby_fallback);
     RUN_TEST(test_audio_pcm_read_stays_between_its_central_samples);
     RUN_TEST(test_audio_grain_setup_bounds_huge_and_invalid_windows);
     RUN_TEST(test_audio_grain_step_survives_non_finite_and_out_of_range_state);

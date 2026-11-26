@@ -243,13 +243,15 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
     const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
     const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
 
-    const float onset = audio_smoothstep(0.0f, 0.010f, t);
-    const float bloom = 0.78f + 0.22f * audio_smoothstep(0.01f, 0.09f, t);
+    const float onset = audio_smoothstep(0.0f, 0.003f, t);
+    /* The vortex appears on the cast frame; a bloom that swells over ~90 ms reads as lag. */
+    const float catch_in = 1.0f + 0.65f * (1.0f - audio_smoothstep(0.0f, 0.050f, t));
     if (t > 0.18f) {
         v->env *= 0.99984f;
     }
     const float sweep =
-        audio_smoothstep(0.0f, 0.30f, t) * (1.0f - 0.45f * audio_smoothstep(0.30f, 1.10f, t));
+        audio_smoothstep(0.0f, 0.045f, t) * (1.0f - 0.45f * audio_smoothstep(0.06f, 0.95f, t));
+    const float lift = 0.40f + 0.60f * sweep;
     v->phase += (2.4f + 2.2f * sweep) / (float)AUDIO_SAMPLE_RATE;
     const float spin = sinf(v->phase * k_two_pi);
     const float spin2 = sinf(v->phase * k_two_pi + 1.7f);
@@ -268,8 +270,8 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
     }
 
     const float thin = fl.dry ? 1.35f : 1.0f;
-    const float lo = k_lo[style] * thin * (1.0f + 0.85f * sweep) * (1.0f + 0.16f * spin);
-    const float hi = k_hi[style] * thin * (1.0f + 0.30f * sweep) * (1.0f - 0.14f * spin2);
+    const float lo = k_lo[style] * thin * (1.0f + 0.85f * lift) * (1.0f + 0.16f * spin);
+    const float hi = k_hi[style] * thin * (1.0f + 0.30f * lift) * (1.0f - 0.14f * spin2);
     const float q = fl.dry ? 1.5f : 0.9f;
     float body = audio_svf_step(&v->svf[0], src, ink_clampf(lo, 220.0f, 1400.0f), q).bp * 0.95f +
                  audio_svf_step(&v->svf[1], src, ink_clampf(hi, 220.0f, 1400.0f), q).bp * 0.70f;
@@ -277,7 +279,7 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
         body += skill_surge_halo(v, pink, 587.33f, 880.00f);
     }
     body = audio_svf_step(&v->svf[4], body, fl.dry ? 2000.0f : 2600.0f, 0.71f).lp;
-    return body * onset * bloom * v->env * (fl.dry ? 0.60f : 1.0f) * 0.85f;
+    return body * onset * catch_in * v->env * (fl.dry ? 0.60f : 1.0f) * 0.85f;
 }
 
 /* A silk-fan stroke: the recorded swish, pitched per brush, over a velvet band of pink noise that
@@ -292,24 +294,29 @@ static float gale_slash_sample(const AudioState *audio, AudioVoice *v, float nz)
     const int style = fl.style < 3 ? fl.style : BRUSH_STYLE_EMBER;
     const float t = (float)v->age / (float)AUDIO_SAMPLE_RATE;
 
-    const float onset = audio_smoothstep(0.0f, 0.006f, t);
+    const float onset = audio_smoothstep(0.0f, 0.003f, t);
     v->env *= k_decay[style];
-    const float rise = audio_smoothstep(0.0f, 0.07f, t);
-    const float fall = audio_smoothstep(0.08f, 0.42f, t);
+    const float rise = audio_smoothstep(0.0f, 0.015f, t);
+    const float fall = audio_smoothstep(0.04f, 0.34f, t);
     const float centre =
         k_from[style] + (k_peak[style] - k_from[style]) * rise * (1.0f - 0.65f * fall);
+    /* An air flick on the band, not a louder recording, so the procedural fallback is as prompt. */
+    const float flick = 1.0f - audio_smoothstep(0.0f, 0.022f, t);
 
     const float pink = audio_pink_step(&v->pink, nz);
     const bool has_swish = audio->brush_swish_pcm != NULL;
     const float q = fl.dry ? 1.6f : 1.1f;
     float body = audio_svf_step(&v->svf[0], pink, centre * (fl.dry ? 1.25f : 1.0f), q).bp *
-                 (has_swish ? 1.5f : 2.6f);
+                 (has_swish ? 1.5f : 2.6f) * (1.0f + 0.55f * flick);
     if (has_swish) {
+        if (v->age == 1u) {
+            v->sample_pos = (float)audio->brush_swish_onset;
+        }
         const float sw =
             audio_pcm_read(audio->brush_swish_pcm, audio->brush_swish_len, v->sample_pos, 512.0f);
         v->sample_pos += k_swish_rate[style] * (fl.dry ? 1.12f : 1.0f);
         body += audio_svf_step(&v->svf[1], sw, 1800.0f + 1400.0f * rise * (1.0f - fall), 0.71f).lp *
-                1.9f;
+                1.15f;
     }
     if (fl.surge && !fl.dry) {
         body += skill_surge_halo(v, pink, 440.00f, 659.25f);

@@ -114,6 +114,23 @@ void audio_set_external_bgm(AudioState *audio, bool external_active)
     audio->external_bgm = external_active;
 }
 
+void audio_set_external_bgm_mask(AudioState *audio, uint32_t track_mask)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio->external_bgm_mask = track_mask;
+}
+
+void audio_set_realtime_mode(AudioState *audio, bool realtime)
+{
+    if (audio == NULL) {
+        return;
+    }
+    audio->realtime_mode = realtime;
+    audio->last_state_sample = audio->samples_rendered;
+}
+
 void audio_set_paused(AudioState *audio, bool paused)
 {
     if (audio == NULL) {
@@ -177,6 +194,84 @@ static void audible_span(const int16_t *pcm, size_t len, const int16_t **out_pcm
     }
 }
 
+static int32_t abs_sample(int16_t s) { return s < 0 ? -(int32_t)s : (int32_t)s; }
+
+static int64_t subblock_sum(const int16_t *pcm, size_t block_idx, size_t sub_len)
+{
+    int64_t sum = 0;
+    const size_t base = block_idx * sub_len;
+    for (size_t i = 0u; i < sub_len; ++i) {
+        sum += (int64_t)abs_sample(pcm[base + i]);
+    }
+    return sum;
+}
+
+static int64_t sustained_block_level(const int16_t *pcm, size_t block_idx, size_t sub_len,
+                                     size_t run_blocks)
+{
+    int64_t lo = subblock_sum(pcm, block_idx, sub_len);
+    for (size_t k = 1u; k < run_blocks; ++k) {
+        const int64_t v = subblock_sum(pcm, block_idx + k, sub_len);
+        if (v < lo) {
+            lo = v;
+        }
+    }
+    return lo;
+}
+
+/* Find the first sustained rise within the clip's opening by taking the minimum energy across four
+ * consecutive 16-sample sub-blocks (1.45 ms). An isolated spike of any amplitude hits at most one
+ * sub-block so its minimum stays near zero, while a bounded prefix ignores louder late tails. */
+static size_t attack_start(const int16_t *pcm, size_t len)
+{
+    enum {
+        SUB = 16,
+        RUN = 4,
+        WIN = SUB * RUN,
+        PRE_ROLL = 132,
+        MIN_REMAINING = 1024,
+        MAX_PREFIX = AUDIO_SAMPLE_RATE * 150 / 1000
+    };
+    if (pcm == NULL || len <= (size_t)(MIN_REMAINING + WIN)) {
+        return 0u;
+    }
+    size_t search_end = len - (size_t)MIN_REMAINING;
+    if (search_end > len / 2u) {
+        search_end = len / 2u;
+    }
+    if (search_end > (size_t)MAX_PREFIX) {
+        search_end = (size_t)MAX_PREFIX;
+    }
+    const size_t n_blocks = search_end / (size_t)SUB;
+    if (n_blocks < (size_t)RUN) {
+        return 0u;
+    }
+
+    const size_t n_runs = n_blocks - (size_t)RUN + 1u;
+    int64_t peak_sus = 0;
+    for (size_t b = 0u; b < n_runs; ++b) {
+        const int64_t sus = sustained_block_level(pcm, b, (size_t)SUB, (size_t)RUN);
+        if (sus > peak_sus) {
+            peak_sus = sus;
+        }
+    }
+    if (peak_sus <= 0) {
+        return 0u;
+    }
+
+    const int64_t threshold = peak_sus / 4;
+    for (size_t b = 0u; b < n_runs; ++b) {
+        if (sustained_block_level(pcm, b, (size_t)SUB, (size_t)RUN) >= threshold) {
+            if (b == 0u) {
+                return 0u;
+            }
+            const size_t cross = (b + (size_t)RUN) * (size_t)SUB;
+            return cross > (size_t)PRE_ROLL ? cross - (size_t)PRE_ROLL : 0u;
+        }
+    }
+    return 0u;
+}
+
 void audio_set_brush_samples(AudioState *audio, const int16_t *flow_pcm, size_t flow_len,
                              const int16_t *swish_pcm, size_t swish_len)
 {
@@ -185,6 +280,7 @@ void audio_set_brush_samples(AudioState *audio, const int16_t *flow_pcm, size_t 
     }
     audible_span(flow_pcm, flow_len, &audio->brush_flow_pcm, &audio->brush_flow_len);
     audible_span(swish_pcm, swish_len, &audio->brush_swish_pcm, &audio->brush_swish_len);
+    audio->brush_swish_onset = attack_start(audio->brush_swish_pcm, audio->brush_swish_len);
     audio_brush_reset_dsp(audio);
 }
 
@@ -229,6 +325,56 @@ static void enqueue_tick_state(AudioState *audio, AudioTickState st)
     audio->state_q_count++;
 }
 
+/* Redistribute queued realtime ticks evenly across [samples_rendered, limit) so a multi-tick
+ * catch-up frame stays within the live lead budget without collapsing earlier brush snapshots or
+ * stacking pending voices onto the same sample. */
+static void compress_realtime_queue(AudioState *audio, uint64_t limit)
+{
+    const uint64_t now = audio->samples_rendered;
+    const uint64_t span = limit > now ? limit - now : 0u;
+    const int32_t m = audio->state_q_count;
+    if (m <= 0) {
+        for (int32_t i = 0; i < audio->pending_count; ++i) {
+            AudioPendingVoice *p =
+                &audio->pending[(audio->pending_head + i) % AUDIO_PENDING_VOICE_CAP];
+            if (p->start_sample > limit) {
+                p->start_sample = limit;
+            }
+        }
+        return;
+    }
+
+    uint64_t old_t[AUDIO_STATE_QUEUE_CAP];
+    uint64_t new_t[AUDIO_STATE_QUEUE_CAP];
+    for (int32_t i = 0; i < m; ++i) {
+        const int32_t idx = (audio->state_q_head + i) % AUDIO_STATE_QUEUE_CAP;
+        old_t[i] = audio->state_q[idx].at_sample;
+        uint64_t target = now + ((uint64_t)i * span) / (uint64_t)m;
+        if (target > old_t[i]) {
+            target = old_t[i];
+        }
+        new_t[i] = target;
+        audio->state_q[idx].at_sample = new_t[i];
+    }
+    for (int32_t i = 0; i < audio->pending_count; ++i) {
+        AudioPendingVoice *p = &audio->pending[(audio->pending_head + i) % AUDIO_PENDING_VOICE_CAP];
+        if (p->start_sample <= old_t[0]) {
+            p->start_sample = new_t[0];
+        } else if (p->start_sample >= old_t[m - 1]) {
+            p->start_sample = new_t[m - 1];
+        } else {
+            int32_t slot = m - 1;
+            for (int32_t k = 0; k < m; ++k) {
+                if (old_t[k] >= p->start_sample) {
+                    slot = k;
+                    break;
+                }
+            }
+            p->start_sample = new_t[slot];
+        }
+    }
+}
+
 /* Ticks are placed on a running cursor rather than consumed_ticks * 735: once the renderer has
  * run ahead (pause, scene change, slow frame) the fixed grid would pin every later tick to
  * samples_rendered and collapse multi-tick frames onto one sample. */
@@ -238,6 +384,20 @@ static uint64_t schedule_tick(AudioState *audio)
     uint64_t at_sample = audio->next_tick_sample >= audio->samples_rendered
                              ? audio->next_tick_sample
                              : audio->samples_rendered;
+    if (audio->realtime_mode) {
+        /* A live device clock drifts against the 60 Hz loop, and a 15-tick lead lets that drift
+         * settle into a lasting quarter-second lag; cap lead relative to samples_rendered (not a
+         * global grid) and compress overdue bursts cleanly into [samples_rendered, limit]. */
+        const uint64_t max_lead = (uint64_t)AUDIO_SAMPLES_PER_TICK * 2u;
+        const uint64_t limit = audio->samples_rendered + max_lead;
+        if (at_sample > limit) {
+            compress_realtime_queue(audio, limit);
+            at_sample = limit;
+        }
+        audio->next_tick_sample = at_sample + (uint64_t)AUDIO_SAMPLES_PER_TICK;
+        return at_sample;
+    }
+
     const uint64_t max_lead = (uint64_t)AUDIO_SAMPLES_PER_TICK * 15u;
     const uint64_t limit =
         ((audio->samples_rendered + max_lead) / (uint64_t)AUDIO_SAMPLES_PER_TICK) *
@@ -460,6 +620,7 @@ static void drain_state_queue(AudioState *audio, uint64_t sample_idx)
             continue;
         }
         audio->has_consumed = true;
+        audio->last_state_sample = sample_idx;
         audio->brush_target = audio->paused ? 0.0f : st.brush_target;
         audio->brush_active = !audio->paused && st.brush_active;
         audio->brush_speed = audio->brush_active ? st.brush_speed : 0.0f;
@@ -487,10 +648,20 @@ void audio_render(AudioState *audio, int16_t *samples, size_t sample_count)
     const float bgm_gain = (float)audio->bgm_vol * 0.01f;
     const float se_gain = (float)audio->se_vol * 0.01f;
 
+    /* In live callback mode, silence a held brush if the game loop stalls without publishing ticks
+     * (~200 ms grace absorbs ordinary frame jitter without cutting off normal strokes). */
+    enum { AUDIO_BRUSH_STALE_SAMPLES = AUDIO_SAMPLES_PER_TICK * 12 };
     const float duck_target = audio->paused ? 0.35f : 1.0f;
     for (size_t i = 0; i < sample_count; ++i) {
         const uint64_t sample_idx = audio->samples_rendered;
         drain_state_queue(audio, sample_idx);
+        if (audio->realtime_mode && audio->brush_active && audio->state_q_count == 0 &&
+            sample_idx >= audio->last_state_sample &&
+            sample_idx - audio->last_state_sample >= (uint64_t)AUDIO_BRUSH_STALE_SAMPLES) {
+            audio->brush_active = false;
+            audio->brush_target = 0.0f;
+            audio->brush_speed = 0.0f;
+        }
 
         const float nz = audio_noise_next(audio);
         const float se = audio_voices_step(audio, sample_idx, nz);
