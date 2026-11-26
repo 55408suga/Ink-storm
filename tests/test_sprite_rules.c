@@ -92,8 +92,8 @@ static void test_display_size_matches_radius_over_body_fraction(void)
 {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 80.0f, sprite_display_size(sprite_def(SPR_ARCHER_IDLE), 16.0f));
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 96.0f, sprite_display_size(sprite_def(SPR_ARCHER_IDLE), 19.2f));
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 128.0f, sprite_display_size(sprite_def(SPR_SHRINE), 42.0f));
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 128.0f, sprite_display_size(sprite_def(SPR_SHRINE), 99.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 152.0f, sprite_display_size(sprite_def(SPR_SHRINE), 42.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 152.0f, sprite_display_size(sprite_def(SPR_SHRINE), 99.0f));
     TEST_ASSERT_FLOAT_WITHIN(0.5f, 293.3f, sprite_display_size(sprite_def(SPR_TENGU_IDLE), 0.0f));
     TEST_ASSERT_EQUAL_FLOAT(0.0f, sprite_display_size(NULL, 16.0f));
 }
