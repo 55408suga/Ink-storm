@@ -57,3 +57,44 @@ Status:     Derived works: the source recordings were trimmed, mixed, filtered
             wind playback. The game resamples them with granular playback at
             run time and falls back to built-in procedural synthesis when they
             are missing.
+
+5. Character & Boss Sprites (PNG)
+---------------------------------
+Files:      assets/sprites/shrine.png
+            assets/sprites/archer_idle.png
+            assets/sprites/archer_draw.png
+            assets/sprites/lantern_fire.png
+            assets/sprites/lantern_storm.png
+            assets/sprites/umbrella_hop.png
+            assets/sprites/umbrella_crouch.png
+            assets/sprites/kamaitachi.png
+            assets/sprites/stone_oni.png
+            assets/sprites/ink_leech.png
+            assets/sprites/ofuda_fox.png
+            assets/sprites/ofuda_fox_cast.png
+            assets/sprites/tengu_idle.png
+            assets/sprites/tengu_windup.png
+            assets/sprites/nue_prowl.png
+            assets/sprites/nue_crouch.png
+            assets/sprites/ryu_head_dormant.png
+            assets/sprites/ryu_head_awakened.png
+            assets/sprites/ryu_body.png
+            assets/sprites/ryu_limb.png
+            assets/sprites/ryu_tail.png
+            assets/sprites/hoju_fire.png
+            assets/sprites/hoju_storm.png
+            assets/sprites/hoju_wind.png
+Author:     INKSTORM Project (24 original AI-assisted sumi-e sprite PNGs generated
+            from project-authored text prompts and first-party style anchors,
+            then background-keyed, CIELAB palette-graded onto the INKSTORM
+            sumi/gofun palette, alpha-bled, downsampled to 256x256 / 512x512,
+            and stripped of ancillary metadata chunks).
+Generators: Google Gemini image generation & OpenAI image generation (output
+            rights granted to the project under each provider's terms; no
+            third-party copyrighted artwork used as input).
+License:    CC0 1.0 Universal (Public Domain Dedication)
+            https://creativecommons.org/publicdomain/zero/1.0/
+Status:     Original project assets for INKSTORM. The game loads them into a
+            runtime atlas with alpha-dilated soft paper halos and falls back
+            cleanly per character group to built-in procedural sumi-e rendering
+            if any required sprite PNG is missing.

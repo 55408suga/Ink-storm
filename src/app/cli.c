@@ -197,6 +197,8 @@ uint32_t cli_parse_debug_faults(const char *value, FILE *warn)
                 mask |= APP_FAULT_SHADER;
             } else if (len == 4 && memcmp(start, "font", 4) == 0) {
                 mask |= APP_FAULT_FONT;
+            } else if (len == 7 && memcmp(start, "sprites", 7) == 0) {
+                mask |= APP_FAULT_SPRITES;
             } else if (warn != NULL) {
                 const int print_len = len > (size_t)INT_MAX ? INT_MAX : (int)len;
                 fprintf(warn, "INKSTORM: unknown debug fault '%.*s' ignored\n", print_len, start);

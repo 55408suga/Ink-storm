@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "bgm_fade.h"
+#include "cli.h"
 #include "core.h"
 #include "fluid.h"
 #include "game.h"
@@ -96,6 +97,8 @@ typedef struct {
     double mean_luma_sum;
     double draw_ms_sum;
     double draw_ms_max;
+    uint32_t max_prim_verts;
+    uint32_t max_blend_switches;
     uint64_t prev_hash;
     bool has_prev_hash;
 
@@ -601,6 +604,12 @@ static bool capture_video_frame(QaSession *s)
     m->has_prev_hash = true;
     m->draw_ms_sum += draw_ms;
     m->draw_ms_max = draw_ms > m->draw_ms_max ? draw_ms : m->draw_ms_max;
+    if (s->render->last_metrics.prim_verts > m->max_prim_verts) {
+        m->max_prim_verts = s->render->last_metrics.prim_verts;
+    }
+    if (s->render->last_metrics.blend_switches > m->max_blend_switches) {
+        m->max_blend_switches = s->render->last_metrics.blend_switches;
+    }
     return true;
 }
 
@@ -949,6 +958,10 @@ static bool write_report(const QaSession *s, const char *path)
     fprintf(fp, "  \"video_enabled\": %s,\n", json_bool(video));
     fprintf(fp, "  \"post_enabled\": %s,\n", json_bool(video && s->render->post_enabled));
     fprintf(fp, "  \"fluid_gpu\": %s,\n", json_bool(fluid_gpu));
+    fprintf(fp, "  \"sprites_enabled\": %s,\n", json_bool(video && s->render->sprites.enabled));
+    fprintf(fp, "  \"sprite_groups_ok\": %" PRId32 ",\n", video ? s->render->sprites.groups_ok : 0);
+    fprintf(fp, "  \"sprite_load_ms\": %.3f,\n",
+            video ? finite_or_zero(s->render->sprites.load_ms) : 0.0);
     fprintf(fp, "  \"determinism\": {\n");
     fprintf(fp, "    \"final_hash\": \"%016" PRIx64 "\",\n", game_hash(g));
     fprintf(fp, "    \"fluid_finite\": %s,\n", json_bool(m->fluid_finite));
@@ -961,7 +974,9 @@ static bool write_report(const QaSession *s, const char *path)
     fprintf(fp, "    \"static_frames\": %" PRIu64 ",\n", m->static_frames);
     fprintf(fp, "    \"mean_luma\": %.3f,\n", finite_or_zero(m->mean_luma_sum / frames));
     fprintf(fp, "    \"avg_draw_ms\": %.3f,\n", finite_or_zero(m->draw_ms_sum / frames));
-    fprintf(fp, "    \"max_draw_ms\": %.3f\n", finite_or_zero(m->draw_ms_max));
+    fprintf(fp, "    \"max_draw_ms\": %.3f,\n", finite_or_zero(m->draw_ms_max));
+    fprintf(fp, "    \"max_prim_verts\": %" PRIu32 ",\n", m->max_prim_verts);
+    fprintf(fp, "    \"max_blend_switches\": %" PRIu32 "\n", m->max_blend_switches);
     fprintf(fp, "  },\n");
     fprintf(fp, "  \"audio\": {\n");
     fprintf(fp, "    \"samples\": %" PRIu64 ",\n", m->samples);
@@ -1141,11 +1156,15 @@ static bool init_graphics(QaSession *s)
         app_resolve_asset_path("fonts/ui_mincho.ttf", font_path, sizeof font_path);
     const bool has_title_font =
         app_resolve_asset_path("fonts/title_brush.ttf", title_font_path, sizeof title_font_path);
+    char sprite_dir[PATH_MAX];
+    const bool has_sprites = app_resolve_asset_path("sprites", sprite_dir, sizeof sprite_dir);
+    const uint32_t fault_mask = cli_parse_debug_faults(getenv("INKSTORM_DEBUG_FAULTS"), stderr);
     const RenderOptions render_opts = {
         .use_post = s->opt.post,
-        .fault_mask = 0u,
+        .fault_mask = fault_mask,
         .font_path = has_font ? font_path : NULL,
         .title_font_path = has_title_font ? title_font_path : NULL,
+        .sprite_dir = has_sprites ? sprite_dir : NULL,
     };
     render_init(s->render, &render_opts);
 

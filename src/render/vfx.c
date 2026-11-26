@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "sprites.h"
 #include "vfx_rules.h"
 
 #include "core.h"
@@ -219,6 +220,11 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
     memset(r->prev_proj_bounces, 0, sizeof r->prev_proj_bounces);
     memset(r->prev_proj_gen, 0, sizeof r->prev_proj_gen);
+    memset(r->sprite_face, 0, sizeof r->sprite_face);
+    memset(r->sprite_turn_tick, 0, sizeof r->sprite_turn_tick);
+    memset(r->sprite_face_gen, 0, sizeof r->sprite_face_gen);
+    memset(&r->ryu_snap, 0, sizeof r->ryu_snap);
+    r->sprite_frame.built = false;
     r->intro_head = 0;
     r->intro_count = 0;
     r->intro_t = 0.0f;
@@ -251,6 +257,9 @@ void render_consume_events(RenderState *r, const GameState *g)
         case EV_KILL:
             spawn_burst(r, ev->x, ev->y, ev->x2, ev->y2, 8, 175.0f, 9.0f, 0.60f, PAL_SUMI_DARK,
                         true);
+            if (ev->value == (int32_t)ENEMY_BOSS_RYU) {
+                render_sprite_on_ryu_kill(r);
+            }
             if ((ev->flags & DMG_SLAM) != 0) {
                 push_callout(r, TEXT_CALLOUT_SLAM, 0, ev->x, ev->y - 24.0f, PAL_SHU, false, 0.90f);
             } else if (g->run.chain >= 2) {
@@ -621,6 +630,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
     }
 
     track_ryu_and_bounces(r, g);
+    render_sprite_tick(r, g, dt);
 
     for (int i = 0; i < RENDER_MAX_SPARKS; ++i) {
         VfxSpark *p = &r->sparks[i];

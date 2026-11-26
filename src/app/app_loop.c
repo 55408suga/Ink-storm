@@ -603,11 +603,14 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
         app_resolve_asset_path("fonts/ui_mincho.ttf", font_path, sizeof font_path);
     const bool has_title_font =
         app_resolve_asset_path("fonts/title_brush.ttf", title_font_path, sizeof title_font_path);
+    char sprite_dir[PATH_MAX];
+    const bool has_sprites = app_resolve_asset_path("sprites", sprite_dir, sizeof sprite_dir);
     const RenderOptions render_opts = {
         .use_post = opts->use_post,
         .fault_mask = fault_mask,
         .font_path = has_font ? font_path : NULL,
         .title_font_path = has_title_font ? title_font_path : NULL,
+        .sprite_dir = has_sprites ? sprite_dir : NULL,
     };
     render_init(render, &render_opts);
     audio_init(audio, UINT64_C(1));

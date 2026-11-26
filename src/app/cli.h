@@ -11,6 +11,7 @@ typedef enum { SAVE_MODE_DEFAULT = 0, SAVE_MODE_DISABLED, SAVE_MODE_EXPLICIT } S
 
 #define APP_FAULT_SHADER (UINT32_C(1) << 0)
 #define APP_FAULT_FONT (UINT32_C(1) << 1)
+#define APP_FAULT_SPRITES (UINT32_C(1) << 2)
 
 typedef struct {
     AppMode mode;

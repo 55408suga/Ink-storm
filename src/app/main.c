@@ -13,17 +13,25 @@
 
 static void log_debug_faults(uint32_t mask)
 {
-    if (mask == 0u) {
-        return;
+    static const struct {
+        uint32_t bit;
+        const char *name;
+    } k_faults[] = {
+        {APP_FAULT_SHADER, "shader"},
+        {APP_FAULT_FONT, "font"},
+        {APP_FAULT_SPRITES, "sprites"},
+    };
+    bool any = false;
+    for (size_t i = 0; i < sizeof k_faults / sizeof k_faults[0]; ++i) {
+        if ((mask & k_faults[i].bit) == 0u) {
+            continue;
+        }
+        fputs(any ? "," : "INKSTORM: debug faults enabled: ", stderr);
+        fputs(k_faults[i].name, stderr);
+        any = true;
     }
-    const bool sh = (mask & APP_FAULT_SHADER) != 0u;
-    const bool fn = (mask & APP_FAULT_FONT) != 0u;
-    if (sh && fn) {
-        fputs("INKSTORM: debug faults enabled: shader,font\n", stderr);
-    } else if (sh) {
-        fputs("INKSTORM: debug faults enabled: shader\n", stderr);
-    } else if (fn) {
-        fputs("INKSTORM: debug faults enabled: font\n", stderr);
+    if (any) {
+        fputc('\n', stderr);
     }
 }
 

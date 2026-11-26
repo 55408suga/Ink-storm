@@ -1,5 +1,7 @@
+#include "draw_entities_internal.h"
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "sprites.h"
 
 #include "core.h"
 
@@ -10,7 +12,7 @@ static const float k_ent_pi = 3.14159265359f;
 static const float k_ent_two_pi = 6.28318530718f;
 static const Vector2 k_shade_dir = {0.7071f, 0.7071f};
 
-static uint32_t entity_seed(EntityId id, uint32_t part, uint64_t boil_step)
+uint32_t render_entity_seed(EntityId id, uint32_t part, uint64_t boil_step)
 {
     uint64_t h = ink_hash_u32(INK_HASH_INIT, id.index);
     h = ink_hash_u32(h, id.gen);
@@ -19,7 +21,7 @@ static uint32_t entity_seed(EntityId id, uint32_t part, uint64_t boil_step)
     return (uint32_t)(h ^ (h >> 32));
 }
 
-static void draw_eye_brush(RenderState *r, Vector2 at, float size, PaletteId pal, float alpha)
+void render_draw_eye_brush(RenderState *r, Vector2 at, float size, PaletteId pal, float alpha)
 {
     /* Slanted calligraphic almond eye (never a geometric circle) */
     const Vector2 pts[4] = {
@@ -31,30 +33,33 @@ static void draw_eye_brush(RenderState *r, Vector2 at, float size, PaletteId pal
     ink_fill_poly(r, pts, 4, pal_color_alpha(pal, alpha));
 }
 
+int render_elite_palettes(const EnemyComp *en, PaletteId out[4])
+{
+    if (en == NULL || !en->is_elite) {
+        return 0;
+    }
+    const uint32_t mask = en->elite_flags & ELITE_ALL_MASK;
+    int count = 0;
+    if ((mask & ELITE_RIGID) != 0u) {
+        out[count++] = PAL_KIN;
+    }
+    if ((mask & ELITE_INK_REPEL) != 0u) {
+        out[count++] = PAL_GOFUN;
+    }
+    if ((mask & ELITE_FIREPROOF) != 0u) {
+        out[count++] = PAL_SHU;
+    }
+    if ((mask & ELITE_STORMPROOF) != 0u) {
+        out[count++] = PAL_AO;
+    }
+    return count;
+}
+
 static void draw_elite_rim(RenderState *r, const TransformComp *tr, const EnemyComp *en,
                            uint32_t seed)
 {
-    if (en == NULL || !en->is_elite) {
-        return;
-    }
-    const uint32_t mask = en->elite_flags & ELITE_ALL_MASK;
-    if (mask == 0u) {
-        return;
-    }
     PaletteId pals[4];
-    int count = 0;
-    if ((mask & ELITE_RIGID) != 0u) {
-        pals[count++] = PAL_KIN;
-    }
-    if ((mask & ELITE_INK_REPEL) != 0u) {
-        pals[count++] = PAL_GOFUN;
-    }
-    if ((mask & ELITE_FIREPROOF) != 0u) {
-        pals[count++] = PAL_SHU;
-    }
-    if ((mask & ELITE_STORMPROOF) != 0u) {
-        pals[count++] = PAL_AO;
-    }
+    const int count = render_elite_palettes(en, pals);
     if (count == 0) {
         return;
     }
@@ -355,8 +360,8 @@ static void draw_enemy_archer(RenderState *r, const TransformComp *tr, const Ene
                    (InkTone){.color = PAL_SHU, .alpha = 0.85f * alpha}, 1.0f);
     }
 
-    draw_eye_brush(r, (Vector2){cx + ca * 4.0f, cy - rad * 0.35f + sa * 3.0f}, 3.4f, PAL_GOFUN,
-                   alpha);
+    render_draw_eye_brush(r, (Vector2){cx + ca * 4.0f, cy - rad * 0.35f + sa * 3.0f}, 3.4f,
+                          PAL_GOFUN, alpha);
 }
 
 static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const EnemyComp *en,
@@ -440,8 +445,8 @@ static void draw_enemy_lantern(RenderState *r, const TransformComp *tr, const En
 
     ink_outline_tone(r, body, 8, true, 3.0f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, seed + 3u);
-    draw_eye_brush(r, (Vector2){cx, cy - rad * 0.34f}, 5.0f, PAL_SUMI_SCORCH, alpha);
-    draw_eye_brush(r, (Vector2){cx + 0.5f, cy - rad * 0.34f}, 2.2f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx, cy - rad * 0.34f}, 5.0f, PAL_SUMI_SCORCH, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + 0.5f, cy - rad * 0.34f}, 2.2f, PAL_GOFUN, alpha);
 }
 
 static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const EnemyComp *en,
@@ -496,8 +501,9 @@ static void draw_enemy_umbrella(RenderState *r, const TransformComp *tr, const E
                               .seed = seed + 28u},
                (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.94f * alpha}, 1.0f);
 
-    draw_eye_brush(r, (Vector2){cx + rad * 0.08f, cy - rad * 0.24f}, 7.0f, PAL_GOFUN, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.10f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.08f, cy - rad * 0.24f}, 7.0f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.10f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH,
+                          alpha);
 }
 
 static void draw_enemy_kamaitachi(RenderState *r, const TransformComp *tr, const VelocityComp *vel,
@@ -566,8 +572,8 @@ static void draw_enemy_kamaitachi(RenderState *r, const TransformComp *tr, const
                    (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.96f * alpha}, 1.0f);
     }
 
-    draw_eye_brush(r, (Vector2){cx + dir.x * rad * 0.35f, cy + dir.y * rad * 0.35f}, 3.2f,
-                   PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + dir.x * rad * 0.35f, cy + dir.y * rad * 0.35f}, 3.2f,
+                          PAL_GOFUN, alpha);
 }
 
 static void draw_enemy_stone_oni(RenderState *r, const TransformComp *tr, const EnemyComp *en,
@@ -632,8 +638,8 @@ static void draw_enemy_stone_oni(RenderState *r, const TransformComp *tr, const 
     ink_outline_tone(r, body, 8, true, 6.0f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.98f * alpha}, seed + 3u);
 
-    draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.30f}, 4.8f, PAL_GOFUN, alpha);
 }
 
 static void draw_enemy_ink_leech(RenderState *r, const TransformComp *tr, const EnemyComp *en,
@@ -660,8 +666,8 @@ static void draw_enemy_ink_leech(RenderState *r, const TransformComp *tr, const 
     ink_wash(r, (Vector2){cx + 2.0f, cy - 1.5f}, rad * 0.68f, rad * 0.62f, -0.4f,
              (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.72f * alpha}, 2, seed + 2u);
 
-    draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.14f}, 4.2f, PAL_GOFUN, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.10f}, 3.6f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.14f}, 4.2f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.10f}, 3.6f, PAL_GOFUN, alpha);
 }
 
 static void draw_enemy_ofuda_fox(RenderState *r, const TransformComp *tr, const EnemyComp *en,
@@ -715,8 +721,10 @@ static void draw_enemy_ofuda_fox(RenderState *r, const TransformComp *tr, const 
                      (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.98f * alpha}, seed + 4u);
 
     /* Narrow fox eyes + single vermilion eye-corner brush accent */
-    draw_eye_brush(r, (Vector2){cx - rad * 0.30f, cy - rad * 0.04f}, 4.2f, PAL_SUMI_SCORCH, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.32f, cy - rad * 0.06f}, 4.2f, PAL_SUMI_SCORCH, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.30f, cy - rad * 0.04f}, 4.2f, PAL_SUMI_SCORCH,
+                          alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.32f, cy - rad * 0.06f}, 4.2f, PAL_SUMI_SCORCH,
+                          alpha);
     const Vector2 l_shu[2] = {
         {cx - rad * 0.44f, cy - rad * 0.08f},
         {cx - rad * 0.64f, cy - rad * 0.24f},
@@ -755,13 +763,11 @@ static void draw_enemy_ofuda_fox(RenderState *r, const TransformComp *tr, const 
     }
 }
 
-static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossComp *boss,
-                            const ShrineState *shrine, uint32_t seed, int act_index, float alpha)
+void render_draw_tengu_telegraph(RenderState *r, const TransformComp *tr, const BossComp *boss,
+                                 const ShrineState *shrine, uint32_t seed)
 {
     const float cx = tr->x;
     const float cy = tr->y;
-    const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
-
     if (boss != NULL && boss->telegraph > 0.01f) {
         const float tx = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f ? boss->gale_dx : 0.0f;
         const float ty = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f ? boss->gale_dy : 1.0f;
@@ -785,6 +791,16 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
                               seed + 80u + (uint32_t)(k + 1));
         }
     }
+}
+
+static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossComp *boss,
+                            const ShrineState *shrine, uint32_t seed, int act_index, float alpha)
+{
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
+
+    render_draw_tengu_telegraph(r, tr, boss, shrine, seed);
 
     const Vector2 ko[8] = {
         {cx - rad * 1.65f, cy - rad * 0.35f}, {cx - rad * 0.80f, cy - rad * 1.10f},
@@ -839,10 +855,12 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
                               .seed = seed + 4u},
                (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.94f * alpha}, 1.0f);
 
-    draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
-    draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
-    draw_eye_brush(r, (Vector2){cx + rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.26f, cy - rad * 0.24f}, 7.2f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH,
+                          alpha);
+    render_draw_eye_brush(r, (Vector2){cx + rad * 0.24f, cy - rad * 0.24f}, 3.6f, PAL_SUMI_SCORCH,
+                          alpha);
 
     const Vector2 fan_base = {cx + rad * 0.55f, cy + rad * 0.52f};
     for (int k = -2; k <= 2; ++k) {
@@ -860,16 +878,11 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
     }
 }
 
-static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyComp *en,
-                          const BossComp *boss, uint32_t seed, int act_index, float alpha)
+void render_draw_nue_telegraph(RenderState *r, const TransformComp *tr, const BossComp *boss,
+                               uint32_t seed)
 {
     const float cx = tr->x;
     const float cy = tr->y;
-    const float rad = tr->radius > 10.0f ? tr->radius : 40.0f;
-    const bool paused = en != NULL && en->ai_state == 1;
-    const float crouch_y = paused ? 6.0f : 0.0f;
-    const float outline_w = paused ? (5.8f * 1.3f) : 5.8f;
-
     /* Azure lightning dash telegraph */
     if (boss != NULL && boss->telegraph > 0.01f) {
         const float dx = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dx : 1.0f;
@@ -892,6 +905,19 @@ static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyCo
                                   .seed = seed + 89u},
                    (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, 1.0f);
     }
+}
+
+static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                          const BossComp *boss, uint32_t seed, int act_index, float alpha)
+{
+    const float cx = tr->x;
+    const float cy = tr->y;
+    const float rad = tr->radius > 10.0f ? tr->radius : 40.0f;
+    const bool paused = en != NULL && en->ai_state == 1;
+    const float crouch_y = paused ? 6.0f : 0.0f;
+    const float outline_w = paused ? (5.8f * 1.3f) : 5.8f;
+
+    render_draw_nue_telegraph(r, tr, boss, seed);
 
     const Vector2 ko[8] = {
         {cx - rad * 1.35f, cy - rad * 0.45f + crouch_y},
@@ -968,10 +994,10 @@ static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyCo
     ink_fill_poly(r, face, 6, pal_color_alpha(PAL_GOFUN, 0.94f * alpha));
     ink_outline_tone(r, face, 6, true, outline_w * 0.72f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, seed + 24u);
-    draw_eye_brush(r, (Vector2){cx - rad * 0.42f, cy - rad * 0.36f + crouch_y}, 4.8f, PAL_AO_HOT,
-                   alpha);
-    draw_eye_brush(r, (Vector2){cx - rad * 0.08f, cy - rad * 0.36f + crouch_y}, 4.8f, PAL_AO_HOT,
-                   alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.42f, cy - rad * 0.36f + crouch_y}, 4.8f,
+                          PAL_AO_HOT, alpha);
+    render_draw_eye_brush(r, (Vector2){cx - rad * 0.08f, cy - rad * 0.36f + crouch_y}, 4.8f,
+                          PAL_AO_HOT, alpha);
 
     /* Crackling azure lightning arcs clinging to cloud */
     const Vector2 z1[4] = {
@@ -1161,17 +1187,9 @@ static void draw_boss_ryu_orb(RenderState *r, const TransformComp *tr, const Bos
                      (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, seed + 5u);
 }
 
-static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const TransformComp *tr,
-                          const BossComp *boss, const ShrineState *shrine, uint32_t seed,
-                          int act_index, float alpha)
+void render_draw_ryu_telegraph(RenderState *r, const BossComp *boss, const ShrineState *shrine,
+                               uint32_t seed)
 {
-    const float hx = tr->x;
-    const float hy = tr->y;
-    const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
-    const bool awakened = boss != NULL && boss->phase_idx >= 1;
-    const bool ascending = boss != NULL && boss->phase_idx >= 2;
-    const int32_t orb_kind = boss != NULL ? boss->part_id : 0;
-
     /* Dragon coil telegraph: crimson dashed circle radius 240px around shrine */
     if (boss != NULL && boss->telegraph > 0.01f && boss->telegraph_pattern == 3 && shrine != NULL) {
         const InkTone warn = {.color = PAL_SHU, .alpha = 0.62f + 0.30f * boss->telegraph};
@@ -1185,6 +1203,20 @@ static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const
             ink_dashed_stroke(r, p0, p1, 18.0f, 8.0f, 3.8f, warn, seed + 120u + (uint32_t)k);
         }
     }
+}
+
+static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const TransformComp *tr,
+                          const BossComp *boss, const ShrineState *shrine, uint32_t seed,
+                          int act_index, float alpha)
+{
+    const float hx = tr->x;
+    const float hy = tr->y;
+    const float rad = tr->radius > 10.0f ? tr->radius : 44.0f;
+    const bool awakened = boss != NULL && boss->phase_idx >= 1;
+    const bool ascending = boss != NULL && boss->phase_idx >= 2;
+    const int32_t orb_kind = boss != NULL ? boss->part_id : 0;
+
+    render_draw_ryu_telegraph(r, boss, shrine, seed);
 
     /* Multi-part body trail (arc-length resampled 24 pts) or P1 render-side trail fallback */
     const bool has_body_trail = (g != NULL && g->ryu_body.head_id.index == id.index &&
@@ -1371,7 +1403,7 @@ static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const
 
     /* Eye: blank gofun outline before awakening; large vermilion dot painted on awakening */
     const Vector2 eye_pos = {hx - rad * 0.18f, hy - rad * 0.16f};
-    draw_eye_brush(r, eye_pos, 8.2f, PAL_GOFUN, alpha);
+    render_draw_eye_brush(r, eye_pos, 8.2f, PAL_GOFUN, alpha);
     ink_arc_stroke(r, eye_pos, 6.2f, 0.0f, k_ent_two_pi + 0.1f,
                    (BrushProfile){.w_max = 2.4f,
                                   .w_min_ratio = 0.35f,
@@ -1383,8 +1415,8 @@ static void draw_boss_ryu(RenderState *r, const GameState *g, EntityId id, const
     if (awakened || r->ryu_awaken_t > 0.0f) {
         const float dot_scale =
             r->ryu_awaken_t > 0.0f ? (1.6f - 0.6f * (1.0f - r->ryu_awaken_t / 1.5f)) : 1.15f;
-        draw_eye_brush(r, eye_pos, 5.2f * dot_scale, PAL_SHU, alpha);
-        draw_eye_brush(r, eye_pos, 2.5f * dot_scale, PAL_SHU_HOT, alpha);
+        render_draw_eye_brush(r, eye_pos, 5.2f * dot_scale, PAL_SHU, alpha);
+        render_draw_eye_brush(r, eye_pos, 2.5f * dot_scale, PAL_SHU_HOT, alpha);
     }
 
     /* Legacy P1 snout orb (omitted when multi-part ECS Dragon Orb entities are active) */
@@ -1656,7 +1688,7 @@ static void draw_gimmick_effects(RenderState *r, const GameState *g, uint64_t bo
         if (gim == NULL || tr == NULL) {
             continue;
         }
-        const uint32_t seed = entity_seed(id, 4u, boil);
+        const uint32_t seed = render_entity_seed(id, 4u, boil);
         if (gim->kind == GIMMICK_LIGHTNING_STRIKE) {
             /* Crimson dashed warning circle (r=32px) + short center strike tick */
             const float rad = tr->radius > 8.0f ? tr->radius : 32.0f;
@@ -1716,7 +1748,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         }
         const InkOrbComp *orb = game_orb(g, id);
         if (orb != NULL) {
-            draw_ink_orb(r, tr, orb, entity_seed(id, 1u, boil), act_index);
+            draw_ink_orb(r, tr, orb, render_entity_seed(id, 1u, boil), act_index);
         }
     }
 
@@ -1728,7 +1760,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         const TransformComp *tr = game_transform(g, id);
         const ProjComp *pr = game_proj(g, id);
         if (tr != NULL && pr != NULL) {
-            const uint32_t pseed = entity_seed(id, 2u, boil);
+            const uint32_t pseed = render_entity_seed(id, 2u, boil);
             if (tr->dissolving) {
                 const float u = ink_clampf(tr->dissolve_t / 0.6f, 0.0f, 1.0f);
                 const float rad = (tr->radius > 3.0f ? tr->radius : 7.0f) * (1.1f + 0.8f * u);
@@ -1740,9 +1772,13 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         }
     }
 
-    /* Layer 6: Shrines, enemies, bosses */
+    /* Layer 6: Shrines, enemies, bosses. Painted characters lay every paper halo first so no
+     * neighbour's halo cuts into another body. */
+    render_sprite_draw_halos(r, g, act_index);
     for (int32_t s = 0; s < g->shrine_count && s < GAME_MAX_SHRINES; ++s) {
-        draw_shrine(r, &g->shrines[s], g->ticks, act_index);
+        if (!render_sprite_draw_shrine(r, g, s, act_index)) {
+            draw_shrine(r, &g->shrines[s], g->ticks, act_index);
+        }
     }
 
     const ShrineState *primary_shrine = g->shrine_count > 0 ? &g->shrines[0] : NULL;
@@ -1757,12 +1793,19 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
             continue;
         }
 
-        const uint32_t seed = entity_seed(id, 3u, boil);
+        const uint32_t seed = render_entity_seed(id, 3u, boil);
         if (tr->dissolving) {
-            const float u = ink_clampf(tr->dissolve_t / 0.6f, 0.0f, 1.0f);
-            const float rad = (tr->radius > 6.0f ? tr->radius : 18.0f) * (1.0f + 0.55f * u);
-            ink_wash(r, (Vector2){tr->x, tr->y}, rad, rad * 0.86f, u * 0.6f,
-                     (InkTone){.color = PAL_SUMI_HEAVY, .alpha = (1.0f - u) * 0.72f}, 2, seed);
+            if (!render_sprite_draw_enemy(r, g, id, primary_shrine, act_index)) {
+                const float u = ink_clampf(tr->dissolve_t / 0.6f, 0.0f, 1.0f);
+                const float rad = (tr->radius > 6.0f ? tr->radius : 18.0f) * (1.0f + 0.55f * u);
+                ink_wash(r, (Vector2){tr->x, tr->y}, rad, rad * 0.86f, u * 0.6f,
+                         (InkTone){.color = PAL_SUMI_HEAVY, .alpha = (1.0f - u) * 0.72f}, 2, seed);
+            }
+            continue;
+        }
+        if (en->def_id != ENEMY_BOSS_RYU_ORB &&
+            render_sprite_draw_enemy(r, g, id, primary_shrine, act_index)) {
+            draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
             continue;
         }
 
@@ -1810,6 +1853,8 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
     }
 
+    render_sprite_draw_ryu_death(r, act_index);
+
     /* Pass 6b: Independent Dragon Orbs rendered over Ryu body */
     for (uint32_t i = 0; i < hw; ++i) {
         if (!g->ecs.alive[i]) {
@@ -1821,8 +1866,14 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         if (tr == NULL || en == NULL || en->def_id != ENEMY_BOSS_RYU_ORB || tr->dissolving) {
             continue;
         }
-        const uint32_t seed = entity_seed(id, 3u, boil);
-        draw_boss_ryu_orb(r, tr, game_boss(g, id), seed, g->ticks, act_index, 1.0f);
+        const uint32_t seed = render_entity_seed(id, 3u, boil);
+        if (!render_sprite_draw_enemy(r, g, id, primary_shrine, act_index)) {
+            draw_boss_ryu_orb(r, tr, game_boss(g, id), seed, g->ticks, act_index, 1.0f);
+        }
         draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
     }
+
+    /* Paper stains multiply under the ink lines; hot cores go on after so they stay bright. */
+    render_sprite_draw_tints(r, g);
+    render_sprite_draw_cores(r, g);
 }

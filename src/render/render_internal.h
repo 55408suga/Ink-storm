@@ -10,6 +10,7 @@
 
 #define RENDER_FAULT_SHADER (UINT32_C(1) << 0)
 #define RENDER_FAULT_FONT (UINT32_C(1) << 1)
+#define RENDER_FAULT_SPRITES (UINT32_C(1) << 2)
 
 typedef struct {
     float w_max;

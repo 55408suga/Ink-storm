@@ -180,6 +180,10 @@ static void test_cli_debug_faults(void)
     TEST_ASSERT_EQUAL_UINT32(APP_FAULT_SHADER, cli_parse_debug_faults("shader", NULL));
     TEST_ASSERT_EQUAL_UINT32(APP_FAULT_SHADER | APP_FAULT_FONT,
                              cli_parse_debug_faults(" font , shader ", NULL));
+    TEST_ASSERT_EQUAL_UINT32(APP_FAULT_SPRITES, cli_parse_debug_faults("sprites", NULL));
+    TEST_ASSERT_EQUAL_UINT32(APP_FAULT_SHADER | APP_FAULT_FONT | APP_FAULT_SPRITES,
+                             cli_parse_debug_faults("sprites,font,shader", NULL));
+    TEST_ASSERT_EQUAL_UINT32(0, cli_parse_debug_faults("sprite", NULL));
     TEST_ASSERT_EQUAL_UINT32(0, cli_parse_debug_faults("", NULL));
     TEST_ASSERT_EQUAL_UINT32(0, cli_parse_debug_faults(NULL, NULL));
 

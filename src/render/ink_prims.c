@@ -115,7 +115,7 @@ static void emit_tri_ccw(RenderState *r, Vector2 a, Color ca, Vector2 b, Color c
 }
 
 static void emit_ribbon(RenderState *r, const Vector2 *pts, const float *widths,
-                        const float *alphas, int n, PaletteId pal)
+                        const float *alphas, int n, Color base)
 {
     if (n < 2) {
         return;
@@ -125,7 +125,6 @@ static void emit_ribbon(RenderState *r, const Vector2 *pts, const float *widths,
         return;
     }
     rlCheckRenderBatchLimit(needed_verts);
-    const Color base = pal_color(pal);
 
     Vector2 left_prev = pts[0];
     Vector2 right_prev = pts[0];
@@ -165,10 +164,11 @@ static void emit_ribbon(RenderState *r, const Vector2 *pts, const float *widths,
     rlEnd();
 }
 
-void ink_stroke(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, InkTone tone,
-                float reveal)
+/* pad_px > 0 は紙抜きの縁取り。筆線と同じ揺らぎで幅だけ広げ、かすれは付けない */
+static void stroke_ribbon(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, Color base,
+                          float alpha, float reveal, float pad_px)
 {
-    if (r == NULL || pts == NULL || n < 2 || reveal <= 0.001f || tone.alpha <= 0.001f) {
+    if (r == NULL || pts == NULL || n < 2 || reveal <= 0.001f || alpha <= 0.001f) {
         return;
     }
 
@@ -190,7 +190,7 @@ void ink_stroke(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, In
     const float w_min = fmaxf(1.2f, w_max * ink_clampf(prof.w_min_ratio, 0.05f, 0.4f));
     const float entry = ink_clampf(prof.entry, 0.0f, 0.45f);
     const float exit_r = ink_clampf(prof.exit, 0.0f, 0.45f);
-    const float dry = ink_clampf(prof.dry, 0.0f, 1.0f);
+    const float dry = pad_px > 0.0f ? 0.0f : ink_clampf(prof.dry, 0.0f, 1.0f);
 
     Vector2 jittered[INK_MAX_SAMPLES] = {0};
     float widths[INK_MAX_SAMPLES] = {0};
@@ -208,9 +208,9 @@ void ink_stroke(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, In
         } else {
             w = w_max * (1.0f + 0.08f * noise1d(prof.seed, t * 14.0f));
         }
-        widths[i] = fmaxf(1.2f, w);
+        widths[i] = fmaxf(1.2f, w) + 2.0f * pad_px;
 
-        float a = tone.alpha;
+        float a = alpha;
         if (dry > 0.001f && t > 0.70f) {
             const float dt = (t - 0.70f) / 0.30f;
             const float streak = 0.5f + 0.5f * noise1d(prof.seed ^ 0x9e37u, t * 28.0f);
@@ -228,7 +228,21 @@ void ink_stroke(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, In
         jittered[i] = (Vector2){samples[i].x + jx, samples[i].y + jy};
     }
 
-    emit_ribbon(r, jittered, widths, alphas, count, tone.color);
+    emit_ribbon(r, jittered, widths, alphas, count, base);
+}
+
+void ink_stroke(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, InkTone tone,
+                float reveal)
+{
+    stroke_ribbon(r, pts, n, prof, pal_color(tone.color), tone.alpha, reveal, 0.0f);
+}
+
+void ink_stroke_knockout(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, float pad_px,
+                         int act_index, float alpha, float reveal)
+{
+    const Color ko = ink_knockout_color(act_index);
+    stroke_ribbon(r, pts, n, prof, ko, ((float)ko.a / 255.0f) * ink_clampf(alpha, 0.0f, 1.0f),
+                  reveal, pad_px > 0.0f ? pad_px : 0.0f);
 }
 
 void ink_wash(RenderState *r, Vector2 center, float rx, float ry, float rot, InkTone tone,
@@ -393,7 +407,7 @@ void ink_outline_tone(RenderState *r, const Vector2 *ctrl, int n, bool closed, f
                 seg_w[seg_n - 1] = fmaxf(1.2f, w_max * 0.30f);
                 seg_a[0] *= 0.55f;
                 seg_a[seg_n - 1] *= 0.55f;
-                emit_ribbon(r, seg_pts, seg_w, seg_a, seg_n, tone.color);
+                emit_ribbon(r, seg_pts, seg_w, seg_a, seg_n, pal_color(tone.color));
             }
             seg_n = 0;
             continue;
@@ -421,7 +435,7 @@ void ink_outline_tone(RenderState *r, const Vector2 *ctrl, int n, bool closed, f
         seg_w[seg_n - 1] = fmaxf(1.2f, w_max * 0.30f);
         seg_a[0] *= 0.55f;
         seg_a[seg_n - 1] *= 0.55f;
-        emit_ribbon(r, seg_pts, seg_w, seg_a, seg_n, tone.color);
+        emit_ribbon(r, seg_pts, seg_w, seg_a, seg_n, pal_color(tone.color));
     }
 }
 
@@ -481,8 +495,12 @@ void ink_knockout(RenderState *r, const Vector2 *ctrl, int n, float pad_px, int 
         }
     }
 
-    const Color ko = pal_lerp(pal_paper_for_act(act_index), PAL_GOFUN, 0.5f, 0.85f);
-    ink_fill_poly(r, expanded, count, ko);
+    ink_fill_poly(r, expanded, count, ink_knockout_color(act_index));
+}
+
+Color ink_knockout_color(int act_index)
+{
+    return pal_lerp(pal_paper_for_act(act_index), PAL_GOFUN, 0.5f, 0.85f);
 }
 
 /* Two-character seals (e.g. 墨嵐, 三元) overflowed the stamp when drawn on one line; carved seals

@@ -13,6 +13,11 @@ void ink_splatter(RenderState *r, Vector2 at, Vector2 dir, float energy, InkTone
 void ink_outline(RenderState *r, const Vector2 *ctrl, int n, bool closed, float w_max,
                  Vector2 shade_dir, uint32_t seed);
 void ink_knockout(RenderState *r, const Vector2 *ctrl, int n, float pad_px, int act_index);
+/* 紙抜きの色（幕の和紙と胡粉の中間、α 0.85）。スプライトの縁取りも同じ色を使う */
+Color ink_knockout_color(int act_index);
+/* 筆線の幅を両側 pad_px 広げた紙抜き。alpha は紙抜き本来の不透明度に掛ける */
+void ink_stroke_knockout(RenderState *r, const Vector2 *pts, int n, BrushProfile prof, float pad_px,
+                         int act_index, float alpha, float reveal);
 void seal_stamp(RenderState *r, TextId glyph, Vector2 at, float size, SealStyle style, float t);
 
 /* Organic polygon & UI brush helpers (all rlgl RL_TRIANGLES) */
