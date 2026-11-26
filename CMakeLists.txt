@@ -126,6 +126,14 @@ if(BUILD_TESTING)
     add_executable(test_gameplay_fixes tests/test_gameplay_fixes.c)
     target_link_libraries(test_gameplay_fixes PRIVATE unity ink_game ink_core m)
     add_test(NAME test_gameplay_fixes COMMAND test_gameplay_fixes)
+    add_executable(qa_record tests/qa_record.c src/app/paths.c src/app/bgm_fade.c)
+    target_include_directories(qa_record PRIVATE src/app)
+    target_include_directories(qa_record SYSTEM PRIVATE "${RAYLIB_DIR}/include")
+    target_link_libraries(qa_record PRIVATE
+        ink_core ink_fluid ink_ecs ink_game ink_audio ink_render raylib GL m pthread dl rt X11
+    )
+    add_test(NAME test_qa_run COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qa_run.py
+        $<TARGET_FILE:qa_record>)
 endif()
 
 file(GLOB_RECURSE format_sources CONFIGURE_DEPENDS src/*.c src/*.h tests/*.c tests/*.h)
