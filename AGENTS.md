@@ -30,6 +30,7 @@ raylib の既定値は `$HOME/.local/opt/raylib-6.2`。
 | 整形検査 | `nix develop -c cmake --build --preset asan --target format-check` |
 | 静的解析 | `nix develop -c cmake --build --preset asan --target lint` |
 | 配布 zip | `nix develop -c python3 tools/package_dist.py` または `nix develop -c cmake --build --preset release --target dist` |
+| オフライン QA 録画 | `nix develop -c python3 tools/qa_run.py --all`（`build/release/qa_record` を使用、リポジトリ外へ MP4・スナップ・JSON を出力） |
 
 ```sh
 nix develop -c cmake --preset asan &&
@@ -60,7 +61,7 @@ nix develop -c ./build/release/inkstorm --no-post --smoke-frames 5
 | `inkstorm` | 上の全モジュール、raylib、ホストのプラットフォームライブラリ |
 
 - `core`、`fluid`、`ecs`、`game`、`audio` では `raylib.h` を include しない。
-- `raylib` のヘッダ探索先は `ink_render` と `inkstorm` の `PRIVATE` に限定する。
+- `raylib` のヘッダ探索先は `ink_render`、`inkstorm`、および開発専用オフスクリーン録画ツール `qa_record`（`tests/`・配布除外）の `PRIVATE` に限定する。
 - `src/` 一括の include パスや相対パスによる他モジュールのヘッダ参照で依存制限を迂回しない。
 - `fluid` は汎用の数値計算を担う。ダメージや属性反応などのゲームルールは `game` に置く。
 - `render` に渡すゲーム状態は `const GameState *` とし、描画側から変更しない。

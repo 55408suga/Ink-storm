@@ -601,30 +601,40 @@ def publish_scenario(
     work: Path, scen_dir: Path, name: str, args: argparse.Namespace, base: Path
 ) -> dict:
     published = {"report": str(scen_dir / "report.json"), "video": None, "contact_sheet": None}
+    kept_top = {"report.json"}
+    kept_snaps: set[str] = set()
     atomic_publish(work / "report.json", scen_dir / "report.json", base)
     if args.no_video or args.keep_wav:
         atomic_publish(work / "audio.wav", scen_dir / "audio.wav", base)
-    if args.no_video:
-        return published
-    atomic_publish(work / f"{name}.mp4", scen_dir / f"{name}.mp4", base)
-    snaps_out = ensure_safe_dir(base, (name, "snaps"))
-    for snap in sorted((work / "snaps").iterdir()):
-        if SNAP_FILE.fullmatch(snap.name) or snap.name == "contact_sheet.png":
-            atomic_publish(snap, snaps_out / snap.name, base)
-    published["video"] = str(scen_dir / f"{name}.mp4")
-    published["contact_sheet"] = str(snaps_out / "contact_sheet.png")
+        kept_top.add("audio.wav")
+    if not args.no_video:
+        mp4_name = f"{name}.mp4"
+        atomic_publish(work / mp4_name, scen_dir / mp4_name, base)
+        kept_top.add(mp4_name)
+        snaps_out = ensure_safe_dir(base, (name, "snaps"))
+        for snap in sorted((work / "snaps").iterdir()):
+            if SNAP_FILE.fullmatch(snap.name) or snap.name == "contact_sheet.png":
+                atomic_publish(snap, snaps_out / snap.name, base)
+                kept_snaps.add(snap.name)
+        published["video"] = str(scen_dir / mp4_name)
+        published["contact_sheet"] = str(snaps_out / "contact_sheet.png")
+    prune_obsolete_outputs(scen_dir, name, kept_top, kept_snaps)
     return published
 
 
-def clear_previous_outputs(scen_dir: Path, name: str) -> None:
-    remove_published([scen_dir / "report.json", scen_dir / f"{name}.mp4", scen_dir / "audio.wav"])
+def prune_obsolete_outputs(
+    scen_dir: Path, name: str, kept_top: set[str], kept_snaps: set[str]
+) -> None:
+    top_candidates = ("report.json", f"{name}.mp4", "audio.wav")
+    remove_published([scen_dir / f for f in top_candidates if f not in kept_top])
     snaps = scen_dir / "snaps"
     if snaps.is_dir() and not snaps.is_symlink():
         remove_published(
             [
                 p
                 for p in snaps.iterdir()
-                if SNAP_FILE.fullmatch(p.name) or p.name == "contact_sheet.png"
+                if (SNAP_FILE.fullmatch(p.name) or p.name == "contact_sheet.png")
+                and p.name not in kept_snaps
             ]
         )
 
@@ -662,7 +672,6 @@ def run_scenario(name: str, qa_bin: Path, out_dir: Path, args: argparse.Namespac
                 extract_snaps(work / f"{name}.mp4", work / "snaps", report["frames"])
             with publish_lock(base):
                 scen_dir = ensure_safe_dir(base, (name,))
-                clear_previous_outputs(scen_dir, name)
                 result.update(publish_scenario(work, scen_dir, name, args, base))
     except (PipelineError, OSError) as exc:
         result["error"] = str(exc)
