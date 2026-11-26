@@ -5,6 +5,7 @@
 #include "raylib.h"
 #include "text_table.h"
 #include "ui_view.h"
+#include "vfx_rules.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -196,6 +197,7 @@ typedef struct {
     float flash_t;
     float flash_times[4];
     int32_t flash_count;
+    VfxThunderburstThrottle thunderburst_fx;
 
     /* Banners, intro queue, major effects */
     float boss_banner_t;

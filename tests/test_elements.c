@@ -5,6 +5,7 @@
 #include "game.h"
 #include "roguelike/relics.h"
 #include "roguelike/upgrades.h"
+#include "roguelike/waves.h"
 #include "unity.h"
 
 #include <math.h>
@@ -561,6 +562,89 @@ static void test_thunderburst_trigger_impulse_decay_cd_and_cap(void)
     game_destroy(g);
 }
 
+/* Paints a 6-cell fire + storm row at the top-left of 64px block (bx, by) and returns its
+ * centroid, which sits 2.5 cells right of the row start. */
+static void paint_burst_block(GameState *g, int bx, int by, float *cx, float *cy)
+{
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    const int x0 = bx * 8 + 1;
+    const int y0 = by * 8 + 1;
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(x0 + k, y0)] = 0.45f;
+        storm[cell_idx(x0 + k, y0)] = 0.45f;
+    }
+    *cx = cell_center_px(x0) + 2.5f * FLUID_CELL_PX;
+    *cy = cell_center_px(y0);
+}
+
+static void test_chained_thunderbursts_keep_full_strength_but_freeze_only_once_per_055s(void)
+{
+    enum { REARM_TICKS = 33 };
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+
+    for (int t = 0; t <= REARM_TICKS; ++t) {
+        clear_all_entities(g);
+        fluid_reset(&g->fluid);
+        float cx = 0.0f;
+        float cy = 0.0f;
+        paint_burst_block(g, 1 + t % 17, 1 + 2 * (t / 17), &cx, &cy);
+        const EntityId oni = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, cx + 40.0f, cy);
+        const int32_t hp_before = game_health(g, oni)->hp;
+        g->pending_impulse_count = 0;
+        g->event_count = 0;
+        g->hitstop_t = 0.0f;
+
+        elements_step(g);
+
+        TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+        TEST_ASSERT_EQUAL_INT32(t + 1, g->run.thunderbursts);
+        TEST_ASSERT_EQUAL_INT32(1, g->pending_impulse_count);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 60.0f, g->pending_impulses[0].peak_speed);
+        TEST_ASSERT_EQUAL_INT32(hp_before - 30, game_health(g, oni)->hp);
+        TEST_ASSERT_FLOAT_WITHIN(1.0f, 286.0f, game_velocity(g, oni)->vx);
+        if (t == 0 || t == REARM_TICKS) {
+            TEST_ASSERT_TRUE(g->hitstop_t >= 0.03f - 1e-5f);
+        } else {
+            TEST_ASSERT_EQUAL_FLOAT(0.0f, g->hitstop_t);
+        }
+    }
+    game_destroy(g);
+}
+
+static void test_new_wave_and_act_rearm_the_thunderburst_freeze(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    float cx = 0.0f;
+    float cy = 0.0f;
+    paint_burst_block(g, 2, 2, &cx, &cy);
+    g->hitstop_t = 0.0f;
+    elements_step(g);
+    TEST_ASSERT_TRUE(g->internal.thunderburst_hitstop_cd > 0.0f);
+
+    game_debug_start_wave(g, 1);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->internal.thunderburst_hitstop_cd);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+    paint_burst_block(g, 5, 2, &cx, &cy);
+    g->hitstop_t = 0.0f;
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_TRUE(g->hitstop_t >= 0.03f - 1e-5f);
+
+    TEST_ASSERT_TRUE(g->internal.thunderburst_hitstop_cd > 0.0f);
+    waves_prepare_act(g);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->internal.thunderburst_hitstop_cd);
+    game_destroy(g);
+}
+
 static void test_thunderburst_in_bottom_right_block_uses_last_block(void)
 {
     GameState *g = game_create(NULL);
@@ -1043,6 +1127,8 @@ int main(void)
     RUN_TEST(test_processing_order_ignite_before_storm_zap);
     RUN_TEST(test_pending_impulse_applied_next_tick);
     RUN_TEST(test_thunderburst_trigger_impulse_decay_cd_and_cap);
+    RUN_TEST(test_chained_thunderbursts_keep_full_strength_but_freeze_only_once_per_055s);
+    RUN_TEST(test_new_wave_and_act_rearm_the_thunderburst_freeze);
     RUN_TEST(test_thunderburst_in_bottom_right_block_uses_last_block);
     RUN_TEST(test_field_without_fire_or_storm_leaves_ink_untouched);
     RUN_TEST(test_cataclysm_trigger_excludes_thunderburst_and_cd);

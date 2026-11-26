@@ -33,6 +33,7 @@ static int voice_tier(const AudioVoice *v)
     case AUDIO_VOICE_DEFLECT_BAMBOO:
     case AUDIO_VOICE_IGNITE_FLAME:
     case AUDIO_VOICE_STORM_ZAP:
+    case AUDIO_VOICE_THUNDERBURST:
     case AUDIO_VOICE_ORB_DROP:
     case AUDIO_VOICE_SKILL_DENIED:
     case AUDIO_VOICE_UI_CLICK:
@@ -47,12 +48,13 @@ static int voice_kind_cap(AudioVoiceKind kind)
     switch (kind) {
     case AUDIO_VOICE_KILL_TAIKO:
         return 4;
-    case AUDIO_VOICE_STORM_ZAP:
     case AUDIO_VOICE_ORB_DROP:
     case AUDIO_VOICE_DEFLECT_BAMBOO:
         return 3;
     case AUDIO_VOICE_CHAIN_KOTO:
     case AUDIO_VOICE_IGNITE_FLAME:
+    case AUDIO_VOICE_STORM_ZAP:
+    case AUDIO_VOICE_THUNDERBURST:
     case AUDIO_VOICE_UI_CLICK:
         return 2;
     case AUDIO_VOICE_SKILL_DENIED:
@@ -107,9 +109,45 @@ static int pick_voice_slot(const AudioState *audio, AudioVoiceKind kind)
     return victim_tier <= tier ? victim : -1;
 }
 
+#define THUNDERBURST_RETRIGGER_SAMPLES ((uint64_t)(AUDIO_SAMPLE_RATE * 24 / 100))
+#define THUNDERBURST_CHAIN_SAMPLES ((uint64_t)(AUDIO_SAMPLE_RATE * 75 / 100))
+#define THUNDERBURST_CHAIN_MAX 4u
+#define STORM_ZAP_RETRIGGER_SAMPLES ((uint64_t)(AUDIO_SAMPLE_RATE * 12 / 100))
+
+static bool reaction_voice_rate_limited(const AudioState *audio, AudioVoiceKind kind, uint64_t now)
+{
+    return (kind == AUDIO_VOICE_THUNDERBURST && now < audio->thunderburst_next_sample) ||
+           (kind == AUDIO_VOICE_STORM_ZAP && now < audio->storm_zap_next_sample);
+}
+
+/* A sweep that keeps bursting rolls on as quieter repeats instead of re-firing one full-level
+ * crack; the gain rides in param so the voice never needs to see the shared chain counter. */
+static void start_thunderburst_chain(AudioState *audio, AudioVoice *v, uint64_t now)
+{
+    if (now < audio->thunderburst_chain_until) {
+        if (audio->thunderburst_chain < THUNDERBURST_CHAIN_MAX) {
+            audio->thunderburst_chain++;
+        }
+    } else {
+        audio->thunderburst_chain = 0;
+    }
+    audio->thunderburst_next_sample = now + THUNDERBURST_RETRIGGER_SAMPLES;
+    audio->thunderburst_chain_until = now + THUNDERBURST_CHAIN_SAMPLES;
+    if (v->param <= 0.0f) {
+        v->param = 1.0f - 0.13f * (float)audio->thunderburst_chain;
+    }
+}
+
+/* The limits use the render clock rather than the requested start: a voice for a later tick only
+ * reaches here when the renderer gets to it, so per-tick and batched rendering check it at the
+ * same sample, and a caller passing a stale start cannot slip past the gap. */
 static AudioVoice *allocate_voice(AudioState *audio, AudioVoiceKind kind, uint64_t start_sample,
                                   float freq, float param)
 {
+    const uint64_t now = audio->samples_rendered;
+    if (reaction_voice_rate_limited(audio, kind, now)) {
+        return NULL;
+    }
     const int slot = pick_voice_slot(audio, kind);
     if (slot < 0) {
         return NULL;
@@ -123,6 +161,11 @@ static AudioVoice *allocate_voice(AudioState *audio, AudioVoiceKind kind, uint64
     v->env = 1.0f;
     v->freq = freq;
     v->param = param;
+    if (kind == AUDIO_VOICE_THUNDERBURST) {
+        start_thunderburst_chain(audio, v, now);
+    } else if (kind == AUDIO_VOICE_STORM_ZAP) {
+        audio->storm_zap_next_sample = now + STORM_ZAP_RETRIGGER_SAMPLES;
+    }
     return v;
 }
 
@@ -333,25 +376,33 @@ static float step_single_voice(const AudioState *audio, AudioVoice *v, float nz)
         break;
     }
     case AUDIO_VOICE_STORM_ZAP: {
-        const float f = 1320.0f + 680.0f * v->env;
-        v->phase += f / sr;
-        v->phase2 += (f * 1.73f) / sr;
-        const float spark =
-            nz * 0.52f + sinf(v->phase * k_two_pi) * 0.34f + sinf(v->phase2 * k_two_pi) * 0.22f;
-        out = spark * v->env * 0.46f;
-        v->env *= 0.99892f;
+        /* Pink static through two band-passes and no oscillator: raw white noise and 2-3.5 kHz
+         * sines whine once zaps overlap, and even a low decaying sine ping reads as a toy blip. */
+        const float t = (float)v->age / sr;
+        const float onset = audio_smoothstep(0.0f, 0.002f, t);
+        const float pink = audio_pink_step(&v->pink, nz);
+        const float body = audio_svf_step(&v->svf[0], pink, 950.0f + 450.0f * v->env, 1.35f).bp;
+        const float sizzle = audio_svf_step(&v->svf[1], pink, 1900.0f, 1.7f).bp * (v->env * v->env);
+        out = (body + sizzle) * onset * v->env * 0.78f;
+        v->env *= 0.99905f;
         break;
     }
     case AUDIO_VOICE_THUNDERBURST: {
-        /* Deep taiko thump + sharp electric discharge burst */
-        const float f_drum = 62.0f + 210.0f * v->env * v->env * v->env;
-        v->phase += f_drum / sr;
-        v->phase2 += (1480.0f + 920.0f * v->env) / sr;
-        v->lp += 0.20f * (nz - v->lp);
-        const float sub = sinf(v->phase * k_two_pi) * 0.74f + sinf(v->phase * 9.8f) * 0.20f;
-        const float crack =
-            ((nz - v->lp) * 0.65f + sinf(v->phase2 * k_two_pi) * 0.35f) * v->env * v->env;
-        out = (sub + crack) * v->env * 0.74f;
+        /* A low taiko body under a band-limited snap: an unfiltered crack and a 1.5-2.4 kHz sine
+         * turn chained bursts into a shrill ringing. param carries the chain gain, and repeats
+         * lose the snap faster than the body so a sweep rolls like distant thunder. */
+        const float t = (float)v->age / sr;
+        const float onset = audio_smoothstep(0.0f, 0.002f, t);
+        const float gain = (v->param > 0.0f && v->param <= 1.0f) ? v->param : 1.0f;
+        const float env3 = v->env * v->env * v->env;
+        v->phase += (58.0f + 160.0f * env3) / sr;
+        const float pink = audio_pink_step(&v->pink, nz);
+        const float drum =
+            sinf(v->phase * k_two_pi) * 0.74f + sinf(v->phase * k_two_pi * 1.56f) * 0.18f;
+        const float rumble = audio_svf_step(&v->svf[0], pink, 260.0f, 0.78f).lp * 0.55f;
+        const float snap =
+            audio_svf_step(&v->svf[1], pink, 680.0f + 520.0f * v->env, 1.35f).bp * env3 * 0.65f;
+        out = (drum + rumble + snap * gain) * onset * v->env * gain * 0.68f;
         v->env *= 0.99958f;
         break;
     }

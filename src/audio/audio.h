@@ -158,6 +158,12 @@ typedef struct {
     float bgm_victory_t;
     int32_t bgm_victory_step;
 
+    /* Reaction retrigger limits on the sample clock, so batched and per-tick rendering agree */
+    uint64_t thunderburst_next_sample;
+    uint64_t thunderburst_chain_until;
+    uint64_t storm_zap_next_sample;
+    uint8_t thunderburst_chain;
+
     AudioVoice voices[AUDIO_MAX_VOICES];
     AudioPendingVoice pending[AUDIO_PENDING_VOICE_CAP];
     int32_t pending_head;

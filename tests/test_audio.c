@@ -433,6 +433,308 @@ static void test_audio_spam_never_steals_milestone_voices(void)
     free(a);
 }
 
+static int count_active_kind(const AudioState *a, AudioVoiceKind kind)
+{
+    int n = 0;
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        n += a->voices[i].active && a->voices[i].kind == kind ? 1 : 0;
+    }
+    return n;
+}
+
+static const AudioVoice *newest_voice(const AudioState *a)
+{
+    const AudioVoice *best = NULL;
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        const AudioVoice *v = &a->voices[i];
+        if (v->active && (best == NULL || v->birth_seq > best->birth_seq)) {
+            best = v;
+        }
+    }
+    return best;
+}
+
+static void render_silence(AudioState *a, size_t n)
+{
+    int16_t buf[1024];
+    while (n > 0) {
+        const size_t chunk = n < 1024u ? n : 1024u;
+        audio_render(a, buf, chunk);
+        n -= chunk;
+    }
+}
+
+/* Spawns one voice now and reports whether a slot was actually taken. */
+static bool spawn_now(AudioState *a, AudioVoiceKind kind, float freq)
+{
+    const uint64_t seq = a->voice_seq;
+    audio_voice_spawn(a, kind, a->samples_rendered, freq, 0.0f);
+    return a->voice_seq != seq;
+}
+
+static void test_audio_thunderburst_retriggers_no_faster_than_024s_and_reactions_cap_at_two(void)
+{
+    enum { GAP = AUDIO_SAMPLE_RATE * 24 / 100 };
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(31));
+
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    for (int i = 0; i < 8; ++i) {
+        TEST_ASSERT_FALSE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    }
+    render_silence(a, GAP - 1);
+    TEST_ASSERT_FALSE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    render_silence(a, 1);
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+
+    for (int i = 0; i < 12; ++i) {
+        render_silence(a, GAP);
+        TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+        TEST_ASSERT_TRUE(count_active_kind(a, AUDIO_VOICE_THUNDERBURST) <= 2);
+    }
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    /* Clearing the retrigger gaps isolates the per-kind cap. */
+    audio_init(a, UINT64_C(31));
+    for (int i = 0; i < 5; ++i) {
+        a->thunderburst_next_sample = 0;
+        a->storm_zap_next_sample = 0;
+        TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+        TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_STORM_ZAP, 1320.0f));
+    }
+    TEST_ASSERT_EQUAL_INT(2, count_active_kind(a, AUDIO_VOICE_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT(2, count_active_kind(a, AUDIO_VOICE_STORM_ZAP));
+    free(a);
+}
+
+static void test_audio_thunderburst_chain_softens_then_recovers_after_075s_quiet(void)
+{
+    enum { GAP = AUDIO_SAMPLE_RATE * 24 / 100, CHAIN = AUDIO_SAMPLE_RATE * 75 / 100 };
+    static const float k_chain_gain[] = {1.00f, 0.87f, 0.74f, 0.61f, 0.48f, 0.48f, 0.48f};
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(32));
+
+    for (size_t i = 0; i < sizeof k_chain_gain / sizeof k_chain_gain[0]; ++i) {
+        if (i > 0) {
+            render_silence(a, GAP);
+        }
+        TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+        const AudioVoice *v = newest_voice(a);
+        TEST_ASSERT_NOT_NULL(v);
+        TEST_ASSERT_EQUAL_INT(AUDIO_VOICE_THUNDERBURST, v->kind);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, k_chain_gain[i], v->param);
+    }
+
+    render_silence(a, CHAIN - 1);
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.48f, newest_voice(a)->param);
+
+    render_silence(a, CHAIN);
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, newest_voice(a)->param);
+    free(a);
+}
+
+static void test_audio_thunderburst_never_steals_skill_or_milestone_voices(void)
+{
+    static const AudioVoiceKind k_held[] = {
+        AUDIO_VOICE_WAVE_CLEAR,    AUDIO_VOICE_SHRINE_GONG, AUDIO_VOICE_CATACLYSM,
+        AUDIO_VOICE_CYCLONE_SWIRL, AUDIO_VOICE_GALE_SLASH,  AUDIO_VOICE_SURGE_KOTO,
+    };
+    enum { HELD = sizeof k_held / sizeof k_held[0] };
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(33));
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        audio_voice_spawn(a, k_held[i % HELD], 0, 150.0f, 0.0f);
+    }
+    AudioVoiceKind before[AUDIO_MAX_VOICES];
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        TEST_ASSERT_TRUE(a->voices[i].active);
+        before[i] = a->voices[i].kind;
+    }
+
+    TEST_ASSERT_FALSE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    TEST_ASSERT_EQUAL_UINT64(0, a->thunderburst_next_sample);
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        TEST_ASSERT_TRUE(a->voices[i].active);
+        TEST_ASSERT_EQUAL_INT(before[i], a->voices[i].kind);
+    }
+    free(a);
+}
+
+static void test_audio_storm_zap_hops_in_one_tick_share_one_voice_until_012s(void)
+{
+    enum { GAP = AUDIO_SAMPLE_RATE * 12 / 100, HOPS = 4 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t buf[AUDIO_SAMPLES_PER_TICK];
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(34));
+
+    g->phase = RUN_PHASE_PLAYING;
+    g->event_count = HOPS;
+    for (int i = 0; i < HOPS; ++i) {
+        memset(&g->events[i], 0, sizeof g->events[i]);
+        g->events[i].type = EV_STORM_ZAP;
+    }
+    const uint64_t seq = a->voice_seq;
+    audio_consume_events(a, g);
+    audio_render(a, buf, AUDIO_SAMPLES_PER_TICK);
+    TEST_ASSERT_EQUAL_UINT64(seq + 1u, a->voice_seq);
+    TEST_ASSERT_EQUAL_INT(1, count_active_kind(a, AUDIO_VOICE_STORM_ZAP));
+
+    render_silence(a, GAP - AUDIO_SAMPLES_PER_TICK - 1);
+    TEST_ASSERT_FALSE(spawn_now(a, AUDIO_VOICE_STORM_ZAP, 1320.0f));
+    render_silence(a, 1);
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_STORM_ZAP, 1320.0f));
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    free(a);
+    game_destroy(g);
+}
+
+static int32_t render_peak(AudioState *a, int16_t *buf, size_t n)
+{
+    audio_render(a, buf, n);
+    return peak_abs(buf, n);
+}
+
+static void test_audio_chained_thunderburst_renders_quieter_than_a_fresh_one(void)
+{
+    enum { GAP = AUDIO_SAMPLE_RATE * 24 / 100, CHAIN_STEPS = 4 };
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(GAP, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+    audio_init(a, UINT64_C(36));
+    audio_set_volumes(a, 100, 0, 100);
+
+    TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    const int32_t fresh_peak = render_peak(a, buf, GAP);
+    int32_t chained_peak = 0;
+    for (int i = 0; i < CHAIN_STEPS; ++i) {
+        TEST_ASSERT_TRUE(spawn_now(a, AUDIO_VOICE_THUNDERBURST, 62.0f));
+        chained_peak = render_peak(a, buf, GAP);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.48f, newest_voice(a)->param);
+    TEST_ASSERT_TRUE(fresh_peak >= 1000);
+    TEST_ASSERT_TRUE_MESSAGE(chained_peak * 4 < fresh_peak * 3,
+                             "chained Thunderburst should render audibly quieter");
+    free(buf);
+    free(a);
+}
+
+static void test_audio_batched_storm_zap_flood_still_queues_a_wave_clear(void)
+{
+    enum { TICKS = 12 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(37));
+
+    g->phase = RUN_PHASE_PLAYING;
+    for (int t = 0; t < TICKS; ++t) {
+        g->event_count = GAME_MAX_EVENTS;
+        for (int i = 0; i < GAME_MAX_EVENTS; ++i) {
+            memset(&g->events[i], 0, sizeof g->events[i]);
+            g->events[i].type = EV_STORM_ZAP;
+        }
+        if (t == TICKS - 1) {
+            g->events[GAME_MAX_EVENTS - 1].type = EV_WAVE_CLEAR;
+        }
+        audio_consume_events(a, g);
+    }
+
+    bool wave_clear_queued = false;
+    for (int32_t i = 0; i < a->pending_count; ++i) {
+        const AudioPendingVoice *p = &a->pending[(a->pending_head + i) % AUDIO_PENDING_VOICE_CAP];
+        wave_clear_queued = wave_clear_queued || p->kind == AUDIO_VOICE_WAVE_CLEAR;
+    }
+    TEST_ASSERT_TRUE(wave_clear_queued);
+    TEST_ASSERT_TRUE(a->pending_count <= TICKS);
+
+    render_silence(a, (size_t)AUDIO_SAMPLES_PER_TICK * TICKS);
+    TEST_ASSERT_EQUAL_INT(1, count_active_kind(a, AUDIO_VOICE_WAVE_CLEAR));
+    free(a);
+    game_destroy(g);
+}
+
+static void setup_reaction_storm_tick(GameState *g, int tick)
+{
+    g->phase = RUN_PHASE_PLAYING;
+    g->run.wave_index = 0;
+    g->event_count = 0;
+    static const GameEventType seq[] = {EV_THUNDERBURST, EV_STORM_ZAP, EV_STORM_ZAP,
+                                        EV_THUNDERBURST, EV_STORM_ZAP};
+    const int n = 1 + tick % 5;
+    for (int i = 0; i < n; ++i) {
+        memset(&g->events[i], 0, sizeof g->events[i]);
+        g->events[i].type = seq[(tick + i) % 5];
+        g->event_count++;
+    }
+}
+
+static void test_audio_reaction_limits_match_per_tick_and_batched_and_reset_in_lobby(void)
+{
+    enum { TICKS = 72, BATCH = 6, TOTAL = AUDIO_SAMPLES_PER_TICK * TICKS };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *b = calloc(1, sizeof *b);
+    int16_t *out_a = calloc(TOTAL, sizeof *out_a);
+    int16_t *out_b = calloc(TOTAL, sizeof *out_b);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(out_a);
+    TEST_ASSERT_NOT_NULL(out_b);
+
+    audio_init(a, UINT64_C(35));
+    audio_set_volumes(a, 100, 0, 100);
+    for (int t = 0; t < TICKS; ++t) {
+        setup_reaction_storm_tick(g, t);
+        audio_consume_events(a, g);
+        audio_render(a, out_a + (size_t)t * AUDIO_SAMPLES_PER_TICK, AUDIO_SAMPLES_PER_TICK);
+    }
+
+    audio_init(b, UINT64_C(35));
+    audio_set_volumes(b, 100, 0, 100);
+    for (int t = 0; t < TICKS; t += BATCH) {
+        for (int k = 0; k < BATCH; ++k) {
+            setup_reaction_storm_tick(g, t + k);
+            audio_consume_events(b, g);
+        }
+        audio_render(b, out_b + (size_t)t * AUDIO_SAMPLES_PER_TICK,
+                     (size_t)AUDIO_SAMPLES_PER_TICK * BATCH);
+    }
+    TEST_ASSERT_TRUE(peak_abs(out_a, TOTAL) >= 1000);
+    TEST_ASSERT_EQUAL_MEMORY(out_a, out_b, TOTAL * sizeof *out_a);
+    TEST_ASSERT_EQUAL_UINT64(a->voice_seq, b->voice_seq);
+
+    (void)spawn_now(b, AUDIO_VOICE_THUNDERBURST, 62.0f);
+    (void)spawn_now(b, AUDIO_VOICE_STORM_ZAP, 1320.0f);
+    TEST_ASSERT_TRUE(b->thunderburst_next_sample > b->samples_rendered);
+    TEST_ASSERT_TRUE(b->storm_zap_next_sample > b->samples_rendered);
+    audio_set_lobby_mode(b, true);
+    TEST_ASSERT_EQUAL_UINT64(0, b->thunderburst_next_sample);
+    TEST_ASSERT_EQUAL_UINT64(0, b->thunderburst_chain_until);
+    TEST_ASSERT_EQUAL_UINT64(0, b->storm_zap_next_sample);
+    TEST_ASSERT_EQUAL_UINT8(0, b->thunderburst_chain);
+    TEST_ASSERT_TRUE(spawn_now(b, AUDIO_VOICE_THUNDERBURST, 62.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, newest_voice(b)->param);
+    TEST_ASSERT_TRUE(spawn_now(b, AUDIO_VOICE_STORM_ZAP, 1320.0f));
+    TEST_ASSERT_TRUE(audio_validate_finite(b));
+
+    free(out_b);
+    free(out_a);
+    free(b);
+    free(a);
+    game_destroy(g);
+}
+
 static void render_brush(AudioState *a, int32_t style, bool dry, bool surge, int16_t *buf, size_t n)
 {
     audio_init(a, UINT64_C(21));
@@ -1101,6 +1403,13 @@ int main(void)
     RUN_TEST(test_audio_ticks_keep_subtick_offsets_after_renderer_runs_ahead);
     RUN_TEST(test_audio_lobby_entry_drops_stale_combat_state);
     RUN_TEST(test_audio_spam_never_steals_milestone_voices);
+    RUN_TEST(test_audio_thunderburst_retriggers_no_faster_than_024s_and_reactions_cap_at_two);
+    RUN_TEST(test_audio_thunderburst_chain_softens_then_recovers_after_075s_quiet);
+    RUN_TEST(test_audio_thunderburst_never_steals_skill_or_milestone_voices);
+    RUN_TEST(test_audio_storm_zap_hops_in_one_tick_share_one_voice_until_012s);
+    RUN_TEST(test_audio_reaction_limits_match_per_tick_and_batched_and_reset_in_lobby);
+    RUN_TEST(test_audio_chained_thunderburst_renders_quieter_than_a_fresh_one);
+    RUN_TEST(test_audio_batched_storm_zap_flood_still_queues_a_wave_clear);
     RUN_TEST(test_audio_brush_scrape_differs_per_brush_and_state);
     RUN_TEST(test_audio_pause_ducks_procedural_bgm);
     RUN_TEST(test_audio_ui_cues_are_audible);
