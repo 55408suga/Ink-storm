@@ -16,6 +16,11 @@ GameVec2 player_skills_stroke_force(double mdx, double mdy, float force_scale, f
 void player_skills_emit_ember_trail(GameState *g, float *dist_acc, float interval,
                                     EmberTrailSegment seg);
 void player_skills_refill_sandbox_ink(GameState *g);
+float player_skills_surge_cost_mul(const GameState *g);
+float player_skills_cyclone_cost(const GameState *g);
+float player_skills_gale_cost(const GameState *g);
+float player_skills_next_tick_cyclone_cost(const GameState *g);
+float player_skills_next_tick_gale_cost(const GameState *g);
 void player_skills_cast_free_gale(GameState *g, float origin_x, float origin_y, float dir_x,
                                   float dir_y);
 

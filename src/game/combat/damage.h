@@ -5,6 +5,10 @@
 
 #include <stdint.h>
 
+#define COMBAT_ORB_INK_VALUE 10
+#define COMBAT_CHAIN_INK_PER_STEP 3.0f
+#define COMBAT_CHAIN_INK_CAP 3
+
 int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uint32_t dmg_flags,
                               float kx, float ky);
 int32_t combat_apply_damage(GameState *g, EntityId target, int32_t base_dmg, uint32_t dmg_flags,

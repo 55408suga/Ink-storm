@@ -448,7 +448,7 @@ typedef struct {
 | `EV_THUNDERBURST` | 爆雷ブロック（64px 四方）内の爆雷セル重心（px） | `radius_px`（`72 * rmul`）, `0` | ブロック内の爆雷セル数（`>= 6 × GAME_CELL_COUNT_SCALE`） | 0 |
 | `EV_CATACLYSM` | 共鳴ブロック（64px 四方）内の共鳴セル重心（px） | `96.0f`, `0` | ブロック内の共鳴セル数（`>= 8 × GAME_CELL_COUNT_SCALE`） | 0 |
 | `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 0 |
-| `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（16） | `EVF_ORB_AUTO`（自動回収時） |
+| `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（10） | `EVF_ORB_AUTO`（自動回収時） |
 | `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
 | `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
 | `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号（多部位一筆龍：`2`=点睛、`3`=昇龍） | 0 |

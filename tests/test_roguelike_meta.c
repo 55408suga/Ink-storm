@@ -950,7 +950,7 @@ static void test_brush_styles_and_stacking(void)
 
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.80f, g->internal.mods.brush_radius_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.90f, g->internal.mods.brush_force_mul);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.70f, g->internal.mods.stroke_cost_mul);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.90f, g->internal.mods.stroke_cost_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.10f, g->internal.mods.cyclone_cd);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.72f, g->internal.mods.cyclone_storm_add);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.18f, g->internal.mods.cyclone_storm_sustain);
@@ -1928,8 +1928,8 @@ static void test_p2_relics_unlockable_and_mask(void)
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.75f, g->internal.mods.spawn_interval_mul);
 
         waves_start_wave(g, 0);
-        /* Act 1 Wave 1 base spawn_interval = 1.1f -> 1.1f * 0.75f = 0.825f. */
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.1f * 0.75f, g->internal.spawn_cd);
+        /* Act 1 Wave 1 base spawn_interval = 0.95f -> 0.95f * 0.75f = 0.7125f. */
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.95f * 0.75f, g->internal.spawn_cd);
 
         /* Kill 1 Archer (base 1 orb + 1 bonus = 2 orbs). */
         clear_test_entities(g);
@@ -1938,17 +1938,17 @@ static void test_p2_relics_unlockable_and_mask(void)
         ecs_flush_destroy(&g->ecs);
         TEST_ASSERT_EQUAL_INT(2, count_entities_with_mask(g, COMP_INK_ORB));
 
-        /* Act 1 Wave 1 base max_alive = 5 -> with +2 cap is 7. */
+        /* Act 1 Wave 1 base max_alive = 6 -> with +2 cap is 8. */
         clear_test_entities(g);
-        for (int k = 0; k < 6; ++k) {
-            (void)game_debug_spawn_enemy(g, ENEMY_ARCHER, 100.0f + (float)k * 120.0f, 140.0f);
+        for (int k = 0; k < 7; ++k) {
+            (void)game_debug_spawn_enemy(g, ENEMY_ARCHER, 100.0f + (float)k * 105.0f, 140.0f);
         }
         g->internal.spawn_cd = 0.0f;
         waves_step_spawns(g);
-        TEST_ASSERT_EQUAL_INT(7, count_entities_with_mask(g, COMP_ENEMY));
+        TEST_ASSERT_EQUAL_INT(8, count_entities_with_mask(g, COMP_ENEMY));
         g->internal.spawn_cd = 0.0f;
         waves_step_spawns(g);
-        TEST_ASSERT_EQUAL_INT(7, count_entities_with_mask(g, COMP_ENEMY));
+        TEST_ASSERT_EQUAL_INT(8, count_entities_with_mask(g, COMP_ENEMY));
 
         /* Run result crystal_bonus_x15 == true -> floor(base * 1.5). */
         g->run.acts_cleared = 1;
@@ -2126,6 +2126,168 @@ static void test_p2_fallback_offers_and_overflow_conversion(void)
     }
 }
 
+static float ink_spent_by_step(GameState *g, const BrushInput *in, float surge_t)
+{
+    g->player.ink = g->player.ink_max;
+    g->player.surge_t = surge_t;
+    g->player.cyclone_cd = 0.0f;
+    g->player.gale_charges = 1;
+    g->player.idle_t = 1.0f;
+    player_skills_step(g, in);
+    return g->player.ink_max - g->player.ink;
+}
+
+static void test_ink_economy_orb_chain_refund_and_surge_cost(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Collecting one Ink Orb restores 10 ink. */
+    const EntityId orb = game_debug_spawn_orb(g, 400.0f, 300.0f);
+    TEST_ASSERT_EQUAL_INT32(10, game_orb(g, orb)->value);
+    TransformComp *otr = game_transform_mut(g, orb);
+    otr->x = g->player.cursor_x;
+    otr->y = g->player.cursor_y;
+    g->player.ink = 50.0f;
+    combat_orbs_step(g);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 60.0f, g->player.ink);
+
+    /* Chain kills refund 3 ink per chain step from x2, capped at x3 (+6, +9, +9, ...). */
+    static const float k_expected_refund[] = {0.0f, 6.0f, 9.0f, 9.0f, 9.0f};
+    g->run.chain = 0;
+    g->run.chain_t = 0.0f;
+    for (int k = 0; k < (int)(sizeof k_expected_refund / sizeof k_expected_refund[0]); ++k) {
+        const EntityId e =
+            game_debug_spawn_enemy(g, ENEMY_ARCHER, 260.0f + 90.0f * (float)k, 300.0f);
+        g->player.ink = 50.0f;
+        (void)combat_apply_damage(g, e, 50, DMG_PHYSICAL, 0.0f, 0.0f);
+        TEST_ASSERT_EQUAL_INT32(k + 1, g->run.chain);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 50.0f + k_expected_refund[k], g->player.ink);
+    }
+    clear_test_entities(g);
+
+    /* Ink Surge multiplies every skill's ink cost by 0.72: stroke, Cyclone, and Gale alike. */
+    const BrushInput stroke = {
+        .pmx = 300.0f, .pmy = 300.0f, .mx = 340.0f, .my = 300.0f, .paint = true};
+    const BrushInput cyclone = {
+        .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .cyclone = true};
+    const BrushInput gale = {
+        .pmx = 400.0f, .pmy = 300.0f, .mx = 400.0f, .my = 300.0f, .gale = true};
+
+    const float stroke_plain = ink_spent_by_step(g, &stroke, 0.0f);
+    const float stroke_surge = ink_spent_by_step(g, &stroke, 3.0f);
+    TEST_ASSERT_TRUE(stroke_plain > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, stroke_plain * 0.72f, stroke_surge);
+
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 26.0f, ink_spent_by_step(g, &cyclone, 0.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 26.0f * 0.72f, ink_spent_by_step(g, &cyclone, 3.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 16.0f, ink_spent_by_step(g, &gale, 0.0f));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 16.0f * 0.72f, ink_spent_by_step(g, &gale, 3.0f));
+
+    g->player.surge_t = 3.0f;
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 26.0f * 0.72f, player_skills_cyclone_cost(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 16.0f * 0.72f, player_skills_gale_cost(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 26.0f * 0.72f, player_skills_next_tick_cyclone_cost(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 16.0f * 0.72f, player_skills_next_tick_gale_cost(g));
+    g->player.surge_t = 0.01f;
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 26.0f, player_skills_next_tick_cyclone_cost(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 16.0f, player_skills_next_tick_gale_cost(g));
+    g->player.surge_t = 0.0f;
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 26.0f, player_skills_cyclone_cost(g));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 16.0f, player_skills_gale_cost(g));
+
+    game_destroy(g);
+}
+
+static void test_autoplay_skill_budget_and_surge_expiry(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+
+    const float cx = g->shrines[0].x;
+    const float cy = g->shrines[0].y;
+    g->player.cursor_x = cx + 120.0f;
+    g->player.cursor_y = cy;
+    g->player.idle_t = 0.0f;
+    g->player.cyclone_cd = 0.0f;
+    g->player.gale_charges = 1;
+
+    /* Set up both an urgent projectile (triggers Cyclone) and a nearby slam target (wants Gale). */
+    const EntityId umbrella = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, cx + 120.0f, cy);
+    const EntityId arrow =
+        game_debug_spawn_projectile(g, PROJ_ARROW, cx + 100.0f, cy, -120.0f, 0.0f);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, umbrella.index);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, arrow.index);
+
+    /* During Surge (Cyclone 18.72 + Gale 11.52 = 30.24), ink == 29 must not request both. */
+    g->player.surge_t = 3.0f;
+    g->player.ink = 29.0f;
+    const BrushInput in_29 = game_autoplay_input(g);
+    TEST_ASSERT_TRUE(in_29.cyclone);
+    TEST_ASSERT_FALSE(in_29.gale);
+    g->event_count = 0;
+    player_skills_step(g, &in_29);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_CYCLONE));
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_SKILL_DENIED));
+
+    /* When Surge expires during the tick (0.01s <= INK_FIXED_DT), Cyclone costs 26 again, so
+     * ink == 24 must NOT request Cyclone (while active Surge with ink == 24 does). */
+    g->player.cursor_x = cx + 120.0f;
+    g->player.cursor_y = cy;
+    g->player.idle_t = 0.0f;
+    g->player.cyclone_cd = 0.0f;
+    g->player.gale_charges = 0;
+    g->player.ink = 24.0f;
+    g->player.surge_t = 3.0f;
+    TEST_ASSERT_TRUE(game_autoplay_input(g).cyclone);
+
+    g->player.surge_t = 0.01f;
+    const BrushInput in_expiring = game_autoplay_input(g);
+    TEST_ASSERT_FALSE(in_expiring.cyclone);
+    g->event_count = 0;
+    player_skills_step(g, &in_expiring);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_CYCLONE));
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_SKILL_DENIED));
+
+    /* Expiring Surge also prices Gale at full base cost (16), preventing a denied slam Gale. */
+    g->player.cursor_x = cx + 120.0f;
+    g->player.cursor_y = cy;
+    g->player.idle_t = 0.0f;
+    g->player.cyclone_cd = 1.0f;
+    g->player.gale_charges = 1;
+    g->player.ink = 15.0f;
+    g->player.surge_t = 3.0f;
+    TEST_ASSERT_TRUE(game_autoplay_input(g).gale);
+    g->player.surge_t = 0.01f;
+    const BrushInput in_gale_expiring = game_autoplay_input(g);
+    TEST_ASSERT_FALSE(in_gale_expiring.gale);
+
+    /* With enough ink during Surge (36 >= 18.72 + 11.52 + margins), both succeed cleanly. */
+    g->player.cursor_x = cx + 120.0f;
+    g->player.cursor_y = cy;
+    g->player.idle_t = 0.0f;
+    g->player.cyclone_cd = 0.0f;
+    g->player.gale_charges = 1;
+    g->player.ink = 36.0f;
+    g->player.surge_t = 3.0f;
+    const BrushInput in_36 = game_autoplay_input(g);
+    TEST_ASSERT_TRUE(in_36.cyclone);
+    TEST_ASSERT_TRUE(in_36.gale);
+    g->event_count = 0;
+    player_skills_step(g, &in_36);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_CYCLONE));
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_GALE));
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_SKILL_DENIED));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2161,5 +2323,7 @@ int main(void)
     RUN_TEST(test_p2_upgrades_new_4);
     RUN_TEST(test_p2_relics_unlockable_and_mask);
     RUN_TEST(test_p2_fallback_offers_and_overflow_conversion);
+    RUN_TEST(test_ink_economy_orb_chain_refund_and_surge_cost);
+    RUN_TEST(test_autoplay_skill_budget_and_surge_expiry);
     return UNITY_END();
 }

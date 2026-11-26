@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include "core.h"
+#include "player/player_skills.h"
 #include "roguelike/rewards.h"
 
 #include <math.h>
@@ -179,8 +180,10 @@ BrushInput game_autoplay_input(const GameState *g)
         }
     }
 
-    const float cyc_cost = g->player.surge_t > 0.0f ? 13.0f : 26.0f;
-    const float gale_cost = g->player.surge_t > 0.0f ? 8.0f : 16.0f;
+    const float cyc_cost = player_skills_next_tick_cyclone_cost(g);
+    const float gale_cost = player_skills_next_tick_gale_cost(g);
+    float ink_avail = g->player.ink;
+    bool want_slam_gale = false;
 
     if (ink_dip) {
         want_paint = false;
@@ -208,9 +211,8 @@ BrushInput game_autoplay_input(const GameState *g)
             ty = slam_y;
         }
         want_paint = true;
-        if (hypotf(slam_x - bx, slam_y - by) < 165.0f && g->player.gale_charges > 0 &&
-            g->player.ink >= gale_cost + 2.0f) {
-            in.gale = true;
+        if (hypotf(slam_x - bx, slam_y - by) < 165.0f && g->player.gale_charges > 0) {
+            want_slam_gale = true;
         }
     } else if (has_proj) {
         const float psp = hypotf(proj_vx, proj_vy);
@@ -235,7 +237,7 @@ BrushInput game_autoplay_input(const GameState *g)
         want_paint = true;
     }
 
-    if (g->player.cyclone_cd <= 0.0f && g->player.ink >= cyc_cost + 4.0f) {
+    if (g->player.cyclone_cd <= 0.0f && ink_avail >= cyc_cost + 4.0f) {
         if (fireball_near_ink) {
             in.cyclone = true;
             tx = fb_x;
@@ -247,10 +249,14 @@ BrushInput game_autoplay_input(const GameState *g)
             ty = cly;
         }
     }
+    if (in.cyclone) {
+        ink_avail -= cyc_cost;
+    }
 
-    if (!in.gale && !in.cyclone && g->player.gale_charges > 0 &&
-        g->player.ink >= gale_cost + 12.0f &&
-        ((g->internal.blazing_active || has_boss) && (g->ticks % UINT64_C(130) == 35))) {
+    if (want_slam_gale && ink_avail >= gale_cost + 2.0f) {
+        in.gale = true;
+    } else if (!in.cyclone && g->player.gale_charges > 0 && ink_avail >= gale_cost + 12.0f &&
+               ((g->internal.blazing_active || has_boss) && (g->ticks % UINT64_C(130) == 35))) {
         in.gale = true;
     }
 
