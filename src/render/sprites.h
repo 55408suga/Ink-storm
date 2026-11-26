@@ -11,6 +11,9 @@ void render_sprites_close(RenderState *r);
 SpriteId render_sprite_resolve(const RenderState *r, SpriteId id);
 void render_sprite_draw(RenderState *r, SpriteId id, const SpriteXform *xf, Color tint);
 void render_sprite_draw_halo(RenderState *r, SpriteId id, const SpriteXform *xf, Color tint);
+void render_sprite_draw_ryu_band(RenderState *r, SpriteId id, bool halo, const GameVec2 *spine,
+                                 int32_t spine_n, bool awakened, float time_s, bool flip_v,
+                                 float reveal, Color tint);
 
 /* Per-character composition (draw_entities_sprite.c)。false を返したら手続き描画へ戻す */
 void render_sprite_on_ryu_kill(RenderState *r);

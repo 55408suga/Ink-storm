@@ -37,6 +37,9 @@ typedef enum {
     SPR_NUE_CROUCH,
     SPR_RYU_HEAD_DORMANT,
     SPR_RYU_HEAD_AWAKENED,
+    SPR_RYU_BODY,
+    SPR_RYU_LIMB,
+    SPR_RYU_TAIL,
     SPR_HOJU_FIRE,
     SPR_HOJU_STORM,
     SPR_HOJU_WIND,
@@ -104,7 +107,7 @@ typedef struct {
     int32_t canvas;   /* 256 または 512 */
     SpriteGroupId group;
     bool group_required; /* 欠けると、その群のキャラクター全体を手続き描画に戻す */
-    bool optional;       /* 中核 20 枚に数えない差分 */
+    bool optional;       /* 中核 23 枚に数えない差分 */
     SpriteId fallback;   /* 状態差分が欠けたときに使う基本スプライト */
     float body_frac;     /* k: 当たり判定の直径 / キャンバス幅 */
     float fixed_size_px; /* > 0 なら 2r/k の代わりに使う（社） */
@@ -114,9 +117,13 @@ typedef struct {
     float halo_pad_px;
     float breath_amp, breath_period_s;
     bool jelly; /* x と y を同じ振幅で逆位相に伸縮する */
+    /* 左右端まで繋げて反復する帯スプライト（上下のみ 8% 余白を検査） */
+    bool tile_x;
     SpriteAnchor anchor[SPR_ANCHOR_COUNT];
-    SpriteUv extent;               /* 灯り・祠の窓・墨晶・凪の半径（キャンバス単位） */
-    SpriteUv horn_a[3], horn_b[3]; /* 龍の角の金線。他は未使用 */
+    /* 灯り・祠の窓・墨晶・凪の半径（キャンバス単位） */
+    SpriteUv extent;
+    /* 龍の角の金線。他は未使用 */
+    SpriteUv horn_a[3], horn_b[3];
 } SpriteDef;
 
 const SpriteDef *sprite_def(SpriteId id);
@@ -190,7 +197,10 @@ int8_t sprite_face_update(int8_t prev, float cos_facing);
 float sprite_turn_sx(int8_t face, uint32_t elapsed_ticks);
 
 /* alpha (w*h) から半分の解像度のマスク ((w/2)*(h/2)) を作る。scratch は 2*(w/2)*(h/2) バイト以上。
+ * wrap_x が true のときは横方向だけ周期境界で膨張・ぼかしを行う。
  * 不正な寸法では何も書かずに false を返す。内部で確保しない */
+bool sprite_halo_from_alpha_ex(const uint8_t *alpha, int32_t w, int32_t h, int32_t pad_tex,
+                               int32_t feather_tex, bool wrap_x, uint8_t *out, uint8_t *scratch);
 bool sprite_halo_from_alpha(const uint8_t *alpha, int32_t w, int32_t h, int32_t pad_tex,
                             int32_t feather_tex, uint8_t *out, uint8_t *scratch);
 
@@ -205,7 +215,9 @@ bool sprite_png_dimensions(const uint8_t *data, size_t size, int32_t *w, int32_t
 /* 展開前の厳密な検査: 8bit RGBA・非インターレースで寸法が一致し、全チャンクが入力内に収まり、
  * 空でない IDAT（合計 SPRITE_PNG_MAX_IDAT_BYTES 以下）と IEND があること */
 bool sprite_png_validate(const uint8_t *data, size_t size, int32_t expect_w, int32_t expect_h);
-/* 不透明な画素があり、縁に透明な画素が残ること。全面ベタや空の絵を弾く */
+/* 外周 8%（最小 1px）の余白が完全透明で、内側に不透明な画素があること。
+ * tile_x が true のときは上下の余白だけを検査し、左右端までの描画を許す */
+bool sprite_alpha_usable_ex(const uint8_t *rgba, int32_t w, int32_t h, bool tile_x);
 bool sprite_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h);
 
 float sprite_polyline_length(const GameVec2 *pts, int32_t n);
@@ -223,6 +235,7 @@ typedef struct {
 
 SpriteSpineWave sprite_ryu_wave(bool awakened);
 float sprite_ryu_spine_width(bool awakened, float t_s);
+float sprite_ryu_body_width(bool awakened, float time_s, float s);
 /* うねりの包絡: 首で 0 から立ち上がり、尾へ向けて増し、玉の位置で 0 に留める */
 float sprite_spine_envelope(float s, float total_len, const float *orb_s, int32_t orb_n);
 /* in と out は同じ配列でもよい */

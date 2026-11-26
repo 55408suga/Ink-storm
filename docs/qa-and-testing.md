@@ -77,7 +77,7 @@
   - 排他組み合わせ：`--headless-smoke` と `--smoke-frames` / `--showcase` / `--demo` / `--snap` / `--save-path`、`--save-path` と `--no-save` / `--smoke-frames` / `--showcase` / `--demo` / `--snap`、`--showcase` と `--demo`、`--snap` と `--smoke-frames`。
   - 未知オプション、引数不足、不正な値（`--snap <dir>` は `"<dir>/snap_06.png"` が `PATH_MAX` 未満に収まらない場合を含む）、排他指定、**同一オプションの重複** は、ファイル I/O・ウィンドウ作成・メモリ確保を行わずに `stderr` へ `Usage: ` で始まる行を出力して **`EXIT_FAILURE (1)`** で終了する。
 - **障害の注入（環境変数 `INKSTORM_DEBUG_FAULTS`）**:
-  - カンマ区切りで `shader`（シェーダ読込失敗）・`font`（フォント欠損）・`sprites`（絵を使わず手続き描画）を指定し、本物の失敗と同じ分岐を通して検証する（併用は `shader,font`、前後空白は無視）。未知の語は `stderr` へ `INKSTORM: unknown debug fault '<語>' ignored` を 1 行出力して無視する。
+  - カンマ区切りで `shader`（シェーダ読込失敗）・`font`（フォント欠損）・`sprites`（`render_sprites_init` で PNG を読む前に抜けて全キャラクターを手続き描画へ切替）を指定して検証する（併用は `shader,font`、前後空白は無視。`shader` / `font` は本物の失敗と同じ分岐を通り、`sprites` は全面手続き描画フォールバックの確認用であり破損 PNG 拒否や群単位フォールバックは通らない）。未知の語は `stderr` へ `INKSTORM: unknown debug fault '<語>' ignored` を 1 行出力して無視する。
 
 ---
 
@@ -90,7 +90,10 @@ CLI スモーク（終了コード 0）と視覚品質の合格判定は個別�
 2. **`--no-post` 経路**（直接描画）
 3. **シェーダ読込失敗フォールバック経路**（環境変数 `INKSTORM_DEBUG_FAULTS=shader` で本物の失敗と同じ分岐を通し、ログ出力＋直接描画への安全な切替を確認）
 4. **フォント欠損フォールバック経路**（環境変数 `INKSTORM_DEBUG_FAULTS=font` で本物の失敗と同じ分岐を通し、和風 TTF 不在時にクラッシュせず英語 ASCII 文字列表で描画することを確認。併用確認は `INKSTORM_DEBUG_FAULTS=shader,font`）
-5. **絵の欠損フォールバック経路**（環境変数 `INKSTORM_DEBUG_FAULTS=sprites` で絵の読み込みを止め、全キャラクターが手続き描画になり、`assets/sprites/` がない状態と同じ見た目になることを確認）
+5. **絵の欠損・破損フォールバック経路**:
+   - **全面手続き描画フォールバック**: 環境変数 `INKSTORM_DEBUG_FAULTS=sprites` は `render_sprites_init` が PNG を読む前に抜けて全キャラクターを手続き描画へ切り替える（`assets/sprites/` がない状態と同じ見た目の確認用であり、破損 PNG 拒否や群単位フォールバックの経路は通らない）。
+   - **単体 PNG 欠落（退避・削除）フォールバック**: 別途、`assets/sprites/` 内の単体 PNG を退避・削除した状態（および `test_sprite_rules` の単体テスト）で起動すると、該当ファイルは個別の拒否ログを出さない `SPRITE_LOAD_ABSENT` 経路を通り、状態差分なら基本絵へ、必須絵ならその群ごと手続き描画へフォールバックし、要約ログ（`INKSTORM: sprites ...`）の読込数減少・フォールバック群数増加として報告される。
+   - **単体 PNG 破損・拒否フォールバック**: `assets/sprites/` 内の単体 PNG を破損させた状態（ヘッダ・寸法・余白・データの不正など）で起動すると、`SPRITE_LOAD_REJECTED` 経路を通って `INKSTORM: sprite rejected (<filename>)` が出力され、要約ログの `rejected` 件数が増えたうえで該当スプライト／群が安全にフォールバックする（状態差分は基本絵、必須絵はその群を手続き描画）。
 - あわせて、**`assets/` のない場所へ実行ファイルだけを複製して起動する確認**も行い、アセット欠損時でも安全にフォールバックすることを確認する。
 
 ### 5.2 視覚チェックリスト（固定シード・1280×720・要所ティック採取）

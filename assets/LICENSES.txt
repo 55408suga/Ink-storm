@@ -78,10 +78,13 @@ Files:      assets/sprites/shrine.png
             assets/sprites/nue_crouch.png
             assets/sprites/ryu_head_dormant.png
             assets/sprites/ryu_head_awakened.png
+            assets/sprites/ryu_body.png
+            assets/sprites/ryu_limb.png
+            assets/sprites/ryu_tail.png
             assets/sprites/hoju_fire.png
             assets/sprites/hoju_storm.png
             assets/sprites/hoju_wind.png
-Author:     INKSTORM Project (AI-assisted original sumi-e sprite art generated
+Author:     INKSTORM Project (24 original AI-assisted sumi-e sprite PNGs generated
             from project-authored text prompts and first-party style anchors,
             then background-keyed, CIELAB palette-graded onto the INKSTORM
             sumi/gofun palette, alpha-bled, downsampled to 256x256 / 512x512,

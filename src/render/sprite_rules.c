@@ -264,6 +264,37 @@ static const SpriteDef k_defs[SPR_COUNT] = {
                                           ANCHOR(SPR_ANCHOR_WHISKER_B, 0.78f, 0.66f)},
                                .horn_a = {{0.50f, 0.43f}, {0.36f, 0.30f}, {0.22f, 0.20f}},
                                .horn_b = {{0.57f, 0.40f}, {0.50f, 0.31f}, {0.43f, 0.24f}}},
+    [SPR_RYU_BODY] = {.file = "ryu_body.png",
+                      .canvas = 512,
+                      .group = SPR_GROUP_RYU,
+                      .group_required = true,
+                      .fallback = SPR_NONE,
+                      .body_frac = 0.36f,
+                      .ref_radius = 46.0f,
+                      .foot = {0.50f, 0.54f},
+                      .orient = SPR_ORIENT_NONE,
+                      .halo_pad_px = 5.0f,
+                      .tile_x = true},
+    [SPR_RYU_LIMB] = {.file = "ryu_limb.png",
+                      .canvas = 256,
+                      .group = SPR_GROUP_RYU,
+                      .group_required = true,
+                      .fallback = SPR_NONE,
+                      .body_frac = 0.50f,
+                      .ref_radius = 30.0f,
+                      .foot = {0.35f, 0.28f},
+                      .orient = SPR_ORIENT_ROTATE_MIRROR,
+                      .halo_pad_px = 4.0f},
+    [SPR_RYU_TAIL] = {.file = "ryu_tail.png",
+                      .canvas = 256,
+                      .group = SPR_GROUP_RYU,
+                      .group_required = true,
+                      .fallback = SPR_NONE,
+                      .body_frac = 0.50f,
+                      .ref_radius = 28.0f,
+                      .foot = {0.16f, 0.54f},
+                      .orient = SPR_ORIENT_ROTATE_MIRROR,
+                      .halo_pad_px = 4.0f},
     [SPR_HOJU_FIRE] = {.file = "hoju_fire.png",
                        .canvas = 256,
                        .group = SPR_GROUP_HOJU,
@@ -575,9 +606,60 @@ float sprite_turn_sx(int8_t face, uint32_t elapsed_ticks)
     return sign * (0.15f + 0.85f * ((e - 0.5f) / 0.5f));
 }
 
-/* 窓 [x-k, x+k] の最大値を単調な両端キューで O(w) に求める（範囲外は数えない） */
-static void row_max(const uint8_t *src, uint8_t *dst, int32_t w, int32_t h, int32_t k)
+/* 窓 [x-k, x+k] の最大値を単調な両端キューで O(w) に求める（wrap_x が true なら横方向は周期境界）
+ */
+static void row_max(const uint8_t *src, uint8_t *dst, int32_t w, int32_t h, int32_t k, bool wrap_x)
 {
+    if (wrap_x) {
+        if (2 * k + 1 >= w) {
+            for (int32_t y = 0; y < h; ++y) {
+                const uint8_t *row = src + (size_t)y * (size_t)w;
+                uint8_t *drow = dst + (size_t)y * (size_t)w;
+                uint8_t best = 0u;
+                for (int32_t x = 0; x < w; ++x) {
+                    if (row[x] > best) {
+                        best = row[x];
+                    }
+                }
+                memset(drow, best, (size_t)w);
+            }
+            return;
+        }
+        int16_t dq_pos[SPRITE_CANVAS_MAX];
+        uint8_t dq_val[SPRITE_CANVAS_MAX];
+        const int32_t total = w + 2 * k;
+        for (int32_t y = 0; y < h; ++y) {
+            const uint8_t *row = src + (size_t)y * (size_t)w;
+            uint8_t *drow = dst + (size_t)y * (size_t)w;
+            int32_t head = 0;
+            int32_t tail = 0;
+            for (int32_t j = 0; j < total; ++j) {
+                int32_t col = j - k;
+                if (col < 0) {
+                    col += w;
+                } else if (col >= w) {
+                    col -= w;
+                }
+                const uint8_t val = row[col];
+                while (tail > head && dq_val[tail - 1] <= val) {
+                    --tail;
+                }
+                dq_pos[tail] = (int16_t)j;
+                dq_val[tail] = val;
+                ++tail;
+                const int32_t x = j - 2 * k;
+                if (x < 0) {
+                    continue;
+                }
+                while (dq_pos[head] < x) {
+                    ++head;
+                }
+                drow[x] = dq_val[head];
+            }
+        }
+        return;
+    }
+
     int16_t dq[SPRITE_CANVAS_MAX / 2];
     for (int32_t y = 0; y < h; ++y) {
         const uint8_t *row = src + (size_t)y * (size_t)w;
@@ -609,15 +691,39 @@ static int32_t disc_span(int32_t pad, int32_t dy)
     return (int32_t)floorf(sqrtf(rr - (float)(dy * dy)));
 }
 
-/* 範囲外は透明として数え、縁へ向かって自然に薄くする */
+/* 範囲外は透明として数え、縁へ向かって自然に薄くする（横方向かつ wrap_x のときのみ周期境界） */
 static void box_blur(const uint8_t *src, uint8_t *dst, int32_t w, int32_t h, int32_t f,
-                     bool vertical)
+                     bool vertical, bool wrap_x)
 {
     const int32_t len = vertical ? h : w;
     const int32_t lines = vertical ? w : h;
     const size_t step = vertical ? (size_t)w : 1u;
     const size_t line_step = vertical ? 1u : (size_t)w;
     const uint32_t span = (uint32_t)(2 * f + 1);
+    if (!vertical && wrap_x) {
+        for (int32_t line = 0; line < lines; ++line) {
+            const uint8_t *s = src + (size_t)line * line_step;
+            uint8_t *d = dst + (size_t)line * line_step;
+            uint32_t sum = 0u;
+            for (int32_t dx = -f; dx <= f; ++dx) {
+                int32_t col = dx % len;
+                if (col < 0) {
+                    col += len;
+                }
+                sum += s[col];
+            }
+            for (int32_t i = 0; i < len; ++i) {
+                d[i] = (uint8_t)((sum + span / 2u) / span);
+                const int32_t col_add = (i + f + 1) % len;
+                int32_t col_sub = (i - f) % len;
+                if (col_sub < 0) {
+                    col_sub += len;
+                }
+                sum = sum + s[col_add] - s[col_sub];
+            }
+        }
+        return;
+    }
     for (int32_t line = 0; line < lines; ++line) {
         const uint8_t *s = src + (size_t)line * line_step;
         uint8_t *d = dst + (size_t)line * line_step;
@@ -637,8 +743,8 @@ static void box_blur(const uint8_t *src, uint8_t *dst, int32_t w, int32_t h, int
     }
 }
 
-bool sprite_halo_from_alpha(const uint8_t *alpha, int32_t w, int32_t h, int32_t pad_tex,
-                            int32_t feather_tex, uint8_t *out, uint8_t *scratch)
+bool sprite_halo_from_alpha_ex(const uint8_t *alpha, int32_t w, int32_t h, int32_t pad_tex,
+                               int32_t feather_tex, bool wrap_x, uint8_t *out, uint8_t *scratch)
 {
     if (alpha == NULL || out == NULL || scratch == NULL || w <= 0 || h <= 0 || (w & 1) != 0 ||
         (h & 1) != 0 || w > SPRITE_CANVAS_MAX || h > SPRITE_CANVAS_MAX || pad_tex < 0 ||
@@ -674,7 +780,7 @@ bool sprite_halo_from_alpha(const uint8_t *alpha, int32_t w, int32_t h, int32_t 
         if (!span_used[k]) {
             continue;
         }
-        row_max(out, p0, hw, hh, k);
+        row_max(out, p0, hw, hh, k, wrap_x);
         for (int32_t dy = -pad_tex; dy <= pad_tex; ++dy) {
             if (spans[dy + pad_tex] != k) {
                 continue;
@@ -694,16 +800,22 @@ bool sprite_halo_from_alpha(const uint8_t *alpha, int32_t w, int32_t h, int32_t 
     }
 
     if (feather_tex > 0) {
-        box_blur(p1, p0, hw, hh, feather_tex, false);
-        box_blur(p0, out, hw, hh, feather_tex, true);
-        box_blur(out, p0, hw, hh, feather_tex, false);
-        box_blur(p0, p1, hw, hh, feather_tex, true);
+        box_blur(p1, p0, hw, hh, feather_tex, false, wrap_x);
+        box_blur(p0, out, hw, hh, feather_tex, true, false);
+        box_blur(out, p0, hw, hh, feather_tex, false, wrap_x);
+        box_blur(p0, p1, hw, hh, feather_tex, true, false);
     }
     for (size_t i = 0; i < n; ++i) {
         const uint32_t v = ((uint32_t)p1[i] * 115u + 50u) / 100u;
         out[i] = (uint8_t)(v > 255u ? 255u : v);
     }
     return true;
+}
+
+bool sprite_halo_from_alpha(const uint8_t *alpha, int32_t w, int32_t h, int32_t pad_tex,
+                            int32_t feather_tex, uint8_t *out, uint8_t *scratch)
+{
+    return sprite_halo_from_alpha_ex(alpha, w, h, pad_tex, feather_tex, false, out, scratch);
 }
 
 bool sprite_atlas_slot(SpriteId id, bool halo, SpriteRect *out)
@@ -722,15 +834,29 @@ bool sprite_atlas_slot(SpriteId id, bool halo, SpriteRect *out)
     int32_t cell_px = 0;
     int32_t limit = 0;
     if (canvas == 512) {
-        slot = halo ? 6 + ordinal / 4 : ordinal;
-        cell = halo ? ordinal % 4 : 0;
-        cell_px = halo ? 256 : 512;
-        limit = halo ? 8 : 6;
+        if (halo) {
+            slot = 6 + ordinal / 4;
+            cell = ordinal % 4;
+            cell_px = 256;
+            limit = 8;
+        } else {
+            slot = ordinal < 6 ? ordinal : 13 + (ordinal - 6);
+            cell = 0;
+            cell_px = 512;
+            limit = 7;
+        }
     } else if (canvas == 256) {
-        slot = halo ? 12 + ordinal / 16 : 8 + ordinal / 4;
-        cell = halo ? ordinal % 16 : ordinal % 4;
-        cell_px = halo ? 128 : 256;
-        limit = 16;
+        if (halo) {
+            slot = ordinal < 16 ? 12 : 15;
+            cell = ordinal % 16;
+            cell_px = 128;
+            limit = 20;
+        } else {
+            slot = ordinal < 16 ? 8 + ordinal / 4 : 14 + (ordinal - 16) / 4;
+            cell = ordinal % 4;
+            cell_px = 256;
+            limit = 20;
+        }
     } else {
         return false;
     }
@@ -823,23 +949,34 @@ bool sprite_png_validate(const uint8_t *data, size_t size, int32_t expect_w, int
     return false;
 }
 
-bool sprite_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h)
+bool sprite_alpha_usable_ex(const uint8_t *rgba, int32_t w, int32_t h, bool tile_x)
 {
     if (rgba == NULL || w <= 0 || h <= 0) {
         return false;
     }
+    const int32_t min_dim = w < h ? w : h;
+    int32_t margin = (min_dim * 8) / 100;
+    if (margin < 1) {
+        margin = 1;
+    }
     bool opaque = false;
     for (int32_t y = 0; y < h; ++y) {
-        const bool edge_row = y == 0 || y == h - 1;
+        const bool margin_row = y < margin || y >= h - margin;
         for (int32_t x = 0; x < w; ++x) {
             const uint8_t a = rgba[((size_t)y * (size_t)w + (size_t)x) * 4u + 3u];
-            if ((edge_row || x == 0 || x == w - 1) && a != 0u) {
+            const bool margin_col = !tile_x && (x < margin || x >= w - margin);
+            if ((margin_row || margin_col) && a != 0u) {
                 return false;
             }
             opaque = opaque || a >= 128u;
         }
     }
     return opaque;
+}
+
+bool sprite_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h)
+{
+    return sprite_alpha_usable_ex(rgba, w, h, false);
 }
 
 float sprite_polyline_length(const GameVec2 *pts, int32_t n)
@@ -944,6 +1081,16 @@ SpriteSpineWave sprite_ryu_wave(bool awakened)
 float sprite_ryu_spine_width(bool awakened, float t_s)
 {
     return (awakened ? 28.0f : 26.0f) * (1.0f + 0.04f * sinf(k_two_pi * 0.5f * t_s));
+}
+
+float sprite_ryu_body_width(bool awakened, float time_s, float s)
+{
+    const float u = isfinite(s) ? clamp01(s) : 0.0f;
+    const float t = isfinite(time_s) ? time_s : 0.0f;
+    const float taper = 0.28f * u + 0.32f * u * u + 0.40f * u * u * u;
+    const float base = (86.0f - 54.0f * taper) * (awakened ? 1.09f : 1.0f);
+    const float breath = 1.0f + 0.035f * sinf(k_two_pi * 0.55f * t - u * 4.5f);
+    return base * breath;
 }
 
 float sprite_spine_envelope(float s, float total_len, const float *orb_s, int32_t orb_n)

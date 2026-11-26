@@ -35,6 +35,9 @@ typedef struct {
 typedef struct {
     bool enabled;    /* アトラスを転送済みで、1 群以上が揃っている */
     Texture2D atlas; /* render_close で解放する */
+    /* 一筆龍の帯胴体・縁の専用反復テクスチャ（render_close で解放する） */
+    Texture2D ryu_band_tex;
+    Texture2D ryu_band_halo_tex;
     bool present[SPR_COUNT];
     bool group_ok[SPR_GROUP_COUNT];
     int32_t loaded;

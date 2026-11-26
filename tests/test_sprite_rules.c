@@ -67,7 +67,8 @@ static void test_manifest_every_sprite_has_valid_canvas_file_and_safe_anchors(vo
     for (int32_t g = 0; g < SPR_GROUP_COUNT; ++g) {
         TEST_ASSERT_TRUE(group_has_base[g]);
     }
-    TEST_ASSERT_EQUAL_INT(20, sprite_core_count());
+    TEST_ASSERT_EQUAL_INT(24, SPR_COUNT);
+    TEST_ASSERT_EQUAL_INT(23, sprite_core_count());
     TEST_ASSERT_NULL(sprite_def(SPR_NONE));
     TEST_ASSERT_NULL(sprite_def(SPR_COUNT));
 }
@@ -195,6 +196,27 @@ static void test_missing_variant_falls_back_to_base_and_missing_base_disables_gr
     TEST_ASSERT_EQUAL_INT(0, sprite_groups_resolve(NULL, group_ok));
     TEST_ASSERT_FALSE(group_ok[SPR_GROUP_SHRINE]);
     TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_NONE, present, group_ok));
+}
+
+static void test_missing_ryu_body_limb_or_tail_disables_ryu_group(void)
+{
+    const SpriteId required_parts[3] = {SPR_RYU_BODY, SPR_RYU_LIMB, SPR_RYU_TAIL};
+    for (size_t k = 0; k < 3u; ++k) {
+        bool present[SPR_COUNT];
+        bool group_ok[SPR_GROUP_COUNT];
+        for (int32_t i = 0; i < SPR_COUNT; ++i) {
+            present[i] = true;
+        }
+        present[required_parts[k]] = false;
+        TEST_ASSERT_EQUAL_INT(SPR_GROUP_COUNT - 1, sprite_groups_resolve(present, group_ok));
+        TEST_ASSERT_FALSE(group_ok[SPR_GROUP_RYU]);
+        TEST_ASSERT_TRUE(group_ok[SPR_GROUP_SHRINE]);
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_HEAD_DORMANT, present, group_ok));
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_HEAD_AWAKENED, present, group_ok));
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_BODY, present, group_ok));
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_LIMB, present, group_ok));
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_TAIL, present, group_ok));
+    }
 }
 
 static void test_face_hysteresis_does_not_chatter_near_vertical(void)
@@ -582,6 +604,64 @@ static void test_halo_matches_reference_dilation_byte_for_byte(void)
     }
 }
 
+static void test_halo_wrap_x_preserves_uniform_alpha_at_horizontal_edges(void)
+{
+    enum { WW = 128, WH = 128, HW = WW / 2, HH = WH / 2, WN = HW * HH };
+    static uint8_t alpha[WW * WH];
+    static uint8_t wrap_out[WN];
+    static uint8_t clamp_out[WN];
+    static uint8_t scratch[2 * WN];
+
+    memset(alpha, 0, sizeof alpha);
+    for (int y = 40; y < 88; ++y) {
+        memset(alpha + (size_t)y * WW, 255, WW);
+    }
+    TEST_ASSERT_TRUE(sprite_halo_from_alpha_ex(alpha, WW, WH, 5, 2, true, wrap_out, scratch));
+    TEST_ASSERT_TRUE(sprite_halo_from_alpha_ex(alpha, WW, WH, 5, 2, false, clamp_out, scratch));
+
+    bool saw_feather = false;
+    for (int y = 0; y < HH; ++y) {
+        const uint8_t mid = wrap_out[y * HW + HW / 2];
+        TEST_ASSERT_EQUAL_UINT8(mid, wrap_out[y * HW + 0]);
+        TEST_ASSERT_EQUAL_UINT8(mid, wrap_out[y * HW + HW - 1]);
+        if (mid > 0u && mid < 255u) {
+            saw_feather = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_feather);
+    TEST_ASSERT_EQUAL_UINT8(255u, wrap_out[(HH / 2) * HW + 0]);
+    TEST_ASSERT_EQUAL_UINT8(255u, wrap_out[(HH / 2) * HW + HW / 2]);
+    TEST_ASSERT_EQUAL_UINT8(255u, wrap_out[(HH / 2) * HW + HW - 1]);
+    TEST_ASSERT_EQUAL_UINT8(0u, wrap_out[0]);
+    TEST_ASSERT_EQUAL_UINT8(0u, wrap_out[(HH - 1) * HW + HW / 2]);
+    /* Non-periodic horizontal blur must drop at the left/right edges for comparison. */
+    TEST_ASSERT_TRUE(clamp_out[(HH / 2) * HW + 0] < clamp_out[(HH / 2) * HW + HW / 2]);
+
+    /* A mark touching x = 0 must dilate across the periodic seam to x = HW - 1. */
+    memset(alpha, 0, sizeof alpha);
+    for (int y = 60; y < 68; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            alpha[y * WW + x] = 255u;
+        }
+    }
+    TEST_ASSERT_TRUE(sprite_halo_from_alpha_ex(alpha, WW, WH, 4, 2, true, wrap_out, scratch));
+    TEST_ASSERT_TRUE(wrap_out[(HH / 2) * HW + (HW - 1)] > 0u);
+
+    /* Pad/feather wider than the half-resolution width must stay safe and uniform. */
+    uint8_t tiny_a[8 * 8] = {0};
+    uint8_t tiny_out[4 * 4] = {0};
+    uint8_t tiny_scratch[2 * 4 * 4] = {0};
+    for (int x = 0; x < 8; ++x) {
+        tiny_a[3 * 8 + x] = 255u;
+        tiny_a[4 * 8 + x] = 255u;
+    }
+    TEST_ASSERT_TRUE(sprite_halo_from_alpha_ex(tiny_a, 8, 8, 6, 5, true, tiny_out, tiny_scratch));
+    for (int y = 0; y < 4; ++y) {
+        TEST_ASSERT_EQUAL_UINT8(tiny_out[y * 4 + 2], tiny_out[y * 4 + 0]);
+        TEST_ASSERT_EQUAL_UINT8(tiny_out[y * 4 + 2], tiny_out[y * 4 + 3]);
+    }
+}
+
 static bool rects_overlap(SpriteRect a, SpriteRect b)
 {
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -606,6 +686,17 @@ static void test_atlas_slots_do_not_overlap_and_fit(void)
             rects[n++] = rc;
         }
     }
+    TEST_ASSERT_EQUAL_INT(2 * SPR_COUNT, n);
+    SpriteRect body_rc;
+    SpriteRect body_halo_rc;
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_RYU_BODY, false, &body_rc));
+    TEST_ASSERT_EQUAL_INT(512, body_rc.x);
+    TEST_ASSERT_EQUAL_INT(1536, body_rc.y);
+    TEST_ASSERT_EQUAL_INT(512, body_rc.w);
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_RYU_BODY, true, &body_halo_rc));
+    TEST_ASSERT_EQUAL_INT(1536, body_halo_rc.x);
+    TEST_ASSERT_EQUAL_INT(768, body_halo_rc.y);
+    TEST_ASSERT_EQUAL_INT(256, body_halo_rc.w);
     SpriteRect rc;
     TEST_ASSERT_FALSE(sprite_atlas_slot(SPR_NONE, false, &rc));
     TEST_ASSERT_FALSE(sprite_atlas_slot(SPR_COUNT, true, &rc));
@@ -754,6 +845,75 @@ static void test_alpha_usable_rejects_blank_and_solid_squares(void)
     TEST_ASSERT_FALSE(sprite_alpha_usable(NULL, AW, AH));
 }
 
+static void test_alpha_usable_enforces_eight_percent_outer_margin(void)
+{
+    enum { MW = 256, MH = 256 };
+    uint8_t *rgba = calloc((size_t)MW * (size_t)MH, 4u);
+    TEST_ASSERT_NOT_NULL(rgba);
+
+    /* 8% of 256 is 20 px; (20, 20) is the top-left interior corner and must be accepted. */
+    rgba[((size_t)20 * MW + 20u) * 4u + 3u] = 200u;
+    TEST_ASSERT_TRUE(sprite_alpha_usable(rgba, MW, MH));
+
+    /* (1, 128) is inside the 20 px margin even though it is off the 1 px outer edge. */
+    rgba[((size_t)128 * MW + 1u) * 4u + 3u] = 200u;
+    TEST_ASSERT_FALSE(sprite_alpha_usable(rgba, MW, MH));
+    rgba[((size_t)128 * MW + 1u) * 4u + 3u] = 0u;
+
+    /* Check all four 20 px margin boundaries and the opposite interior corner (235, 235). */
+    const int32_t bad_pts[4][2] = {{19, 128}, {236, 128}, {128, 19}, {128, 236}};
+    for (size_t i = 0; i < 4u; ++i) {
+        const size_t off = ((size_t)bad_pts[i][1] * MW + (size_t)bad_pts[i][0]) * 4u + 3u;
+        rgba[off] = 1u;
+        TEST_ASSERT_FALSE(sprite_alpha_usable(rgba, MW, MH));
+        rgba[off] = 0u;
+    }
+    rgba[((size_t)235 * MW + 235u) * 4u + 3u] = 200u;
+    TEST_ASSERT_TRUE(sprite_alpha_usable(rgba, MW, MH));
+    free(rgba);
+}
+
+static void test_alpha_usable_ex_allows_horizontal_tiling_with_top_bottom_margin(void)
+{
+    enum { TW = 256, TH = 256 };
+    uint8_t *rgba = calloc((size_t)TW * (size_t)TH, 4u);
+    TEST_ASSERT_NOT_NULL(rgba);
+
+    /* Horizontal band spanning x = 0..255 at y = 128 (>= 8% margin from top & bottom). */
+    for (int32_t x = 0; x < TW; ++x) {
+        rgba[((size_t)128 * TW + (size_t)x) * 4u + 3u] = 220u;
+    }
+    TEST_ASSERT_FALSE(sprite_alpha_usable(rgba, TW, TH));
+    TEST_ASSERT_TRUE(sprite_alpha_usable_ex(rgba, TW, TH, true));
+
+    /* Touching top or bottom 8% margin (margin = 20 px) must still be rejected. */
+    rgba[((size_t)19 * TW + 128u) * 4u + 3u] = 1u;
+    TEST_ASSERT_FALSE(sprite_alpha_usable_ex(rgba, TW, TH, true));
+    rgba[((size_t)19 * TW + 128u) * 4u + 3u] = 0u;
+
+    rgba[((size_t)236 * TW + 128u) * 4u + 3u] = 1u;
+    TEST_ASSERT_FALSE(sprite_alpha_usable_ex(rgba, TW, TH, true));
+    rgba[((size_t)236 * TW + 128u) * 4u + 3u] = 0u;
+
+    /* Boundary interior rows y = 20 and y = 235 at x = 0 and x = 255 are accepted. */
+    rgba[((size_t)20 * TW + 0u) * 4u + 3u] = 180u;
+    rgba[((size_t)235 * TW + 255u) * 4u + 3u] = 180u;
+    TEST_ASSERT_TRUE(sprite_alpha_usable_ex(rgba, TW, TH, true));
+
+    free(rgba);
+}
+
+static uint32_t adler32_ref(const uint8_t *raw, size_t raw_len)
+{
+    uint32_t s1 = 1u;
+    uint32_t s2 = 0u;
+    for (size_t i = 0; i < raw_len; ++i) {
+        s1 = (s1 + raw[i]) % 65521u;
+        s2 = (s2 + s1) % 65521u;
+    }
+    return (s2 << 16) | s1;
+}
+
 static size_t make_stored_zlib(uint8_t *out, const uint8_t *raw, size_t raw_len)
 {
     size_t o = 0u;
@@ -762,23 +922,141 @@ static size_t make_stored_zlib(uint8_t *out, const uint8_t *raw, size_t raw_len)
     out[o++] = 0x01u; /* bfinal=1, btype=0 (stored) */
     out[o++] = (uint8_t)(raw_len & 0xffu);
     out[o++] = (uint8_t)((raw_len >> 8) & 0xffu);
-    const uint16_t nlen = (uint16_t)~(uint16_t)raw_len;
+    const uint16_t nlen = (uint16_t)(~(uint32_t)raw_len);
     out[o++] = (uint8_t)(nlen & 0xffu);
     out[o++] = (uint8_t)((nlen >> 8) & 0xffu);
     memcpy(out + o, raw, raw_len);
     o += raw_len;
-    uint32_t s1 = 1u;
-    uint32_t s2 = 0u;
-    for (size_t i = 0; i < raw_len; ++i) {
-        s1 = (s1 + raw[i]) % 65521u;
-        s2 = (s2 + s1) % 65521u;
-    }
-    const uint32_t adler = (s2 << 16) | s1;
+    const uint32_t adler = adler32_ref(raw, raw_len);
     out[o++] = (uint8_t)(adler >> 24);
     out[o++] = (uint8_t)(adler >> 16);
     out[o++] = (uint8_t)(adler >> 8);
     out[o++] = (uint8_t)adler;
     return o;
+}
+
+typedef struct {
+    uint8_t *buf;
+    size_t cap;
+    size_t len;
+    uint32_t bits;
+    int32_t nbits;
+} BitWriter;
+
+static void bw_put(BitWriter *bw, uint32_t val, int32_t n)
+{
+    TEST_ASSERT_TRUE(n >= 0 && n <= 16);
+    if (n > 0) {
+        bw->bits |= (val & ((UINT32_C(1) << (unsigned)n) - 1u)) << (unsigned)bw->nbits;
+        bw->nbits += n;
+    }
+    while (bw->nbits >= 8) {
+        TEST_ASSERT_TRUE(bw->len < bw->cap);
+        bw->buf[bw->len++] = (uint8_t)(bw->bits & 0xffu);
+        bw->bits >>= 8u;
+        bw->nbits -= 8;
+    }
+}
+
+static void bw_put_huff(BitWriter *bw, uint32_t code, int32_t len)
+{
+    for (int32_t i = len - 1; i >= 0; --i) {
+        bw_put(bw, (code >> (unsigned)i) & 1u, 1);
+    }
+}
+
+static void bw_flush_byte(BitWriter *bw)
+{
+    if (bw->nbits > 0) {
+        TEST_ASSERT_TRUE(bw->len < bw->cap);
+        bw->buf[bw->len++] = (uint8_t)(bw->bits & 0xffu);
+        bw->bits = 0u;
+        bw->nbits = 0;
+    }
+}
+
+static void bw_write_zlib_hdr(BitWriter *bw, uint8_t cinfo)
+{
+    TEST_ASSERT_TRUE(cinfo <= 7u && bw->nbits == 0 && bw->len + 2u <= bw->cap);
+    const uint8_t cmf = (uint8_t)((cinfo << 4) | 8u);
+    const uint8_t flg = (uint8_t)((31u - (((uint32_t)cmf << 8) % 31u)) % 31u);
+    bw->buf[bw->len++] = cmf;
+    bw->buf[bw->len++] = flg;
+}
+
+static void bw_finish_zlib(BitWriter *bw, const uint8_t *raw, size_t raw_len)
+{
+    bw_flush_byte(bw);
+    TEST_ASSERT_TRUE(bw->len + 4u <= bw->cap);
+    const uint32_t adler = adler32_ref(raw, raw_len);
+    bw->buf[bw->len++] = (uint8_t)(adler >> 24);
+    bw->buf[bw->len++] = (uint8_t)(adler >> 16);
+    bw->buf[bw->len++] = (uint8_t)(adler >> 8);
+    bw->buf[bw->len++] = (uint8_t)adler;
+}
+
+static void bw_put_fixed_lit(BitWriter *bw, uint32_t sym)
+{
+    if (sym <= 143u) {
+        bw_put_huff(bw, 48u + sym, 8);
+    } else if (sym <= 255u) {
+        bw_put_huff(bw, 400u + (sym - 144u), 9);
+    } else if (sym <= 279u) {
+        bw_put_huff(bw, sym - 256u, 7);
+    } else {
+        bw_put_huff(bw, 192u + (sym - 280u), 8);
+    }
+}
+
+static void bw_put_fixed_dist(BitWriter *bw, uint32_t dsym) { bw_put_huff(bw, dsym, 5); }
+
+static void build_canon_codes(const uint8_t *lens, int32_t n, uint32_t *codes)
+{
+    uint16_t count[16] = {0};
+    uint32_t next_code[16] = {0};
+    for (int32_t i = 0; i < n; ++i) {
+        TEST_ASSERT_TRUE(lens[i] <= 15u);
+        if (lens[i] != 0u) {
+            count[lens[i]]++;
+        }
+    }
+    uint32_t code = 0u;
+    for (int32_t bits = 1; bits <= 15; ++bits) {
+        code = (code + count[bits - 1]) << 1;
+        next_code[bits] = code;
+    }
+    for (int32_t i = 0; i < n; ++i) {
+        codes[i] = lens[i] != 0u ? next_code[lens[i]]++ : 0u;
+    }
+}
+
+static void bw_write_dynamic_hdr(BitWriter *bw, const uint8_t *lit_lens, int32_t hlit,
+                                 const uint8_t *dist_lens, int32_t hdist)
+{
+    static const uint8_t k_cl_order[19] = {16u, 17u, 18u, 0u, 8u,  7u, 9u,  6u, 10u, 5u,
+                                           11u, 4u,  12u, 3u, 13u, 2u, 14u, 1u, 15u};
+    TEST_ASSERT_TRUE(hlit >= 257 && hlit <= 286 && hdist >= 1 && hdist <= 30);
+    bw_put(bw, (uint32_t)(hlit - 257), 5);
+    bw_put(bw, (uint32_t)(hdist - 1), 5);
+    bw_put(bw, 15u, 4); /* hclen = 19 */
+    /* Uniform 4-bit code-length table for symbols 0..15 so every code length maps to itself. */
+    for (int32_t i = 0; i < 19; ++i) {
+        bw_put(bw, k_cl_order[i] < 16u ? 4u : 0u, 3);
+    }
+    for (int32_t i = 0; i < hlit; ++i) {
+        bw_put_huff(bw, lit_lens[i], 4);
+    }
+    for (int32_t i = 0; i < hdist; ++i) {
+        bw_put_huff(bw, dist_lens[i], 4);
+    }
+}
+
+static size_t make_png_with_idat(uint8_t *png, uint32_t w, uint32_t h, const uint8_t *idat,
+                                 size_t idat_len)
+{
+    size_t len = make_png(png, w, h, 8u, 6u, 0u, 0u, false) - 12u;
+    len = put_chunk(png, len, "IDAT", idat, (uint32_t)idat_len);
+    return put_chunk(png, len, "IEND", NULL, 0u);
 }
 
 static void test_png_rgba_decode_handles_filters_and_rejects_oversized_inflate(void)
@@ -839,6 +1117,297 @@ static void test_png_rgba_decode_handles_filters_and_rejects_oversized_inflate(v
     TEST_ASSERT_FALSE(png_rgba_decode(png, len, 2, 2, rgba_out, 16u, raw_scratch, 18u));
     for (size_t i = 18u; i < sizeof raw_scratch; ++i) {
         TEST_ASSERT_EQUAL_HEX8(0x5a, raw_scratch[i]);
+    }
+}
+
+static void test_png_rgba_decode_fixed_huffman_and_trailing_idat(void)
+{
+    /* 2x2 RGBA8 where pixel (10,20,30,255) repeats across both rows via LZ77 matches. */
+    const uint8_t expect[16] = {10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255};
+    const uint8_t raw[18] = {0, 10, 20, 30, 255, 10, 20, 30, 255,
+                             0, 10, 20, 30, 255, 10, 20, 30, 255};
+
+    uint8_t zbuf[128] = {0};
+    BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+    bw_write_zlib_hdr(&bw, 7u);
+    /* Block 1 (bfinal=0, btype=1): row 0 via 5 literals + LZ77 (len=4, dist=4). */
+    bw_put(&bw, 0u, 1);
+    bw_put(&bw, 1u, 2);
+    bw_put_fixed_lit(&bw, 0u);
+    bw_put_fixed_lit(&bw, 10u);
+    bw_put_fixed_lit(&bw, 20u);
+    bw_put_fixed_lit(&bw, 30u);
+    bw_put_fixed_lit(&bw, 255u);
+    bw_put_fixed_lit(&bw, 258u); /* len = 4 */
+    bw_put_fixed_dist(&bw, 3u);  /* dist = 4 */
+    bw_put_fixed_lit(&bw, 256u); /* EOB */
+    /* Block 2 (bfinal=1, btype=1): reuses cached fixed tables; copies row 0 into row 1. */
+    bw_put(&bw, 1u, 1);
+    bw_put(&bw, 1u, 2);
+    bw_put_fixed_lit(&bw, 263u); /* len = 9 */
+    bw_put_fixed_dist(&bw, 6u);  /* dist base = 9, 2 extra bits */
+    bw_put(&bw, 0u, 2);
+    bw_put_fixed_lit(&bw, 256u);
+    bw_finish_zlib(&bw, raw, sizeof raw);
+
+    uint8_t png[256];
+    uint8_t rgba_out[16] = {0};
+    uint8_t raw_scratch[18] = {0};
+    size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+    TEST_ASSERT_TRUE(png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                     sizeof raw_scratch));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expect, rgba_out, sizeof expect);
+
+    /* Per PNG spec, unused trailing bytes in IDAT after a valid Adler-32 must be ignored. */
+    zbuf[bw.len++] = 0xdeu;
+    zbuf[bw.len++] = 0xadu;
+    zbuf[bw.len++] = 0xbeu;
+    zbuf[bw.len++] = 0xefu;
+    memset(rgba_out, 0, sizeof rgba_out);
+    len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+    TEST_ASSERT_TRUE(png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                     sizeof raw_scratch));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expect, rgba_out, sizeof expect);
+}
+
+static void test_png_rgba_decode_dynamic_huffman_and_long_codes(void)
+{
+    /* 2x2 RGBA8 exercising BTYPE=2 with lengths 1..9 (fast LUT) and length 10 (fallback). */
+    const uint8_t expect[16] = {10, 20, 30, 255, 40, 50, 60, 70, 10, 20, 30, 255, 10, 20, 30, 255};
+    const uint8_t raw[18] = {0, 10, 20, 30, 255, 40, 50, 60, 70,
+                             0, 10, 20, 30, 255, 10, 20, 30, 255};
+
+    uint8_t lit_lens[259] = {0};
+    lit_lens[0] = 1u;
+    lit_lens[10] = 2u;
+    lit_lens[20] = 3u;
+    lit_lens[30] = 4u;
+    lit_lens[40] = 5u;
+    lit_lens[50] = 6u;
+    lit_lens[60] = 7u;
+    lit_lens[70] = 8u;
+    lit_lens[255] = 9u;
+    lit_lens[256] = 10u; /* EOB (length 10 -> slow fallback) */
+    lit_lens[258] = 10u; /* len = 4 (length 10 -> slow fallback) */
+    uint32_t lit_codes[259] = {0};
+    build_canon_codes(lit_lens, 259, lit_codes);
+
+    uint8_t dist_lens[4] = {0u, 0u, 0u, 1u}; /* single-symbol dist table: dsym=3 (dist=4) */
+    uint8_t zbuf[512] = {0};
+    BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+    bw_write_zlib_hdr(&bw, 7u);
+    bw_put(&bw, 1u, 1); /* bfinal = 1 */
+    bw_put(&bw, 2u, 2); /* btype = 2 (dynamic) */
+    bw_write_dynamic_hdr(&bw, lit_lens, 259, dist_lens, 4);
+    for (size_t i = 0; i < 14u; ++i) {
+        const uint8_t sym = raw[i];
+        bw_put_huff(&bw, lit_codes[sym], lit_lens[sym]);
+    }
+    bw_put_huff(&bw, lit_codes[258], lit_lens[258]); /* len = 4 */
+    bw_put_huff(&bw, 0u, 1);                         /* dsym = 3 (dist = 4) */
+    bw_put_huff(&bw, lit_codes[256], lit_lens[256]); /* EOB */
+    bw_finish_zlib(&bw, raw, sizeof raw);
+
+    uint8_t png[768];
+    uint8_t rgba_out[16] = {0};
+    uint8_t raw_scratch[18] = {0};
+    const size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+    TEST_ASSERT_TRUE(png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                     sizeof raw_scratch));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expect, rgba_out, sizeof expect);
+}
+
+static void test_png_rgba_decode_accepts_eob_only_dynamic_final_block(void)
+{
+    const uint8_t expect[16] = {1, 2, 3, 255, 4, 5, 6, 200, 7, 8, 9, 150, 11, 12, 13, 100};
+    const uint8_t raw[18] = {0, 1, 2, 3, 255, 4, 5, 6, 200, 0, 7, 8, 9, 150, 11, 12, 13, 100};
+    /* cl_order indices: 2 -> sym 18 (len 1, code 0), 3 -> sym 0 (len 2, code 10),
+     * 17 -> sym 1 (len 2, code 11). */
+    for (int bad_bit = 0; bad_bit <= 1; ++bad_bit) {
+        uint8_t zbuf[128] = {0};
+        BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+        bw_write_zlib_hdr(&bw, 7u);
+        /* Block 1 (bfinal=0, btype=0 stored): emit full 18-byte scanlines. */
+        bw_put(&bw, 0u, 1);
+        bw_put(&bw, 0u, 2);
+        bw_flush_byte(&bw);
+        const uint16_t slen = (uint16_t)sizeof raw;
+        const uint16_t snlen = (uint16_t)(~(uint32_t)slen);
+        zbuf[bw.len++] = (uint8_t)(slen & 0xffu);
+        zbuf[bw.len++] = (uint8_t)(slen >> 8);
+        zbuf[bw.len++] = (uint8_t)(snlen & 0xffu);
+        zbuf[bw.len++] = (uint8_t)(snlen >> 8);
+        memcpy(zbuf + bw.len, raw, sizeof raw);
+        bw.len += sizeof raw;
+
+        /* Block 2 (bfinal=1, btype=2 dynamic): single-symbol EOB-only lit/len table + empty dist.
+         */
+        bw_put(&bw, 1u, 1);
+        bw_put(&bw, 2u, 2);
+        bw_put(&bw, 0u, 5);  /* hlit = 257 */
+        bw_put(&bw, 0u, 5);  /* hdist = 1 */
+        bw_put(&bw, 14u, 4); /* hclen = 18 */
+        for (int i = 0; i < 18; ++i) {
+            const uint32_t cl = i == 2 ? 1u : ((i == 3 || i == 17) ? 2u : 0u);
+            bw_put(&bw, cl, 3);
+        }
+        bw_put_huff(&bw, 0u, 1); /* sym 18: 11 + 117 = 128 zeros */
+        bw_put(&bw, 117u, 7);
+        bw_put_huff(&bw, 0u, 1); /* sym 18: 128 more zeros -> 256 zeros */
+        bw_put(&bw, 117u, 7);
+        bw_put_huff(&bw, 3u, 2); /* sym 1 -> lengths[256] = 1 */
+        bw_put_huff(&bw, 2u, 2); /* sym 0 -> dist_lengths[0] = 0 */
+        /* Code 0 is valid EOB; code 1 is unassigned and must fail. */
+        bw_put(&bw, (uint32_t)bad_bit, 1);
+        bw_finish_zlib(&bw, raw, sizeof raw);
+
+        uint8_t png[256];
+        uint8_t rgba_out[16] = {0};
+        uint8_t raw_scratch[18] = {0};
+        const size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+        const bool ok = png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                        sizeof raw_scratch);
+        if (bad_bit == 0) {
+            TEST_ASSERT_TRUE(ok);
+            TEST_ASSERT_EQUAL_UINT8_ARRAY(expect, rgba_out, sizeof expect);
+        } else {
+            TEST_ASSERT_FALSE(ok);
+        }
+    }
+}
+
+static void test_png_rgba_decode_rejects_malformed_huffman_tables(void)
+{
+    const uint8_t raw[18] = {0};
+    uint8_t rgba_out[16];
+    uint8_t raw_scratch[18];
+    uint8_t png[768];
+    const uint8_t dist_lens[1] = {0u};
+
+    for (int mode = 0; mode < 3; ++mode) {
+        uint8_t lit_lens[257] = {0};
+        if (mode == 0) {
+            /* Oversubscribed: three 1-bit codes. */
+            lit_lens[0] = 1u;
+            lit_lens[1] = 1u;
+            lit_lens[256] = 1u;
+        } else if (mode == 1) {
+            /* Incomplete non-single table: two 2-bit codes (Kraft sum = 1/2). */
+            lit_lens[0] = 2u;
+            lit_lens[256] = 2u;
+        } else {
+            /* Complete tree but missing EOB (lengths[256] == 0). */
+            lit_lens[0] = 1u;
+            lit_lens[1] = 1u;
+        }
+        uint8_t zbuf[512] = {0};
+        BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+        bw_write_zlib_hdr(&bw, 7u);
+        bw_put(&bw, 1u, 1);
+        bw_put(&bw, 2u, 2);
+        bw_write_dynamic_hdr(&bw, lit_lens, 257, dist_lens, 1);
+        if (mode == 1) {
+            /* Encode all 18 expected scanline bytes + EOB with the incomplete 2-bit codes
+             * (0 -> 00, 256 -> 01) so decode would succeed if the completeness guard regressed. */
+            uint32_t lit_codes[257] = {0};
+            build_canon_codes(lit_lens, 257, lit_codes);
+            for (size_t i = 0; i < sizeof raw; ++i) {
+                bw_put_huff(&bw, lit_codes[0], 2);
+            }
+            bw_put_huff(&bw, lit_codes[256], 2);
+        } else {
+            bw_put(&bw, 0u, 8);
+        }
+        bw_finish_zlib(&bw, raw, sizeof raw);
+
+        const size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+        TEST_ASSERT_FALSE(png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                          sizeof raw_scratch));
+    }
+}
+
+static void test_png_rgba_decode_rejects_invalid_lz77_distances_and_overflow(void)
+{
+    uint8_t png[768];
+
+    /* 1. dist > out_pos (emit 2 literals, then back-reference dist = 4). */
+    {
+        const uint8_t raw[18] = {0};
+        uint8_t zbuf[128] = {0};
+        BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+        bw_write_zlib_hdr(&bw, 7u);
+        bw_put(&bw, 1u, 1);
+        bw_put(&bw, 1u, 2);
+        bw_put_fixed_lit(&bw, 0u);
+        bw_put_fixed_lit(&bw, 10u);
+        bw_put_fixed_lit(&bw, 257u); /* len = 3 */
+        bw_put_fixed_dist(&bw, 3u);  /* dist = 4 > out_pos = 2 */
+        bw_put_fixed_lit(&bw, 256u);
+        bw_finish_zlib(&bw, raw, sizeof raw);
+        uint8_t rgba_out[16];
+        uint8_t raw_scratch[18];
+        const size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+        TEST_ASSERT_FALSE(png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch,
+                                          sizeof raw_scratch));
+    }
+
+    /* 2. dist > win_size using CINFO=0 (256-byte window) on an 8x8 (264 raw bytes) stream. */
+    {
+        enum { WW = 8, WH = 8, RAW_N = (WW * 4 + 1) * WH };
+        uint8_t raw[RAW_N] = {0};
+        uint8_t zbuf[512] = {0};
+        BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+        bw_write_zlib_hdr(&bw, 0u); /* CINFO=0 -> 256-byte window */
+        bw_put(&bw, 1u, 1);
+        bw_put(&bw, 1u, 2);
+        for (int i = 0; i < 257; ++i) {
+            bw_put_fixed_lit(&bw, 0u);
+        }
+        bw_put_fixed_lit(&bw, 261u); /* len = 7 -> total 264 */
+        bw_put_fixed_dist(&bw, 16u); /* dist base = 257, 7 extra bits */
+        bw_put(&bw, 0u, 7);
+        bw_put_fixed_lit(&bw, 256u);
+        bw_finish_zlib(&bw, raw, sizeof raw);
+
+        uint8_t rgba_out[WW * WH * 4];
+        uint8_t raw_scratch[RAW_N];
+        size_t len = make_png_with_idat(png, WW, WH, zbuf, bw.len);
+        TEST_ASSERT_FALSE(png_rgba_decode(png, len, WW, WH, rgba_out, sizeof rgba_out, raw_scratch,
+                                          sizeof raw_scratch));
+
+        /* Raising only CINFO from 0 to 1 (512-byte window) makes the exact same stream valid. */
+        zbuf[0] = 0x18u;
+        zbuf[1] = (uint8_t)((31u - (((uint32_t)zbuf[0] << 8) % 31u)) % 31u);
+        len = make_png_with_idat(png, WW, WH, zbuf, bw.len);
+        TEST_ASSERT_TRUE(png_rgba_decode(png, len, WW, WH, rgba_out, sizeof rgba_out, raw_scratch,
+                                         sizeof raw_scratch));
+    }
+
+    /* 3. Oversized LZ77 match pushing out_pos past expect_raw must fail without touching guards. */
+    {
+        const uint8_t raw[18] = {0};
+        uint8_t zbuf[128] = {0};
+        BitWriter bw = {.buf = zbuf, .cap = sizeof zbuf};
+        bw_write_zlib_hdr(&bw, 7u);
+        bw_put(&bw, 1u, 1);
+        bw_put(&bw, 1u, 2);
+        for (int i = 0; i < 16; ++i) {
+            bw_put_fixed_lit(&bw, 0u);
+        }
+        bw_put_fixed_lit(&bw, 257u); /* len = 3 -> 16 + 3 = 19 > 18 */
+        bw_put_fixed_dist(&bw, 0u);  /* dist = 1 */
+        bw_put_fixed_lit(&bw, 256u);
+        bw_finish_zlib(&bw, raw, sizeof raw);
+
+        uint8_t rgba_out[16];
+        uint8_t raw_scratch[18 + 8];
+        memset(raw_scratch, 0x5a, sizeof raw_scratch);
+        const size_t len = make_png_with_idat(png, 2u, 2u, zbuf, bw.len);
+        TEST_ASSERT_FALSE(
+            png_rgba_decode(png, len, 2, 2, rgba_out, sizeof rgba_out, raw_scratch, 18u));
+        for (size_t i = 18u; i < sizeof raw_scratch; ++i) {
+            TEST_ASSERT_EQUAL_HEX8(0x5a, raw_scratch[i]);
+        }
     }
 }
 
@@ -985,6 +1554,32 @@ static void test_spine_undulation_in_place_matches_separate_buffers(void)
     }
 }
 
+static void test_ryu_body_width_tapers_monotonically_and_widens_when_awakened(void)
+{
+    const float times[] = {0.0f, 0.37f, 0.91f, 1.45f, 2.20f};
+    for (size_t ti = 0; ti < sizeof times / sizeof times[0]; ++ti) {
+        const float t = times[ti];
+        float prev_dorm = sprite_ryu_body_width(false, t, 0.0f);
+        float prev_awake = sprite_ryu_body_width(true, t, 0.0f);
+        TEST_ASSERT_TRUE(prev_awake > prev_dorm);
+        for (int k = 1; k <= 20; ++k) {
+            const float s = (float)k / 20.0f;
+            const float cur_dorm = sprite_ryu_body_width(false, t, s);
+            const float cur_awake = sprite_ryu_body_width(true, t, s);
+            TEST_ASSERT_TRUE(cur_dorm < prev_dorm);
+            TEST_ASSERT_TRUE(cur_awake < prev_awake);
+            TEST_ASSERT_TRUE(cur_awake > cur_dorm);
+            prev_dorm = cur_dorm;
+            prev_awake = cur_awake;
+        }
+    }
+    TEST_ASSERT_FLOAT_WITHIN(4.0f, 86.0f, sprite_ryu_body_width(false, 0.0f, 0.0f));
+    TEST_ASSERT_FLOAT_WITHIN(5.0f, 74.0f, sprite_ryu_body_width(false, 0.0f, 0.45f));
+    TEST_ASSERT_FLOAT_WITHIN(3.0f, 32.0f, sprite_ryu_body_width(false, 0.0f, 1.0f));
+    TEST_ASSERT_FLOAT_WITHIN(4.0f, 94.0f, sprite_ryu_body_width(true, 0.0f, 0.0f));
+    TEST_ASSERT_FLOAT_WITHIN(3.0f, 35.0f, sprite_ryu_body_width(true, 0.0f, 1.0f));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -995,6 +1590,7 @@ int main(void)
     RUN_TEST(test_state_selection_table);
     RUN_TEST(test_umbrella_switches_to_crouch_below_hop_height_threshold);
     RUN_TEST(test_missing_variant_falls_back_to_base_and_missing_base_disables_group);
+    RUN_TEST(test_missing_ryu_body_limb_or_tail_disables_ryu_group);
     RUN_TEST(test_face_hysteresis_does_not_chatter_near_vertical);
     RUN_TEST(test_paper_turn_narrows_then_reopens_on_the_new_side);
     RUN_TEST(test_quad_mirror_keeps_collision_centre_fixed);
@@ -1006,13 +1602,21 @@ int main(void)
     RUN_TEST(test_halo_interior_is_solid_and_soft_alpha_is_binarised);
     RUN_TEST(test_halo_rejects_odd_or_oversized_inputs);
     RUN_TEST(test_halo_matches_reference_dilation_byte_for_byte);
+    RUN_TEST(test_halo_wrap_x_preserves_uniform_alpha_at_horizontal_edges);
     RUN_TEST(test_atlas_slots_do_not_overlap_and_fit);
     RUN_TEST(test_join_path_reports_overflow);
     RUN_TEST(test_png_dimensions_are_read_before_decoding);
     RUN_TEST(test_png_validate_accepts_only_bounded_rgba8_streams);
     RUN_TEST(test_png_validate_caps_total_idat_payload);
     RUN_TEST(test_alpha_usable_rejects_blank_and_solid_squares);
+    RUN_TEST(test_alpha_usable_enforces_eight_percent_outer_margin);
+    RUN_TEST(test_alpha_usable_ex_allows_horizontal_tiling_with_top_bottom_margin);
     RUN_TEST(test_png_rgba_decode_handles_filters_and_rejects_oversized_inflate);
+    RUN_TEST(test_png_rgba_decode_fixed_huffman_and_trailing_idat);
+    RUN_TEST(test_png_rgba_decode_dynamic_huffman_and_long_codes);
+    RUN_TEST(test_png_rgba_decode_accepts_eob_only_dynamic_final_block);
+    RUN_TEST(test_png_rgba_decode_rejects_malformed_huffman_tables);
+    RUN_TEST(test_png_rgba_decode_rejects_invalid_lz77_distances_and_overflow);
     RUN_TEST(test_spine_resample_has_even_arc_spacing);
     RUN_TEST(test_spine_socket_replaces_the_neck_run_with_the_head_socket);
     RUN_TEST(test_spine_socket_keeps_an_exact_corner_once);
@@ -1021,5 +1625,6 @@ int main(void)
     RUN_TEST(test_spine_envelope_is_zero_at_neck_and_orbs);
     RUN_TEST(test_spine_undulation_moves_body_but_holds_neck_and_orbs);
     RUN_TEST(test_spine_undulation_in_place_matches_separate_buffers);
+    RUN_TEST(test_ryu_body_width_tapers_monotonically_and_widens_when_awakened);
     return UNITY_END();
 }

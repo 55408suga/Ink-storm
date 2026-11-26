@@ -702,7 +702,7 @@ static void draw_tengu(RenderState *r, const TransformComp *tr, const BossComp *
     draw_body(r, p);
     render_draw_tengu_telegraph(r, tr, boss, shrine, seed);
     const float tele = boss != NULL ? ink_clampf(boss->telegraph, 0.0f, 1.0f) : 0.0f;
-    if (tele <= 0.01f) {
+    if (boss == NULL || tele <= 0.01f) {
         return;
     }
     const bool has_dir = boss->gale_dx != 0.0f || boss->gale_dy != 0.0f;
@@ -778,16 +778,6 @@ static void draw_nue(RenderState *r, const TransformComp *tr, const EnemyComp *e
     render_draw_nue_telegraph(r, tr, boss, seed);
 }
 
-static BrushProfile ryu_spine_profile(float width, uint32_t seed)
-{
-    return (BrushProfile){.w_max = width,
-                          .w_min_ratio = 0.14f,
-                          .entry = 0.06f,
-                          .exit = 0.35f,
-                          .dry = 0.60f,
-                          .seed = seed + 1u};
-}
-
 /* 首の差し込み口から尾まで 64 点。玉の位置と首ではうねりを止め、玉の当たり判定から胴を外さない */
 static int32_t ryu_prepare_spine(const GameState *g, EntityId id, const TransformComp *tr,
                                  const BossComp *boss, const SprPlan *p,
@@ -799,8 +789,10 @@ static int32_t ryu_prepare_spine(const GameState *g, EntityId id, const Transfor
     }
     const Vector2 neck = plan_anchor(p, SPR_ANCHOR_NECK, (Vector2){tr->x, tr->y});
     const float d_neck = hypotf(neck.x - tr->x, neck.y - tr->y);
+    const float raw_len = sprite_polyline_length(raw, raw_n);
+    const float d_skip = fminf(d_neck + 60.0f, raw_len * 0.45f);
     GameVec2 socketed[RENDER_RYU_SPINE_PTS + 1];
-    const int32_t sn = sprite_spine_socket(raw, raw_n, (GameVec2){neck.x, neck.y}, d_neck, socketed,
+    const int32_t sn = sprite_spine_socket(raw, raw_n, (GameVec2){neck.x, neck.y}, d_skip, socketed,
                                            RENDER_RYU_SPINE_PTS + 1);
     if (sn < 2) {
         return 0;
@@ -810,7 +802,7 @@ static int32_t ryu_prepare_spine(const GameState *g, EntityId id, const Transfor
         return 0;
     }
 
-    float orb_s[GAME_RYU_ORB_COUNT];
+    float orb_s[GAME_RYU_ORB_COUNT] = {0};
     int32_t orb_n = 0;
     if (has_ryu_body_trail(g, id)) {
         for (int k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
@@ -837,37 +829,195 @@ static int ryu_spine_to_vec2(const GameVec2 *src, int32_t n, Vector2 out[RENDER_
     return cnt;
 }
 
-static void reverse_points(Vector2 *pts, int n)
+static SpriteXform make_pivoted_xform(const SpriteDef *d, Vector2 pivot, float size, float rot,
+                                      bool flip_v)
 {
-    for (int i = 0, j = n - 1; i < j; ++i, --j) {
-        const Vector2 t = pts[i];
-        pts[i] = pts[j];
-        pts[j] = t;
+    const float my = flip_v ? -1.0f : 1.0f;
+    return (SpriteXform){
+        .x = pivot.x - (d->foot.u - 0.5f) * size,
+        .y = pivot.y - my * (d->foot.v - 0.5f) * size,
+        .size = size,
+        .sx = 1.0f,
+        .sy = 1.0f,
+        .rot = rot,
+        .flip_v = flip_v,
+    };
+}
+
+typedef struct {
+    bool has_tail;
+    SpriteXform tail_xf;
+    float tail_a;
+    bool has_fore;
+    SpriteXform fore_xf;
+    float fore_a;
+    bool has_hind;
+    SpriteXform hind_xf;
+    float hind_a;
+} RyuAppendages;
+
+/* 弧長比 arc_frac ∈ [0, 1] の背骨位置と首向き単位接線を返す（帯の切り口計算と同じ弧長基準） */
+static bool ryu_sample_arc(const GameVec2 *spine, int32_t n, float arc_frac, Vector2 *pos_out,
+                           Vector2 *fwd_out)
+{
+    if (spine == NULL || n < 2) {
+        return false;
+    }
+    const int32_t cnt = n > RENDER_RYU_SPINE_PTS ? RENDER_RYU_SPINE_PTS : n;
+    float arc[RENDER_RYU_SPINE_PTS];
+    arc[0] = 0.0f;
+    for (int32_t i = 1; i < cnt; ++i) {
+        arc[i] = arc[i - 1] + hypotf(spine[i].x - spine[i - 1].x, spine[i].y - spine[i - 1].y);
+    }
+    const float total_len = arc[cnt - 1];
+    if (!(total_len > 1e-3f) || !isfinite(total_len)) {
+        return false;
+    }
+    const float target = total_len * clamp01_finite(arc_frac);
+    int32_t seg = cnt - 1;
+    for (int32_t i = 1; i < cnt; ++i) {
+        if (arc[i] >= target) {
+            seg = i;
+            break;
+        }
+    }
+    const float seg_l = arc[seg] - arc[seg - 1];
+    const float local_t = seg_l > 1e-6f ? clamp01_finite((target - arc[seg - 1]) / seg_l) : 0.0f;
+    const Vector2 pos = {spine[seg - 1].x + (spine[seg].x - spine[seg - 1].x) * local_t,
+                         spine[seg - 1].y + (spine[seg].y - spine[seg - 1].y) * local_t};
+
+    Vector2 fwd = {1.0f, 0.0f};
+    if (seg_l > 1e-6f) {
+        fwd = (Vector2){(spine[seg - 1].x - spine[seg].x) / seg_l,
+                        (spine[seg - 1].y - spine[seg].y) / seg_l};
+    } else {
+        bool found = false;
+        for (int32_t j = seg - 1; j >= 1; --j) {
+            const float l = arc[j] - arc[j - 1];
+            if (l > 1e-6f) {
+                fwd =
+                    (Vector2){(spine[j - 1].x - spine[j].x) / l, (spine[j - 1].y - spine[j].y) / l};
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (int32_t j = seg + 1; j < cnt; ++j) {
+                const float l = arc[j] - arc[j - 1];
+                if (l > 1e-6f) {
+                    fwd = (Vector2){(spine[j - 1].x - spine[j].x) / l,
+                                    (spine[j - 1].y - spine[j].y) / l};
+                    break;
+                }
+            }
+        }
+    }
+    if (pos_out != NULL) {
+        *pos_out = pos;
+    }
+    if (fwd_out != NULL) {
+        *fwd_out = fwd;
+    }
+    return true;
+}
+
+static void ryu_compute_appendages(const GameVec2 *spine, int32_t spine_n, bool awakened, float t,
+                                   bool flip_v, float reveal, RyuAppendages *out)
+{
+    *out = (RyuAppendages){0};
+    if (spine == NULL || spine_n < 2 || !isfinite(reveal) || reveal <= 0.01f) {
+        return;
+    }
+    const float clamped_reveal = clamp01_finite(reveal);
+    const float dsign = flip_v ? -1.0f : 1.0f;
+
+    const SpriteDef *tail_def = sprite_def(SPR_RYU_TAIL);
+    if (tail_def != NULL) {
+        const float tail_a =
+            clamped_reveal >= 1.0f ? 1.0f : clamp01_finite((clamped_reveal - 0.08f) / 0.16f);
+        Vector2 cut_pos;
+        Vector2 cut_fwd;
+        if (tail_a > 0.001f && ryu_sample_arc(spine, spine_n, clamped_reveal, &cut_pos, &cut_fwd)) {
+            const Vector2 tail_dir = {-cut_fwd.x, -cut_fwd.y};
+            const Vector2 pivot = {cut_pos.x + cut_fwd.x * 6.0f, cut_pos.y + cut_fwd.y * 6.0f};
+            const float size = awakened ? 124.0f : 116.0f;
+            const float rot =
+                atan2f(tail_dir.y, tail_dir.x) + 0.08f * sinf(k_spr_two_pi * 1.35f * t);
+            out->has_tail = true;
+            out->tail_xf = make_pivoted_xform(tail_def, pivot, size, rot, !flip_v);
+            out->tail_a = tail_a;
+        }
+    }
+
+    const SpriteDef *limb_def = sprite_def(SPR_RYU_LIMB);
+    if (limb_def != NULL) {
+        const float s_fore = 0.175f;
+        const float fore_a = clamped_reveal >= 1.0f
+                                 ? 1.0f
+                                 : clamp01_finite((clamped_reveal - (s_fore + 0.02f)) / 0.14f);
+        Vector2 pos;
+        Vector2 fwd;
+        if (fore_a > 0.001f && ryu_sample_arc(spine, spine_n, s_fore, &pos, &fwd)) {
+            const Vector2 dorsal = {dsign * fwd.y, -dsign * fwd.x};
+            const float body_w = sprite_ryu_body_width(awakened, t, s_fore);
+            const Vector2 pivot = {pos.x - dorsal.x * (body_w * 0.12f),
+                                   pos.y - dorsal.y * (body_w * 0.12f)};
+            const float size = awakened ? 116.0f : 108.0f;
+            const float rot = atan2f(fwd.y, fwd.x) + 0.14f * sinf(k_spr_two_pi * 0.85f * t);
+            out->has_fore = true;
+            out->fore_xf = make_pivoted_xform(limb_def, pivot, size, rot, flip_v);
+            out->fore_a = fore_a;
+        }
+
+        const float s_hind = 0.619f;
+        const float hind_a = clamped_reveal >= 1.0f
+                                 ? 1.0f
+                                 : clamp01_finite((clamped_reveal - (s_hind + 0.02f)) / 0.14f);
+        if (hind_a > 0.001f && ryu_sample_arc(spine, spine_n, s_hind, &pos, &fwd)) {
+            const Vector2 dorsal = {dsign * fwd.y, -dsign * fwd.x};
+            const float body_w = sprite_ryu_body_width(awakened, t, s_hind);
+            const Vector2 pivot = {pos.x - dorsal.x * (body_w * 0.10f),
+                                   pos.y - dorsal.y * (body_w * 0.10f)};
+            const float size = awakened ? 98.0f : 92.0f;
+            const float rot = atan2f(fwd.y, fwd.x) + 0.16f * sinf(k_spr_two_pi * 0.85f * t + 2.3f);
+            out->has_hind = true;
+            out->hind_xf = make_pivoted_xform(limb_def, pivot, size, rot, flip_v);
+            out->hind_a = hind_a;
+        }
     }
 }
 
-static void draw_ryu_spine_halo_pts(RenderState *r, const GameVec2 *src, int32_t src_n,
-                                    bool awakened, float width_t, bool unravel, float dissolve,
-                                    float halo_a, uint32_t seed, int act_index)
+static void draw_ryu_body_halos(RenderState *r, const GameVec2 *spine, int32_t spine_n,
+                                bool awakened, float t, bool flip_v, float reveal, float halo_a,
+                                int act_index)
 {
-    if (src == NULL || src_n < 2) {
+    if (spine == NULL || spine_n < 2 || halo_a <= 0.001f || reveal <= 0.01f) {
         return;
     }
-    Vector2 spine[RENDER_RYU_SPINE_PTS];
-    const int n = ryu_spine_to_vec2(src, src_n, spine);
-    float reveal = 1.0f;
-    if (unravel) {
-        reverse_points(spine, n);
-        reveal = 1.0f - dissolve;
+    render_sprite_draw_ryu_band(r, SPR_RYU_BODY, true, spine, spine_n, awakened, t, flip_v, reveal,
+                                halo_tint(act_index, halo_a));
+    RyuAppendages app;
+    ryu_compute_appendages(spine, spine_n, awakened, t, flip_v, reveal, &app);
+    if (app.has_tail) {
+        render_sprite_draw_halo(r, SPR_RYU_TAIL, &app.tail_xf,
+                                halo_tint(act_index, halo_a * app.tail_a));
     }
-    ink_stroke_knockout(r, spine, n,
-                        ryu_spine_profile(sprite_ryu_spine_width(awakened, width_t), seed), 4.0f,
-                        act_index, halo_a / k_spr_halo_alpha, reveal);
+    if (app.has_fore) {
+        render_sprite_draw_halo(r, SPR_RYU_LIMB, &app.fore_xf,
+                                halo_tint(act_index, halo_a * app.fore_a));
+    }
+    if (app.has_hind) {
+        render_sprite_draw_halo(r, SPR_RYU_LIMB, &app.hind_xf,
+                                halo_tint(act_index, halo_a * app.hind_a));
+    }
 }
 
 static void draw_ryu_broken_overlay(RenderState *r, const Vector2 *spine, int spine_n,
                                     uint8_t broken_mask, uint32_t seed, int act_index)
 {
+    if (spine_n < 2 || spine_n > RENDER_RYU_SPINE_PTS) {
+        return;
+    }
     const PaletteId paper_pal = pal_paper_for_act(act_index);
     for (int seg = 0; seg < GAME_RYU_ORB_COUNT; ++seg) {
         if ((broken_mask & (uint8_t)(1u << (unsigned)seg)) == 0u) {
@@ -879,10 +1029,10 @@ static void draw_ryu_broken_overlay(RenderState *r, const Vector2 *spine, int sp
             i1 = i0 + 1 < spine_n ? i0 + 1 : spine_n - 1;
         }
         const int count = i1 - i0 + 1;
-        if (count < 2) {
+        if (i0 < 0 || i0 >= spine_n || count < 2 || i0 + count > spine_n) {
             continue;
         }
-        const float seg_w = 18.0f - (float)seg * 3.5f;
+        const float seg_w = 28.0f - (float)seg * 4.0f;
         ink_stroke(r, &spine[i0], count,
                    (BrushProfile){.w_max = seg_w,
                                   .w_min_ratio = 0.18f,
@@ -902,46 +1052,30 @@ static void draw_ryu_broken_overlay(RenderState *r, const Vector2 *spine, int sp
     }
 }
 
-static void draw_ryu_scales(RenderState *r, const Vector2 *spine, int spine_n, uint8_t broken_mask,
-                            uint32_t seed)
+static void draw_ryu_painted_body(RenderState *r, const GameVec2 *spine, int32_t spine_n,
+                                  bool awakened, float t, bool flip_v, float reveal, float body_a,
+                                  uint8_t broken_mask, uint32_t seed, int act_index)
 {
-    const int scale_count = 44;
-    for (int s = 0; s < scale_count; ++s) {
-        const float norm_s = ((float)s + 0.5f) / (float)scale_count;
-        const int third = (int)(norm_s * (float)GAME_RYU_ORB_COUNT);
-        const int clamped = third < GAME_RYU_ORB_COUNT ? third : (GAME_RYU_ORB_COUNT - 1);
-        if ((broken_mask & (uint8_t)(1u << (unsigned)clamped)) != 0u && (s % 2 == 0)) {
-            continue;
-        }
-        const float pos_f = norm_s * (float)(spine_n - 1);
-        int idx = (int)pos_f;
-        idx = idx >= spine_n - 1 ? spine_n - 2 : idx;
-        const float frac = pos_f - (float)idx;
-        const Vector2 p0 = spine[idx];
-        const Vector2 p1 = spine[idx + 1];
-        const Vector2 at = {p0.x + (p1.x - p0.x) * frac, p0.y + (p1.y - p0.y) * frac};
-        const float dx = p1.x - p0.x;
-        const float dy = p1.y - p0.y;
-        const float dl = sqrtf(dx * dx + dy * dy);
-        const Vector2 nrm = dl > 1e-3f ? (Vector2){-dy / dl, dx / dl} : (Vector2){0.0f, 1.0f};
-        const Vector2 tan_v = dl > 1e-3f ? (Vector2){dx / dl, dy / dl} : (Vector2){0.0f, 0.0f};
-        const float side = (s & 1) ? 1.0f : -1.0f;
-        const float taper = 1.0f - ((float)s / (float)scale_count) * 0.65f;
-        const Vector2 tick[2] = {
-            {at.x + nrm.x * side * 3.0f * taper, at.y + nrm.y * side * 3.0f * taper},
-            {at.x + nrm.x * side * 12.0f * taper + tan_v.x * 4.0f,
-             at.y + nrm.y * side * 12.0f * taper + tan_v.y * 4.0f},
-        };
-        ink_stroke(
-            r, tick, 2,
-            (BrushProfile){.w_max = 2.6f,
-                           .w_min_ratio = 0.25f,
-                           .entry = 0.15f,
-                           .exit = 0.45f,
-                           .dry = 0.35f,
-                           .seed = seed + 200u + (uint32_t)s},
-            (InkTone){.color = (s % 2 == 0) ? PAL_SUMI_LIGHT : PAL_SUMI_HEAVY, .alpha = 0.72f},
-            1.0f);
+    if (spine == NULL || spine_n < 2 || body_a <= 0.001f || reveal <= 0.01f) {
+        return;
+    }
+    RyuAppendages app;
+    ryu_compute_appendages(spine, spine_n, awakened, t, flip_v, reveal, &app);
+    if (app.has_tail) {
+        render_sprite_draw(r, SPR_RYU_TAIL, &app.tail_xf, white_a(body_a * app.tail_a));
+    }
+    render_sprite_draw_ryu_band(r, SPR_RYU_BODY, false, spine, spine_n, awakened, t, flip_v, reveal,
+                                white_a(body_a));
+    if (broken_mask != 0u && reveal >= 0.9999f) {
+        Vector2 pts[RENDER_RYU_SPINE_PTS];
+        const int n = ryu_spine_to_vec2(spine, spine_n, pts);
+        draw_ryu_broken_overlay(r, pts, n, broken_mask, seed, act_index);
+    }
+    if (app.has_hind) {
+        render_sprite_draw(r, SPR_RYU_LIMB, &app.hind_xf, white_a(body_a * app.hind_a));
+    }
+    if (app.has_fore) {
+        render_sprite_draw(r, SPR_RYU_LIMB, &app.fore_xf, white_a(body_a * app.fore_a));
     }
 }
 
@@ -1039,32 +1173,20 @@ static void draw_ryu(RenderState *r, const GameState *g, EntityId id, const Tran
         render_draw_ryu_telegraph(r, boss, shrine, seed);
     }
 
-    Vector2 spine[RENDER_RYU_SPINE_PTS];
-    const int n = (cached_spine != NULL && cached_n >= 2)
-                      ? ryu_spine_to_vec2(cached_spine, cached_n, spine)
-                      : 0;
-    if (n >= 2) {
-        const BrushProfile prof = ryu_spine_profile(sprite_ryu_spine_width(awakened, t), seed);
-        const InkTone tone = {.color = awakened ? PAL_SUMI_SCORCH : PAL_SUMI_DARK, .alpha = 0.96f};
-        if (p->dissolving) {
-            Vector2 unravel[RENDER_RYU_SPINE_PTS];
-            for (int i = 0; i < n; ++i) {
-                unravel[i] = spine[i];
-            }
-            reverse_points(unravel, n);
-            ink_stroke(r, unravel, n, prof, tone, 1.0f - p->dissolve);
-        } else {
-            ink_stroke(r, spine, n, prof, tone, 1.0f);
-            draw_ryu_broken_overlay(r, spine, n, broken_mask, seed, act_index);
-            draw_ryu_scales(r, spine, n, broken_mask, seed);
-        }
+    if (cached_spine != NULL && cached_n >= 2) {
+        const float reveal = p->dissolving ? (1.0f - p->dissolve) : 1.0f;
+        const float torso_a = p->dissolving ? 1.0f : p->body_a;
+        draw_ryu_painted_body(r, cached_spine, cached_n, awakened, t, p->xf.flip_v, reveal, torso_a,
+                              p->dissolving ? 0u : broken_mask, seed, act_index);
     }
 
     if (p->body_a <= 0.001f) {
         return;
     }
     draw_body(r, p);
-    if (n >= 2) {
+    if (cached_spine != NULL && cached_n >= 2) {
+        Vector2 spine[RENDER_RYU_SPINE_PTS];
+        const int n = ryu_spine_to_vec2(cached_spine, cached_n, spine);
         draw_ryu_whiskers(r, spine, n, p, entity_radius(tr, 46.0f), t, seed);
     }
     if (awakened || r->ryu_awaken_t > 0.0f) {
@@ -1277,7 +1399,7 @@ void render_sprite_tick(RenderState *r, const GameState *g, float dt)
             (void)update_face(r, id, cos_f, g->ticks, NULL);
         }
         if (en->def_id == ENEMY_BOSS_RYU && !tr->dissolving && !r->ryu_snap.active) {
-            GameVec2 raw[RENDER_RYU_SPINE_PTS];
+            GameVec2 raw[RENDER_RYU_SPINE_PTS] = {0};
             const int32_t raw_n = ryu_raw_spine(r, g, id, tr, raw);
             SprPlan plan;
             if (plan_enemy_with_raw(r, g, id, shrine, raw, raw_n, &plan)) {
@@ -1325,7 +1447,7 @@ static void ensure_frame_cache(RenderState *r, const GameState *g)
         if (en == NULL || tr == NULL) {
             continue;
         }
-        GameVec2 raw[RENDER_RYU_SPINE_PTS];
+        GameVec2 raw[RENDER_RYU_SPINE_PTS] = {0};
         int32_t raw_n = 0;
         if (en->def_id == ENEMY_BOSS_RYU) {
             if (!tr->dissolving && r->ryu_snap.live && !r->ryu_snap.active &&
@@ -1397,8 +1519,9 @@ void render_sprite_draw_halos(RenderState *r, const GameState *g, int act_index)
             const BossComp *boss = game_boss(g, id);
             const bool awakened = boss != NULL && boss->phase_idx >= 1;
             if (fc->ryu_ok && fc->ryu_id.index == id.index && fc->ryu_id.gen == id.gen) {
-                draw_ryu_spine_halo_pts(r, fc->ryu_spine, fc->ryu_spine_n, awakened, t_s,
-                                        p.dissolving, p.dissolve, p.halo_a, seed, act_index);
+                const float reveal = p.dissolving ? (1.0f - p.dissolve) : 1.0f;
+                draw_ryu_body_halos(r, fc->ryu_spine, fc->ryu_spine_n, awakened, t_s, p.xf.flip_v,
+                                    reveal, p.halo_a, act_index);
             }
             if (p.dissolving) {
                 /* 頭は胴より先に消えるので、頭の形の紙抜きだけが残らないよう縁取りも合わせて薄める
@@ -1422,17 +1545,33 @@ void render_sprite_draw_halos(RenderState *r, const GameState *g, int act_index)
         default:
             break;
         }
-        draw_halo(r, &p, act_index);
+        PaletteId pals[4];
+        if (p.dissolving || render_elite_palettes(en, pals) == 0) {
+            draw_halo(r, &p, act_index);
+        }
+    }
+    for (uint32_t i = 0; i < fc->high_water; ++i) {
+        if (!fc->ent[i].valid || !g->ecs.alive[i]) {
+            continue;
+        }
+        const EntityId id = {.index = i, .gen = fc->ent[i].gen};
+        const EnemyComp *en = game_enemy(g, id);
+        const SprPlan *p = &fc->ent[i].plan;
+        if (en == NULL || en->def_id == ENEMY_BOSS_RYU_ORB || p->dissolving) {
+            continue;
+        }
+        draw_elite_rims(r, en, p, act_index);
     }
 
     if (r->ryu_snap.active) {
         const RyuDeathSnap *sn = &r->ryu_snap;
         const float ts = sn->t_s > 0.0f ? sn->t_s : 0.0f;
+        const float death_t = (float)((double)sn->snap_tick / INK_TICK_HZ) + ts;
         const float u = clamp01_finite(ts / 0.6f);
         const float halo_a = k_spr_halo_alpha * powf(1.0f - u, 0.7f);
         const float head_a = 1.0f - clamp01_finite(ts / 0.3f);
-        draw_ryu_spine_halo_pts(r, sn->spine, sn->spine_n, sn->awakened, ts, true, u, halo_a,
-                                sn->seed, act_index);
+        draw_ryu_body_halos(r, sn->spine, sn->spine_n, sn->awakened, death_t, sn->plan.xf.flip_v,
+                            1.0f - u, halo_a, act_index);
         if (head_a > 0.001f) {
             SprPlan hp = sn->plan;
             hp.xf.size *= 1.0f + 0.10f * u;
@@ -1445,26 +1584,22 @@ void render_sprite_draw_halos(RenderState *r, const GameState *g, int act_index)
 
 void render_sprite_draw_ryu_death(RenderState *r, int act_index)
 {
-    (void)act_index;
     if (r == NULL || !r->sprites.enabled || !r->ryu_snap.active) {
         return;
     }
     const RyuDeathSnap *sn = &r->ryu_snap;
     const float ts = sn->t_s > 0.0f ? sn->t_s : 0.0f;
+    const float death_t = (float)((double)sn->snap_tick / INK_TICK_HZ) + ts;
     const float u = clamp01_finite(ts / 0.6f);
     const float head_a = 1.0f - clamp01_finite(ts / 0.3f);
+    const float cap_a = clamp01_finite(sn->plan.body_a);
+    const float base_a = cap_a + (1.0f - cap_a) * clamp01_finite(ts / 0.12f);
     const float rad = sn->radius * (1.0f + 0.55f * u);
     ink_wash(r, (Vector2){sn->x, sn->y}, rad, rad * 0.86f, u * 0.6f,
              (InkTone){.color = PAL_SUMI_HEAVY, .alpha = (1.0f - u) * 0.72f}, 2, sn->seed);
     if (sn->spine_n >= 2) {
-        Vector2 unravel[RENDER_RYU_SPINE_PTS];
-        const int n = ryu_spine_to_vec2(sn->spine, sn->spine_n, unravel);
-        reverse_points(unravel, n);
-        const BrushProfile prof =
-            ryu_spine_profile(sprite_ryu_spine_width(sn->awakened, ts), sn->seed);
-        const InkTone tone = {.color = sn->awakened ? PAL_SUMI_SCORCH : PAL_SUMI_DARK,
-                              .alpha = 0.96f};
-        ink_stroke(r, unravel, n, prof, tone, 1.0f - u);
+        draw_ryu_painted_body(r, sn->spine, sn->spine_n, sn->awakened, death_t, sn->plan.xf.flip_v,
+                              1.0f - u, base_a, 0u, sn->seed, act_index);
     }
     if (head_a > 0.001f) {
         SprPlan hp = sn->plan;
@@ -1531,7 +1666,6 @@ bool render_sprite_draw_enemy(RenderState *r, const GameState *g, EntityId id,
         return true;
     }
 
-    draw_elite_rims(r, en, p, act_index);
     switch (en->def_id) {
     case ENEMY_ARCHER:
         draw_archer(r, tr, en, p, seed);

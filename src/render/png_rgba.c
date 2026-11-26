@@ -7,6 +7,8 @@
 
 enum {
     PNG_HUFF_MAX_BITS = 15,
+    PNG_HUFF_FAST_BITS = 9,
+    PNG_HUFF_FAST_SIZE = 1 << PNG_HUFF_FAST_BITS,
     PNG_LIT_MAX = 288,
     PNG_DIST_MAX = 32,
     PNG_CL_MAX = 19,
@@ -27,6 +29,7 @@ typedef struct {
 typedef struct {
     uint16_t count[PNG_HUFF_MAX_BITS + 1];
     uint16_t symbol[PNG_LIT_MAX];
+    uint16_t fast[PNG_HUFF_FAST_SIZE];
     int32_t total_syms;
 } PngHuff;
 
@@ -109,6 +112,10 @@ static bool huff_build(PngHuff *t, const uint8_t *lengths, int32_t num_syms, boo
                        bool allow_single)
 {
     memset(t->count, 0, sizeof t->count);
+    memset(t->fast, 0, sizeof t->fast);
+    if (num_syms < 0 || num_syms > PNG_LIT_MAX) {
+        return false;
+    }
     for (int32_t i = 0; i < num_syms; ++i) {
         if (lengths[i] > PNG_HUFF_MAX_BITS) {
             return false;
@@ -141,6 +148,24 @@ static bool huff_build(PngHuff *t, const uint8_t *lengths, int32_t num_syms, boo
             t->symbol[offs[lengths[i]]++] = (uint16_t)i;
         }
     }
+    uint32_t code = 0u;
+    int32_t sym_idx = 0;
+    for (int32_t len = 1; len <= PNG_HUFF_FAST_BITS; ++len) {
+        const int32_t cnt = (int32_t)t->count[len];
+        const uint32_t step = UINT32_C(1) << (unsigned)len;
+        for (int32_t j = 0; j < cnt; ++j) {
+            uint32_t rev = 0u;
+            for (int32_t b = 0; b < len; ++b) {
+                rev = (rev << 1) | ((code >> (unsigned)b) & 1u);
+            }
+            const uint16_t entry = (uint16_t)(((uint32_t)len << 10) | t->symbol[sym_idx++]);
+            for (uint32_t idx = rev; idx < PNG_HUFF_FAST_SIZE; idx += step) {
+                t->fast[idx] = entry;
+            }
+            ++code;
+        }
+        code <<= 1;
+    }
     t->total_syms = used;
     return true;
 }
@@ -149,6 +174,24 @@ static bool huff_decode(PngIdatReader *br, const PngHuff *t, uint32_t *sym_out)
 {
     if (t->total_syms <= 0) {
         return false;
+    }
+    while (br->nbits < PNG_HUFF_FAST_BITS) {
+        uint8_t byte = 0u;
+        if (!idat_next_byte(br, &byte)) {
+            break;
+        }
+        br->bits |= (uint32_t)byte << (unsigned)br->nbits;
+        br->nbits += 8;
+    }
+    const uint16_t entry = t->fast[br->bits & (PNG_HUFF_FAST_SIZE - 1u)];
+    if (entry != 0u) {
+        const int32_t len = (int32_t)(entry >> 10);
+        if (len <= br->nbits) {
+            br->bits >>= (unsigned)len;
+            br->nbits -= len;
+            *sym_out = (uint32_t)(entry & 0x3ffu);
+            return true;
+        }
     }
     int32_t code = 0;
     int32_t first = 0;
@@ -225,7 +268,7 @@ static bool build_dynamic_tables(PngIdatReader *br, PngHuff *lit, PngHuff *dist)
         return false;
     }
 
-    uint8_t lengths[286 + 30];
+    uint8_t lengths[286 + 30] = {0};
     const int32_t total = hlit + hdist;
     int32_t idx = 0;
     while (idx < total) {
@@ -269,12 +312,12 @@ static bool build_dynamic_tables(PngIdatReader *br, PngHuff *lit, PngHuff *dist)
     if (lengths[256] == 0u) {
         return false;
     }
-    return huff_build(lit, lengths, hlit, false, false) &&
+    return huff_build(lit, lengths, hlit, false, true) &&
            huff_build(dist, lengths + hlit, hdist, true, true);
 }
 
 static bool inflate_huffman_block(PngIdatReader *br, const PngHuff *lit, const PngHuff *dist,
-                                  uint8_t *out, size_t expect_raw, size_t *out_pos)
+                                  uint8_t *out, size_t expect_raw, size_t win_size, size_t *out_pos)
 {
     static const uint16_t k_len_base[29] = {3u,  4u,  5u,  6u,   7u,   8u,   9u,   10u,  11u, 13u,
                                             15u, 17u, 19u, 23u,  27u,  31u,  35u,  43u,  51u, 59u,
@@ -318,7 +361,8 @@ static bool inflate_huffman_block(PngIdatReader *br, const PngHuff *lit, const P
                 return false;
             }
             const size_t distance = (size_t)k_dist_base[dsym] + (size_t)dextra;
-            if (distance == 0u || distance > *out_pos || match_len > expect_raw - *out_pos) {
+            if (distance == 0u || distance > *out_pos || distance > win_size ||
+                match_len > expect_raw - *out_pos) {
                 return false;
             }
             for (size_t k = 0; k < match_len; ++k) {
@@ -427,7 +471,11 @@ bool png_rgba_decode(const uint8_t *png, size_t png_size, int32_t expect_w, int3
         (flg & 0x20u) != 0u) {
         return false;
     }
+    const size_t win_size = (size_t)1u << ((cmf >> 4) + 8u);
 
+    bool fixed_ready = false;
+    PngHuff fixed_lit;
+    PngHuff fixed_dist;
     size_t out_pos = 0u;
     uint32_t bfinal = 0u;
     do {
@@ -448,12 +496,23 @@ bool png_rgba_decode(const uint8_t *png, size_t png_size, int32_t expect_w, int3
                 return false;
             }
             out_pos += (size_t)len;
-        } else if (btype == 1u || btype == 2u) {
+        } else if (btype == 1u) {
+            if (!fixed_ready) {
+                if (!build_fixed_tables(&fixed_lit, &fixed_dist)) {
+                    return false;
+                }
+                fixed_ready = true;
+            }
+            if (!inflate_huffman_block(&br, &fixed_lit, &fixed_dist, raw_scratch, raw_need,
+                                       win_size, &out_pos)) {
+                return false;
+            }
+        } else if (btype == 2u) {
             PngHuff lit;
             PngHuff dist;
-            const bool ok = btype == 1u ? build_fixed_tables(&lit, &dist)
-                                        : build_dynamic_tables(&br, &lit, &dist);
-            if (!ok || !inflate_huffman_block(&br, &lit, &dist, raw_scratch, raw_need, &out_pos)) {
+            if (!build_dynamic_tables(&br, &lit, &dist) ||
+                !inflate_huffman_block(&br, &lit, &dist, raw_scratch, raw_need, win_size,
+                                       &out_pos)) {
                 return false;
             }
         } else {
@@ -468,10 +527,6 @@ bool png_rgba_decode(const uint8_t *png, size_t png_size, int32_t expect_w, int3
     uint8_t adler_bytes[4];
     if (!br_read_aligned(&br, adler_bytes, 4u) ||
         read_be32(adler_bytes) != adler32_calc(raw_scratch, raw_need)) {
-        return false;
-    }
-    uint8_t extra = 0u;
-    if (br_read_aligned(&br, &extra, 1u)) {
         return false;
     }
     return unfilter_rgba8(raw_scratch, expect_w, expect_h, rgba_out);
