@@ -4,10 +4,8 @@
 #include "unity.h"
 
 #include <math.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 void setUp(void) {}
 
@@ -1514,160 +1512,34 @@ static void test_audio_realtime_stale_brush_releases_when_producer_stalls(void)
     game_destroy(g);
 }
 
-typedef struct {
-    pthread_mutex_t mtx;
-    AudioState *state;
-    bool stop;
-    size_t active_callbacks;
-    size_t silent_callbacks;
-    size_t active_nonzero_bytes;
-    size_t silent_nonzero_bytes;
-} AudioCallbackTestShared;
-
-static void *audio_callback_test_worker(void *arg)
+static void test_audio_external_bgm_mask_suppresses_lobby_fallback(void)
 {
-    static const size_t k_chunks[4] = {330u, 550u, 735u, 1024u};
-    AudioCallbackTestShared *sh = (AudioCallbackTestShared *)arg;
-    unsigned char raw[1u + 1024u * sizeof(int16_t)];
-    int16_t scratch[512];
-    size_t step = 0u;
-    const struct timespec pause_ns = {0, 150000L};
-
-    for (;;) {
-        const size_t frames = k_chunks[step & 3u];
-        const size_t total_bytes = frames * sizeof(int16_t);
-        step++;
-        unsigned char *dst = raw + 1u; /* Intentionally 1-byte misaligned like raw byte storage. */
-        size_t remaining = frames;
-
-        (void)pthread_mutex_lock(&sh->mtx);
-        if (sh->stop) {
-            (void)pthread_mutex_unlock(&sh->mtx);
-            break;
-        }
-        const bool active = sh->state != NULL;
-        while (remaining > 0u) {
-            const size_t chunk = remaining < 512u ? remaining : 512u;
-            if (active) {
-                audio_render(sh->state, scratch, chunk);
-                memcpy(dst, scratch, chunk * sizeof(int16_t));
-            } else {
-                memset(dst, 0, chunk * sizeof(int16_t));
-            }
-            dst += chunk * sizeof(int16_t);
-            remaining -= chunk;
-        }
-        size_t nonzero = 0u;
-        for (size_t b = 0u; b < total_bytes; ++b) {
-            if (raw[1u + b] != 0u) {
-                nonzero++;
-            }
-        }
-        if (active) {
-            sh->active_callbacks++;
-            sh->active_nonzero_bytes += nonzero;
-        } else {
-            sh->silent_callbacks++;
-            sh->silent_nonzero_bytes += nonzero;
-        }
-        (void)pthread_mutex_unlock(&sh->mtx);
-        (void)nanosleep(&pause_ns, NULL);
-    }
-    return NULL;
-}
-
-static void test_audio_concurrent_realtime_callback_and_teardown(void)
-{
-    GameState *g = game_create(NULL);
     AudioState *a = calloc(1, sizeof *a);
-    TEST_ASSERT_NOT_NULL(g);
+    AudioState *ref = calloc(1, sizeof *ref);
     TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(ref);
 
+    /* Per-track mask suppresses procedural lobby BGM even when external_bgm starts false. */
     audio_init(a, UINT64_C(11));
     audio_set_realtime_mode(a, true);
-    /* Verify per-track mask suppresses procedural lobby BGM even when external_bgm starts false. */
     audio_set_external_bgm(a, false);
     audio_set_external_bgm_mask(a, UINT32_C(1) << (unsigned)BGM_LOBBY);
     audio_set_lobby_mode(a, true);
-    int16_t lobby_masked[512];
-    int16_t lobby_ext[512];
-    AudioState *ref = calloc(1, sizeof *ref);
-    TEST_ASSERT_NOT_NULL(ref);
+
     audio_init(ref, UINT64_C(11));
     audio_set_realtime_mode(ref, true);
     audio_set_external_bgm(ref, true);
     audio_set_lobby_mode(ref, true);
+
+    int16_t lobby_masked[512];
+    int16_t lobby_ext[512];
     audio_render(a, lobby_masked, 512u);
     audio_render(ref, lobby_ext, 512u);
     TEST_ASSERT_EQUAL_MEMORY(lobby_ext, lobby_masked, sizeof lobby_ext);
-    free(ref);
-
-    audio_set_lobby_mode(a, false);
-
-    AudioCallbackTestShared sh;
-    memset(&sh, 0, sizeof sh);
-    TEST_ASSERT_EQUAL_INT(0, pthread_mutex_init(&sh.mtx, NULL));
-    sh.state = a;
-
-    pthread_t worker;
-    TEST_ASSERT_EQUAL_INT(0, pthread_create(&worker, NULL, audio_callback_test_worker, &sh));
-
-    const struct timespec tick_ns = {0, 250000L};
-    for (int i = 0; i < 40; ++i) {
-        g->player.painting = (i % 4) < 2;
-        g->player.stroke_speed = g->player.painting ? 650.0f : 0.0f;
-        g->event_count = 0;
-        if (i % 5 == 0) {
-            one_event(g, EV_GALE);
-        } else if (i % 7 == 0) {
-            one_event(g, EV_CYCLONE);
-        } else if (i % 3 == 0) {
-            one_event(g, EV_KILL);
-        }
-
-        (void)pthread_mutex_lock(&sh.mtx);
-        audio_consume_events(a, g);
-        if (i == 15) {
-            audio_set_paused(a, true);
-        } else if (i == 20) {
-            audio_set_paused(a, false);
-        } else if (i == 25) {
-            audio_set_volumes(a, 90, 80, 95);
-            audio_set_external_bgm(a, true);
-        }
-        (void)pthread_mutex_unlock(&sh.mtx);
-        (void)nanosleep(&tick_ns, NULL);
-    }
-
-    /* Detach state while callback thread is still active, mirroring audio_out_close(). */
-    (void)pthread_mutex_lock(&sh.mtx);
-    sh.state = NULL;
-    (void)pthread_mutex_unlock(&sh.mtx);
-    const struct timespec wait_ns = {0, 500000L};
-    for (int tries = 0; tries < 400; ++tries) {
-        (void)pthread_mutex_lock(&sh.mtx);
-        const bool seen = sh.silent_callbacks > 0u;
-        (void)pthread_mutex_unlock(&sh.mtx);
-        if (seen) {
-            break;
-        }
-        (void)nanosleep(&wait_ns, NULL);
-    }
-
-    (void)pthread_mutex_lock(&sh.mtx);
-    sh.stop = true;
-    (void)pthread_mutex_unlock(&sh.mtx);
-    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker, NULL));
-    (void)pthread_mutex_destroy(&sh.mtx);
-
-    TEST_ASSERT_TRUE(sh.active_callbacks > 0u);
-    TEST_ASSERT_TRUE(sh.silent_callbacks > 0u);
-    TEST_ASSERT_TRUE(sh.active_nonzero_bytes > 0u);
-    TEST_ASSERT_EQUAL_size_t(0u, sh.silent_nonzero_bytes);
     TEST_ASSERT_TRUE(audio_validate_finite(a));
 
+    free(ref);
     free(a);
-    game_destroy(g);
 }
 
 static void fill_square_pcm(int16_t *pcm, size_t n)
@@ -1902,7 +1774,7 @@ int main(void)
     RUN_TEST(test_audio_realtime_mode_caps_queued_lead_at_two_ticks_offline_keeps_full_batch);
     RUN_TEST(test_audio_realtime_catchup_preserves_brush_onset_at_unaligned_clock);
     RUN_TEST(test_audio_realtime_stale_brush_releases_when_producer_stalls);
-    RUN_TEST(test_audio_concurrent_realtime_callback_and_teardown);
+    RUN_TEST(test_audio_external_bgm_mask_suppresses_lobby_fallback);
     RUN_TEST(test_audio_pcm_read_stays_between_its_central_samples);
     RUN_TEST(test_audio_grain_setup_bounds_huge_and_invalid_windows);
     RUN_TEST(test_audio_grain_step_survives_non_finite_and_out_of_range_state);

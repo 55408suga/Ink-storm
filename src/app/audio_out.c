@@ -1,21 +1,14 @@
 #include "audio_out.h"
 
+#include "audio_cb.h"
 #include "core.h"
 #include "paths.h"
 
 #include <limits.h>
 #include <math.h>
-#include <pthread.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-
-enum { AUDIO_CB_CHUNK_FRAMES = 512 };
-
-/* raylib's AudioCallback carries no user pointer, so the callback reaches the state it renders
- * through this module-level bridge. */
-static pthread_mutex_t g_audio_cb_mtx = PTHREAD_MUTEX_INITIALIZER;
-static AudioState *g_audio_cb_state = NULL;
 
 void audio_out_configure_env(void)
 {
@@ -27,36 +20,9 @@ void audio_out_configure_env(void)
     }
 }
 
-void audio_out_lock(void) { (void)pthread_mutex_lock(&g_audio_cb_mtx); }
+void audio_out_lock(void) { audio_cb_lock(); }
 
-void audio_out_unlock(void) { (void)pthread_mutex_unlock(&g_audio_cb_mtx); }
-
-static void audio_stream_callback(void *buffer_data, unsigned int frames)
-{
-    if (buffer_data == NULL || frames == 0u) {
-        return;
-    }
-    /* raylib's mixer hands in a byte buffer whose alignment and declared type are uint8_t, so
-     * render into typed PCM storage and copy the bytes in bounded chunks. */
-    unsigned char *dst = (unsigned char *)buffer_data;
-    int16_t scratch[AUDIO_CB_CHUNK_FRAMES];
-    size_t remaining = (size_t)frames;
-
-    audio_out_lock();
-    while (remaining > 0u) {
-        const size_t chunk =
-            remaining < (size_t)AUDIO_CB_CHUNK_FRAMES ? remaining : (size_t)AUDIO_CB_CHUNK_FRAMES;
-        if (g_audio_cb_state != NULL) {
-            audio_render(g_audio_cb_state, scratch, chunk);
-            memcpy(dst, scratch, chunk * sizeof(int16_t));
-        } else {
-            memset(dst, 0, chunk * sizeof(int16_t));
-        }
-        dst += chunk * sizeof(int16_t);
-        remaining -= chunk;
-    }
-    audio_out_unlock();
-}
+void audio_out_unlock(void) { audio_cb_unlock(); }
 
 static void load_bgm_slot(AudioOut *out, BgmTrack track, const char *rel_path, bool looping)
 {
@@ -183,10 +149,10 @@ void audio_out_init(AudioOut *out, AudioState *audio)
         audio_set_external_bgm_mask(audio, ext_bgm_mask);
         audio_set_external_bgm(audio, track_loaded(out, audio_bgm_track(audio)));
     }
-    g_audio_cb_state = audio;
+    audio_cb_attach_locked(audio);
     audio_out_unlock();
 
-    SetAudioStreamCallback(out->stream, audio_stream_callback);
+    SetAudioStreamCallback(out->stream, audio_cb_render);
     PlayAudioStream(out->stream);
 }
 
@@ -244,9 +210,7 @@ void audio_out_close(AudioOut *out)
     if (out == NULL || !out->ready) {
         return;
     }
-    audio_out_lock();
-    g_audio_cb_state = NULL;
-    audio_out_unlock();
+    audio_cb_detach();
     SetAudioStreamCallback(out->stream, NULL);
     StopAudioStream(out->stream);
     UnloadAudioStream(out->stream);

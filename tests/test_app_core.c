@@ -1,3 +1,4 @@
+#include "audio_cb.h"
 #include "bgm_fade.h"
 #include "cli.h"
 #include "frame_clock.h"
@@ -8,8 +9,11 @@
 
 #include <limits.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 void setUp(void) {}
 
@@ -891,6 +895,149 @@ static void test_latch_resume_reanchors_and_drops_queued_input(void)
     TEST_ASSERT_EQUAL_INT(CMD_NONE, input_latch_take_command(&l, RUN_PHASE_REWARD).type);
 }
 
+typedef struct {
+    pthread_mutex_t sync_mtx;
+    pthread_cond_t sync_cv;
+    bool detached;
+    bool stop;
+    size_t active_callbacks;
+    size_t active_nonzero_bytes;
+    size_t silent_callbacks;
+    size_t silent_nonzero_bytes;
+    bool guard_corrupted;
+} AudioCbWorkerCtx;
+
+static void *audio_cb_test_worker(void *arg)
+{
+    static const unsigned int k_chunks[4] = {330u, 550u, 735u, 1024u};
+    AudioCbWorkerCtx *ctx = (AudioCbWorkerCtx *)arg;
+    unsigned char raw[1u + 1024u * sizeof(int16_t) + 1u];
+    size_t step = 0u;
+    const struct timespec pause_ns = {0, 100000L};
+
+    for (;;) {
+        (void)pthread_mutex_lock(&ctx->sync_mtx);
+        if (ctx->stop) {
+            (void)pthread_mutex_unlock(&ctx->sync_mtx);
+            break;
+        }
+        const bool was_detached = ctx->detached;
+        (void)pthread_mutex_unlock(&ctx->sync_mtx);
+
+        const unsigned int frames = k_chunks[step & 3u];
+        const size_t total_bytes = (size_t)frames * sizeof(int16_t);
+        step++;
+
+        /* Fill with sentinel so detached callbacks must actively overwrite every byte with zero,
+         * and keep 1-byte misaligned output plus leading/trailing guard bytes. */
+        memset(raw, 0xA5, sizeof raw);
+        audio_cb_render(raw + 1u, frames);
+
+        const bool guard_bad = (raw[0] != 0xA5u) || (raw[1u + total_bytes] != 0xA5u);
+        size_t nonzero = 0u;
+        for (size_t b = 0u; b < total_bytes; ++b) {
+            if (raw[1u + b] != 0u) {
+                nonzero++;
+            }
+        }
+
+        (void)pthread_mutex_lock(&ctx->sync_mtx);
+        if (guard_bad) {
+            ctx->guard_corrupted = true;
+        }
+        if (was_detached) {
+            ctx->silent_callbacks++;
+            ctx->silent_nonzero_bytes += nonzero;
+        } else {
+            ctx->active_callbacks++;
+            ctx->active_nonzero_bytes += nonzero;
+        }
+        (void)pthread_cond_signal(&ctx->sync_cv);
+        (void)pthread_mutex_unlock(&ctx->sync_mtx);
+        (void)nanosleep(&pause_ns, NULL);
+    }
+    return NULL;
+}
+
+static void test_audio_cb_concurrent_render_and_detach(void)
+{
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+
+    audio_init(a, UINT64_C(11));
+    audio_set_realtime_mode(a, true);
+    audio_set_volumes(a, 100, 0, 100);
+    audio_set_external_bgm(a, true);
+
+    audio_cb_lock();
+    audio_cb_attach_locked(a);
+    audio_trigger_ui_stamp(a);
+    audio_cb_unlock();
+
+    AudioCbWorkerCtx ctx;
+    memset(&ctx, 0, sizeof ctx);
+    TEST_ASSERT_EQUAL_INT(0, pthread_mutex_init(&ctx.sync_mtx, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_cond_init(&ctx.sync_cv, NULL));
+
+    pthread_t worker;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&worker, NULL, audio_cb_test_worker, &ctx));
+
+    /* Feed live audio ticks and wait until the worker proves it rendered audible bytes before
+     * detaching, avoiding any CI scheduling race. */
+    const struct timespec tick_ns = {0, 200000L};
+    for (int i = 0; i < 30; ++i) {
+        g->player.painting = (i % 3) != 0;
+        g->player.stroke_speed = g->player.painting ? 700.0f : 0.0f;
+        g->event_count = 0;
+        if (i % 4 == 0) {
+            game_push_event(g, (GameEvent){.type = EV_GALE});
+        } else if (i % 5 == 0) {
+            game_push_event(g, (GameEvent){.type = EV_CYCLONE});
+        }
+        audio_cb_lock();
+        audio_consume_events(a, g);
+        if (i == 12) {
+            audio_set_paused(a, true);
+        } else if (i == 16) {
+            audio_set_paused(a, false);
+        }
+        audio_cb_unlock();
+        (void)nanosleep(&tick_ns, NULL);
+    }
+
+    (void)pthread_mutex_lock(&ctx.sync_mtx);
+    while (ctx.active_callbacks == 0u || ctx.active_nonzero_bytes == 0u) {
+        (void)pthread_cond_wait(&ctx.sync_cv, &ctx.sync_mtx);
+    }
+    (void)pthread_mutex_unlock(&ctx.sync_mtx);
+
+    /* Detach through the real production helper while the callback thread is running. */
+    audio_cb_detach();
+    (void)pthread_mutex_lock(&ctx.sync_mtx);
+    ctx.detached = true;
+    while (ctx.silent_callbacks == 0u) {
+        (void)pthread_cond_wait(&ctx.sync_cv, &ctx.sync_mtx);
+    }
+    ctx.stop = true;
+    (void)pthread_mutex_unlock(&ctx.sync_mtx);
+
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker, NULL));
+    (void)pthread_cond_destroy(&ctx.sync_cv);
+    (void)pthread_mutex_destroy(&ctx.sync_mtx);
+
+    TEST_ASSERT_FALSE(ctx.guard_corrupted);
+    TEST_ASSERT_TRUE(ctx.active_callbacks > 0u);
+    TEST_ASSERT_TRUE(ctx.active_nonzero_bytes > 0u);
+    TEST_ASSERT_TRUE(ctx.silent_callbacks > 0u);
+    TEST_ASSERT_EQUAL_size_t(0u, ctx.silent_nonzero_bytes);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -922,5 +1069,6 @@ int main(void)
     RUN_TEST(test_menu_transition_frame_skips_gameplay);
     RUN_TEST(test_latch_anchor_starts_stroke_at_press_but_keeps_skills);
     RUN_TEST(test_latch_resume_reanchors_and_drops_queued_input);
+    RUN_TEST(test_audio_cb_concurrent_render_and_detach);
     return UNITY_END();
 }
