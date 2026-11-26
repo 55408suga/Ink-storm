@@ -30,7 +30,7 @@ raylib の既定値は `$HOME/.local/opt/raylib-6.2`。
 | 整形検査 | `nix develop -c cmake --build --preset asan --target format-check` |
 | 静的解析 | `nix develop -c cmake --build --preset asan --target lint` |
 | 配布 zip | `nix develop -c python3 tools/package_dist.py` または `nix develop -c cmake --build --preset release --target dist` |
-| オフライン QA 録画 | `nix develop -c python3 tools/qa_run.py --all`（`build/release/qa_record` を使用、リポジトリ外へ MP4・スナップ・JSON を出力） |
+| オフライン QA 録画 | `nix develop -c python3 tools/qa_run.py --all`（要 `ffmpeg` の `libx264` / `aac`、`--no-video` は `ffmpeg` 不要。`build/release/qa_record` を使用し、リポジトリ外へ MP4・スナップ・JSON を出力） |
 
 ```sh
 nix develop -c cmake --preset asan &&

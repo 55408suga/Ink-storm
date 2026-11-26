@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +32,8 @@ EXTRACT_SNAPS = ROOT / "tools" / "extract_snaps.sh"
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
 VIDEO_FPS_INT = 60
+AUDIO_SAMPLE_RATE = 44100
+AUDIO_SAMPLES_PER_TICK = AUDIO_SAMPLE_RATE // VIDEO_FPS_INT
 VIDEO_SIZE = f"{VIDEO_WIDTH}x{VIDEO_HEIGHT}"
 VIDEO_FPS = str(VIDEO_FPS_INT)
 MAX_FRAMES = VIDEO_FPS_INT * 60 * 60
@@ -470,7 +473,7 @@ def load_report(path: Path) -> dict:
     try:
         report = json.loads(path.read_text(), parse_constant=_reject_constant)
         _check_finite_tree(report)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise PipelineError(f"malformed report {path.name}: {exc}") from None
     if not isinstance(report, dict):
         raise PipelineError(f"malformed report {path.name}: top level is not an object")
@@ -480,6 +483,23 @@ def load_report(path: Path) -> dict:
             f"malformed report {path.name}: frames={frames!r} is not a valid frame count"
         )
     return report
+
+
+def validate_wav(path: Path, expected_frames: int) -> None:
+    expected_samples = expected_frames * AUDIO_SAMPLES_PER_TICK
+    try:
+        with wave.open(str(path), "rb") as wf:
+            ch = wf.getnchannels()
+            width = wf.getsampwidth()
+            rate = wf.getframerate()
+            nframes = wf.getnframes()
+    except (OSError, EOFError, wave.Error) as exc:
+        raise PipelineError(f"invalid WAV {path.name}: {exc}") from None
+    if (ch, width, rate, nframes) != (1, 2, AUDIO_SAMPLE_RATE, expected_samples):
+        raise PipelineError(
+            f"invalid WAV {path.name}: expected 1ch/16bit/{AUDIO_SAMPLE_RATE}Hz/{expected_samples} "
+            f"samples, got {ch}ch/{width * 8}bit/{rate}Hz/{nframes}"
+        )
 
 
 def lookup(report: dict, dotted: str):
@@ -513,6 +533,7 @@ def scenario_rules(
     rules += [
         ("determinism.fluid_finite", "==", True),
         ("determinism.audio_finite", "==", True),
+        ("audio.clip_ratio", ">=", 0.0),
         ("audio.clip_ratio", "<", 0.01),
         ("audio.se_peak", ">=", 500),
     ]
@@ -520,6 +541,7 @@ def scenario_rules(
         rules += [
             ("video.black_frames", "==", 0),
             ("video.white_frames", "==", 0),
+            ("video.static_frames", ">=", 0),
             ("video.static_frames", "<", frames * 0.5),
         ]
     if bgm:
@@ -534,6 +556,7 @@ def scenario_rules(
             rules += [
                 ("vfx.thunderburst_max_shake_amp", ">", 0),
                 ("vfx.thunderburst_max_shake_amp", "<=", 4.5),
+                ("vfx.shake_active_ratio", ">=", 0.0),
                 ("vfx.shake_active_ratio", "<=", 0.45),
                 ("vfx.max_callouts_active", ">=", 1),
                 ("vfx.max_callouts_active", "<=", 12),
@@ -541,7 +564,7 @@ def scenario_rules(
     elif name == "lobby_brush":
         rules.append(("audio.se_peak", ">=", 800))
         if video:
-            rules.append(("vfx.max_shake_amp", "<=", 1.0))
+            rules += [("vfx.max_shake_amp", ">=", 0.0), ("vfx.max_shake_amp", "<=", 1.0)]
     elif name == "act1_combat":
         rules.append(("game.kills", ">=", 1))
     elif name == "boss_showcase" and video:
@@ -603,7 +626,8 @@ def publish_scenario(
     published = {"report": str(scen_dir / "report.json"), "video": None, "contact_sheet": None}
     kept_top = {"report.json"}
     kept_snaps: set[str] = set()
-    atomic_publish(work / "report.json", scen_dir / "report.json", base)
+    # Publish large media artifacts before report.json so an I/O failure while copying audio/video
+    # leaves the previous report.json intact rather than replacing it first.
     if args.no_video or args.keep_wav:
         atomic_publish(work / "audio.wav", scen_dir / "audio.wav", base)
         kept_top.add("audio.wav")
@@ -618,6 +642,7 @@ def publish_scenario(
                 kept_snaps.add(snap.name)
         published["video"] = str(scen_dir / mp4_name)
         published["contact_sheet"] = str(snaps_out / "contact_sheet.png")
+    atomic_publish(work / "report.json", scen_dir / "report.json", base)
     prune_obsolete_outputs(scen_dir, name, kept_top, kept_snaps)
     return published
 
@@ -639,7 +664,9 @@ def prune_obsolete_outputs(
         )
 
 
-def run_scenario(name: str, qa_bin: Path, out_dir: Path, args: argparse.Namespace) -> dict:
+def run_scenario(
+    name: str, qa_bin: Path, out_dir: Path, args: argparse.Namespace, *, locked: bool = False
+) -> dict:
     result = {
         "scenario": name,
         "passed": False,
@@ -668,9 +695,11 @@ def run_scenario(name: str, qa_bin: Path, out_dir: Path, args: argparse.Namespac
                     cmd, work, work / f"{name}.mp4", work / "audio.wav", record_timeout(args)
                 )
             report = load_report(work / "report.json")
+            validate_wav(work / "audio.wav", report["frames"])
             if not args.no_video:
                 extract_snaps(work / f"{name}.mp4", work / "snaps", report["frames"])
-            with publish_lock(base):
+            lock_ctx = contextlib.nullcontext() if locked else publish_lock(base)
+            with lock_ctx:
                 scen_dir = ensure_safe_dir(base, (name,))
                 result.update(publish_scenario(work, scen_dir, name, args, base))
     except (PipelineError, OSError) as exc:
@@ -763,29 +792,29 @@ def main(argv: list[str]) -> int:
         names = list(dict.fromkeys(args.scenario))
 
     results = []
-    for name in names:
-        print(f"qa_run: recording {name} ...", flush=True)
-        results.append(run_scenario(name, qa_bin, out_dir, args))
-
-    passed = all(r["passed"] for r in results)
-    summary = {
-        "passed": passed,
-        "out_dir": str(out_dir),
-        "qa_record": str(qa_bin),
-        "options": {
-            "frames": args.frames,
-            "no_bgm": args.no_bgm,
-            "no_post": args.no_post,
-            "no_video": args.no_video,
-        },
-        "scenarios": results,
-    }
     try:
-        data = (json.dumps(summary, indent=2, allow_nan=False) + "\n").encode()
         with publish_lock(out_dir):
+            for name in names:
+                print(f"qa_run: recording {name} ...", flush=True)
+                results.append(run_scenario(name, qa_bin, out_dir, args, locked=True))
+
+            passed = all(r["passed"] for r in results)
+            summary = {
+                "passed": passed,
+                "out_dir": str(out_dir),
+                "qa_record": str(qa_bin),
+                "options": {
+                    "frames": args.frames,
+                    "no_bgm": args.no_bgm,
+                    "no_post": args.no_post,
+                    "no_video": args.no_video,
+                },
+                "scenarios": results,
+            }
+            data = (json.dumps(summary, indent=2, allow_nan=False) + "\n").encode()
             atomic_publish_bytes(data, out_dir / "summary.json", out_dir)
     except (PipelineError, OSError, ValueError) as exc:
-        print(f"qa_run: failed to publish summary.json: {exc}", file=sys.stderr)
+        print(f"qa_run: failed to run or publish summary.json: {exc}", file=sys.stderr)
         return 1
     print_summary(results, out_dir)
     n_passed = sum(r["passed"] for r in results)

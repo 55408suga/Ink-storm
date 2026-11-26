@@ -176,6 +176,19 @@ static const char *option_value(int argc, char **argv, int *i)
     return argv[*i];
 }
 
+static const char *option_path(int argc, char **argv, int *i)
+{
+    const char *v = option_value(argc, argv, i);
+    if (v == NULL) {
+        return NULL;
+    }
+    if (v[0] == '\0' || (v[0] == '-' && v[1] == '-')) {
+        fprintf(stderr, "qa_record: %s requires a file path (got '%s')\n", argv[*i - 1], v);
+        return NULL;
+    }
+    return v;
+}
+
 static bool parse_args(int argc, char **argv, QaOptions *opt)
 {
     *opt = (QaOptions){.scenario = QA_SCN_COUNT, .bgm = true, .post = true};
@@ -210,15 +223,15 @@ static bool parse_args(int argc, char **argv, QaOptions *opt)
                 return false;
             }
         } else if (strcmp(arg, "--video-out") == 0) {
-            if ((opt->video_out = option_value(argc, argv, &i)) == NULL) {
+            if ((opt->video_out = option_path(argc, argv, &i)) == NULL) {
                 return false;
             }
         } else if (strcmp(arg, "--audio-out") == 0) {
-            if ((opt->audio_out = option_value(argc, argv, &i)) == NULL) {
+            if ((opt->audio_out = option_path(argc, argv, &i)) == NULL) {
                 return false;
             }
         } else if (strcmp(arg, "--report-out") == 0) {
-            if ((opt->report_out = option_value(argc, argv, &i)) == NULL) {
+            if ((opt->report_out = option_path(argc, argv, &i)) == NULL) {
                 return false;
             }
         } else {

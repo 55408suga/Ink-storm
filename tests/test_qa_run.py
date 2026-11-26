@@ -271,9 +271,49 @@ class QaRunReportTest(unittest.TestCase):
         self.assertEqual(failed_checks("lobby_brush", report), ["post_enabled == true"])
         self.assertEqual(failed_checks("lobby_brush", report, "--no-post"), [])
 
-    def test_non_finite_metric_values_fail(self) -> None:
+    def test_non_finite_and_negative_metric_values_fail(self) -> None:
         report = make_report("act1_combat", audio={"clip_ratio": float("nan")})
         self.assertIn("audio.clip_ratio < 0.01", failed_checks("act1_combat", report))
+        neg_clip = make_report("act1_combat", audio={"clip_ratio": -0.5})
+        self.assertIn("audio.clip_ratio >= 0", failed_checks("act1_combat", neg_clip))
+        neg_static = make_report("act1_combat", video={"static_frames": -1})
+        self.assertIn("video.static_frames >= 0", failed_checks("act1_combat", neg_static))
+
+    def test_empty_wav_fails_audio_only_scenario(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="inkstorm-qa-test-") as tmp:
+            fake = Path(tmp) / "fake_qa_record"
+            valid_json = json.dumps(
+                make_report("lobby_brush", frames=30, video_enabled=False, post_enabled=False)
+            )
+            fake.write_text(
+                "#!/bin/sh\n"
+                "while [ $# -gt 0 ]; do\n"
+                '  case "$1" in\n'
+                f"    --report-out) printf '%s' '{valid_json}' > \"$2\"; shift ;;\n"
+                '    --audio-out) : > "$2"; shift ;;\n'
+                "  esac\n"
+                "  shift\n"
+                "done\n"
+            )
+            fake.chmod(0o700)
+            out = Path(tmp) / "out"
+            out.mkdir()
+            args = qa_run.parse_args(["--scenario", "lobby_brush", "--no-video"])
+            result = qa_run.run_scenario("lobby_brush", fake, out, args)
+        self.assertIs(result["passed"], False)
+        self.assertIn("invalid WAV", result["error"])
+
+    def test_option_like_output_path_is_rejected(self) -> None:
+        proc = subprocess.run(
+            [str(QA_RECORD), "--scenario", "lobby_brush", "--report-out", "--no-bgm"],
+            capture_output=True,
+            text=True,
+            env=headless_env(),
+            timeout=CHILD_TIMEOUT,
+            check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("requires a file path", proc.stderr)
 
     def test_thunderburst_shake_is_judged_apart_from_cataclysm(self) -> None:
         name = "thunderburst_stress"
@@ -321,17 +361,32 @@ class QaRunSupervisionTest(unittest.TestCase):
                 time.sleep(0.05)
 
     def test_run_bounded_timeout_reaps_descendant_holding_pipe(self) -> None:
-        started = time.monotonic()
-        with self.assertRaises(qa_run.PipelineError):
-            qa_run.run_bounded(
-                ["sh", "-c", "sleep 60 & exit 0"],
-                timeout=0.3,
-                what="orphan-pipe",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        self.assertLess(time.monotonic() - started, 5.0)
+        with tempfile.TemporaryDirectory(prefix="inkstorm-qa-test-") as tmp:
+            pid_file = Path(tmp) / "child.pid"
+            started = time.monotonic()
+            with self.assertRaises(qa_run.PipelineError):
+                qa_run.run_bounded(
+                    ["sh", "-c", f"sleep 60 & echo $! > {pid_file}; exit 0"],
+                    timeout=0.3,
+                    what="orphan-pipe",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            self.assertLess(time.monotonic() - started, 5.0)
+            child_pid = int(pid_file.read_text().strip())
+            deadline = time.monotonic() + 5.0
+            while True:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                # On containers where init does not reap orphans immediately, a zombie has exited.
+                stat_path = Path(f"/proc/{child_pid}/stat")
+                if stat_path.exists() and ") Z " in stat_path.read_text(errors="replace"):
+                    break
+                self.assertLess(time.monotonic(), deadline, f"descendant {child_pid} still alive")
+                time.sleep(0.05)
 
     def test_failed_recorder_stops_encoder_waiting_on_fifo(self) -> None:
         recorder = qa_run.popen(["sh", "-c", "exit 3"])
