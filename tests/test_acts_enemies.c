@@ -1134,9 +1134,9 @@ static void test_endless_loop_scaling_all_six_items(void)
     advance_act_transition(g);
     TEST_ASSERT_EQUAL_INT32(1, g->run.endless_loop);
     TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 340.0f, 190.0f)); /* Act 1 open field */
-    /* Quota: 6 + 2*1 = 8; spawn interval: 1.1 * 0.95 = 1.045. */
-    TEST_ASSERT_EQUAL_INT32(8, g->run.wave_quota);
-    TEST_ASSERT_FLOAT_WITHIN(0.005f, 1.1f * 0.95f, g->internal.spawn_cd);
+    /* Quota: 12 + 2*1 = 14; spawn interval: 0.95 * 0.95 = 0.9025. */
+    TEST_ASSERT_EQUAL_INT32(14, g->run.wave_quota);
+    TEST_ASSERT_FLOAT_WITHIN(0.005f, 0.95f * 0.95f, g->internal.spawn_cd);
 
     /* Normal enemy HP x(1 + 0.25*1) = x1.25 -> Umbrella 30 -> 38; Elite x2.5 -> 94. */
     clear_enemies_and_projs(g);
@@ -1181,12 +1181,12 @@ static void test_endless_loop_scaling_all_six_items(void)
         TEST_ASSERT_EQUAL_INT32(405, game_health(g, g->ryu_body.orb_ids[s])->max_hp);
     }
 
-    /* Act 7 (act_index=6, loop n=2): Umbrella 45, Tengu 680, Quota 10, Interval 1.1 * 0.95^2. */
+    /* Act 7 (act_index=6, loop n=2): Umbrella 45, Tengu 680, Quota 16, Interval 0.95 * 0.95^2. */
     game_debug_start_act(g, 6);
     advance_act_transition(g);
     TEST_ASSERT_EQUAL_INT32(2, g->run.endless_loop);
-    TEST_ASSERT_EQUAL_INT32(10, g->run.wave_quota);
-    TEST_ASSERT_FLOAT_WITHIN(0.005f, 1.1f * 0.95f * 0.95f, g->internal.spawn_cd);
+    TEST_ASSERT_EQUAL_INT32(16, g->run.wave_quota);
+    TEST_ASSERT_FLOAT_WITHIN(0.005f, 0.95f * 0.95f * 0.95f, g->internal.spawn_cd);
     const EntityId u2 = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 250.0f, 200.0f);
     TEST_ASSERT_EQUAL_INT32(45, game_health(g, u2)->max_hp);
     game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
@@ -1232,6 +1232,81 @@ static void test_endless_loop_scaling_all_six_items(void)
     game_destroy(g);
 }
 
+static void start_act_wave(GameState *g, int32_t act_index, int32_t wave_index)
+{
+    game_debug_start_act(g, act_index);
+    advance_act_transition(g);
+    game_debug_start_wave(g, wave_index);
+}
+
+static void test_wave_quotas_ramp_across_waves_and_acts(void)
+{
+    static const int32_t k_expected_quota[GAME_MAIN_ACT_COUNT][GAME_BOSS_WAVE_INDEX] = {
+        {12, 16, 20},
+        {20, 24, 28},
+        {26, 30, 34},
+    };
+    static const float k_expected_interval[GAME_MAIN_ACT_COUNT][GAME_BOSS_WAVE_INDEX] = {
+        {0.95f, 0.88f, 0.82f},
+        {0.80f, 0.76f, 0.72f},
+        {0.72f, 0.68f, 0.65f},
+    };
+
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    int32_t quota[GAME_MAIN_ACT_COUNT][GAME_BOSS_WAVE_INDEX] = {{0}};
+    float interval[GAME_MAIN_ACT_COUNT][GAME_BOSS_WAVE_INDEX] = {{0.0f}};
+    for (int32_t a = 0; a < GAME_MAIN_ACT_COUNT; ++a) {
+        for (int32_t w = 0; w < GAME_BOSS_WAVE_INDEX; ++w) {
+            start_act_wave(g, a, w);
+            quota[a][w] = g->run.wave_quota;
+            interval[a][w] = g->internal.spawn_cd;
+            TEST_ASSERT_EQUAL_INT32(k_expected_quota[a][w], quota[a][w]);
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, k_expected_interval[a][w], interval[a][w]);
+        }
+        start_act_wave(g, a, GAME_BOSS_WAVE_INDEX);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.wave_quota);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.4f, g->internal.spawn_cd);
+    }
+
+    float prev_interval = interval[0][0];
+    for (int32_t a = 0; a < GAME_MAIN_ACT_COUNT; ++a) {
+        for (int32_t w = 0; w < GAME_BOSS_WAVE_INDEX; ++w) {
+            if (w > 0) {
+                TEST_ASSERT_GREATER_THAN_INT32(quota[a][w - 1], quota[a][w]);
+            }
+            if (a > 0) {
+                TEST_ASSERT_GREATER_THAN_INT32(quota[a - 1][w], quota[a][w]);
+            }
+            TEST_ASSERT_TRUE(interval[a][w] <= prev_interval + 1e-6f);
+            prev_interval = interval[a][w];
+        }
+    }
+
+    /* Verify live max_alive cap on Act 1 Wave 2 (initial roster 5, cap 7). */
+    start_act_wave(g, 0, 1);
+    TEST_ASSERT_EQUAL_INT32(5, waves_count_alive_escorts(g));
+    for (int i = 0; i < 12; ++i) {
+        g->internal.spawn_cd = 0.0f;
+        waves_step_spawns(g);
+    }
+    TEST_ASSERT_EQUAL_INT32(7, waves_count_alive_escorts(g));
+
+    /* Endless loop n replays the same act table with +2n quota. */
+    for (int32_t n = 1; n <= 2; ++n) {
+        for (int32_t a = 0; a < GAME_MAIN_ACT_COUNT; ++a) {
+            for (int32_t w = 0; w < GAME_BOSS_WAVE_INDEX; ++w) {
+                start_act_wave(g, a + GAME_MAIN_ACT_COUNT * n, w);
+                TEST_ASSERT_EQUAL_INT32(n, g->run.endless_loop);
+                TEST_ASSERT_EQUAL_INT32(quota[a][w] + 2 * n, g->run.wave_quota);
+            }
+        }
+    }
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1244,5 +1319,6 @@ int main(void)
     RUN_TEST(test_boss_nue_and_boss_ryu);
     RUN_TEST(test_ofuda_fox_barrier_homing_and_act3_roster);
     RUN_TEST(test_endless_loop_scaling_all_six_items);
+    RUN_TEST(test_wave_quotas_ramp_across_waves_and_acts);
     return UNITY_END();
 }

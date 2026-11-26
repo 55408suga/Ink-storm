@@ -356,8 +356,8 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_BRUSH_QUILL_NAME] = {.ja = "細筆", .en = "Quill Brush"},
     [TEXT_BRUSH_QUILL_DESC] = {.ja = "軽く速い筆致。帯電渦印と墨玉回収で手数を稼ぐ",
                                .en = "Nimble strokes with charged cyclones and orb pull"},
-    [TEXT_BRUSH_QUILL_STATS] = {.ja = "半径×0.8 / 消費×0.7 / 渦CD1.1秒+雷0.72 / 吸引×1.3",
-                                .en = "Rad x0.8 / Cost x0.7 / Cyclone 1.1s+Storm / Pull x1.3"},
+    [TEXT_BRUSH_QUILL_STATS] = {.ja = "半径×0.8 / 消費×0.9 / 渦CD1.1秒+雷0.72 / 吸引×1.3",
+                                .en = "Rad x0.8 / Cost x0.9 / Cyclone 1.1s+Storm / Pull x1.3"},
     [TEXT_BRUSH_QUILL_REC] = {.ja = "雷霆・墨道", .en = "Thunder / Inkway"},
 
     /* 8 First-time Control & Reaction Hints */
@@ -616,10 +616,10 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_GUIDE_S4_H1] = {.ja = "一筆連殺×2〜で「墨昇華」を発動",
                           .en = "Chain x2+ Triggers Ink Surge"},
     [TEXT_GUIDE_S4_B1] =
-        {.ja = "短時間に連続撃破すると2連殺から墨昇華へ突入！風筆の墨消費が半減し、筆勢と幅が強化さ"
+        {.ja = "短時間に連続撃破すると2連殺から墨昇華へ突入！全技の墨消費が減り、筆勢と幅が強化さ"
                "れる。",
-         .en = "Rapid kills trigger Ink Surge at Chain x2+, cutting stroke ink cost with stronger, "
-               "wider strokes."},
+         .en = "Rapid kills trigger Ink Surge at Chain x2+: it reduces ink cost for all skills and "
+               "gives stronger, wider strokes."},
     [TEXT_GUIDE_S4_H2] = {.ja = "同じ軸の強化札を重ねて型を極めよ",
                           .en = "Stack Blessings Along a Chosen Axis"},
     [TEXT_GUIDE_S4_B2] =

@@ -43,9 +43,9 @@ static const ActDef
                         {
                             [0] =
                                 {
-                                    .quota = 6,
-                                    .max_alive = 5,
-                                    .spawn_interval = 1.1f,
+                                    .quota = 12,
+                                    .max_alive = 6,
+                                    .spawn_interval = 0.95f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 3},
@@ -60,9 +60,9 @@ static const ActDef
                                 },
                             [1] =
                                 {
-                                    .quota = 8,
-                                    .max_alive = 6,
-                                    .spawn_interval = 1.0f,
+                                    .quota = 16,
+                                    .max_alive = 7,
+                                    .spawn_interval = 0.88f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -79,9 +79,9 @@ static const ActDef
                                 },
                             [2] =
                                 {
-                                    .quota = 10,
-                                    .max_alive = 6,
-                                    .spawn_interval = 1.0f,
+                                    .quota = 20,
+                                    .max_alive = 8,
+                                    .spawn_interval = 0.82f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -126,9 +126,9 @@ static const ActDef
                         {
                             [0] =
                                 {
-                                    .quota = 10,
-                                    .max_alive = 7,
-                                    .spawn_interval = 0.9f,
+                                    .quota = 20,
+                                    .max_alive = 8,
+                                    .spawn_interval = 0.80f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -148,9 +148,9 @@ static const ActDef
                                 },
                             [1] =
                                 {
-                                    .quota = 12,
-                                    .max_alive = 7,
-                                    .spawn_interval = 0.9f,
+                                    .quota = 24,
+                                    .max_alive = 9,
+                                    .spawn_interval = 0.76f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -171,9 +171,9 @@ static const ActDef
                                 },
                             [2] =
                                 {
-                                    .quota = 14,
-                                    .max_alive = 7,
-                                    .spawn_interval = 0.9f,
+                                    .quota = 28,
+                                    .max_alive = 9,
+                                    .spawn_interval = 0.72f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -225,9 +225,9 @@ static const ActDef
                         {
                             [0] =
                                 {
-                                    .quota = 14,
-                                    .max_alive = 8,
-                                    .spawn_interval = 0.8f,
+                                    .quota = 26,
+                                    .max_alive = 9,
+                                    .spawn_interval = 0.72f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -251,9 +251,9 @@ static const ActDef
                                 },
                             [1] =
                                 {
-                                    .quota = 16,
-                                    .max_alive = 8,
-                                    .spawn_interval = 0.8f,
+                                    .quota = 30,
+                                    .max_alive = 10,
+                                    .spawn_interval = 0.68f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},
@@ -277,9 +277,9 @@ static const ActDef
                                 },
                             [2] =
                                 {
-                                    .quota = 18,
-                                    .max_alive = 8,
-                                    .spawn_interval = 0.8f,
+                                    .quota = 34,
+                                    .max_alive = 10,
+                                    .spawn_interval = 0.65f,
                                     .initial =
                                         {
                                             {.def_id = ENEMY_ARCHER, .count = 2},

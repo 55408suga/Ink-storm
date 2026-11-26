@@ -7,15 +7,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static void decay_timer(float *t)
+static const float k_surge_cost_mul = 0.72f;
+static const float k_cyclone_base_cost = 26.0f;
+static const float k_gale_base_cost = 16.0f;
+
+static float decayed_timer(float t)
 {
-    if (*t > 0.0f) {
-        *t -= INK_FIXED_DT;
-        if (*t <= 1e-4f) {
-            *t = 0.0f;
+    if (t > 0.0f) {
+        t -= INK_FIXED_DT;
+        if (t <= 1e-4f) {
+            t = 0.0f;
         }
     }
+    return t;
 }
+
+static void decay_timer(float *t) { *t = decayed_timer(*t); }
 
 void player_skills_refill_sandbox_ink(GameState *g)
 {
@@ -38,6 +45,51 @@ static void regen_ink_idle(GameState *g)
     const float rate = base_rate * g->internal.mods.ink_regen_mul;
     g->player.ink = ink_clampf(g->player.ink + rate * INK_FIXED_DT, 0.0f, g->player.ink_max);
     g->player.dry = g->player.ink < 20.0f;
+}
+
+static float cyclone_cost_with_mul(const GameState *g, float surge_mul)
+{
+    if (g == NULL || g->internal.sandbox_infinite_ink) {
+        return 0.0f;
+    }
+    return k_cyclone_base_cost * surge_mul;
+}
+
+static float gale_cost_with_mul(const GameState *g, float surge_mul)
+{
+    if (g == NULL || g->internal.sandbox_infinite_ink) {
+        return 0.0f;
+    }
+    return (k_gale_base_cost + g->internal.mods.gale_cost_add) * surge_mul;
+}
+
+float player_skills_surge_cost_mul(const GameState *g)
+{
+    return (g != NULL && g->player.surge_t > 0.0f) ? k_surge_cost_mul : 1.0f;
+}
+
+float player_skills_cyclone_cost(const GameState *g)
+{
+    return cyclone_cost_with_mul(g, player_skills_surge_cost_mul(g));
+}
+
+float player_skills_gale_cost(const GameState *g)
+{
+    return gale_cost_with_mul(g, player_skills_surge_cost_mul(g));
+}
+
+float player_skills_next_tick_cyclone_cost(const GameState *g)
+{
+    const float mul =
+        (g != NULL && decayed_timer(g->player.surge_t) > 0.0f) ? k_surge_cost_mul : 1.0f;
+    return cyclone_cost_with_mul(g, mul);
+}
+
+float player_skills_next_tick_gale_cost(const GameState *g)
+{
+    const float mul =
+        (g != NULL && decayed_timer(g->player.surge_t) > 0.0f) ? k_surge_cost_mul : 1.0f;
+    return gale_cost_with_mul(g, mul);
 }
 
 static void register_active_cyclone(GameState *g, float x, float y, float sustain_rad,
@@ -83,8 +135,7 @@ static float mass_gale_multiplier(MassTier tier)
 static void cast_cyclone(GameState *g)
 {
     const RunModifiers *mods = &g->internal.mods;
-    const bool free_ink = g->internal.sandbox_infinite_ink;
-    const float cost = free_ink ? 0.0f : (g->player.surge_t > 0.0f ? 26.0f * 0.5f : 26.0f);
+    const float cost = player_skills_cyclone_cost(g);
     if (g->player.cyclone_cd > 0.0f || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
@@ -289,9 +340,7 @@ void player_skills_cast_free_gale(GameState *g, float origin_x, float origin_y, 
 static void cast_gale(GameState *g)
 {
     const RunModifiers *mods = &g->internal.mods;
-    const float base_cost = 16.0f + mods->gale_cost_add;
-    const bool free_ink = g->internal.sandbox_infinite_ink;
-    const float cost = free_ink ? 0.0f : (g->player.surge_t > 0.0f ? base_cost * 0.5f : base_cost);
+    const float cost = player_skills_gale_cost(g);
     if (g->player.gale_charges <= 0 || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
@@ -465,9 +514,8 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
 
         if (valid_in->paint) {
             g->player.idle_t = 0.0f;
-            const float surge_cost_mul = g->player.surge_t > 0.0f ? 0.5f : 1.0f;
             const float raw_cost =
-                (0.16f + mdist * 0.028f) * surge_cost_mul * mods->stroke_cost_mul;
+                (0.16f + mdist * 0.028f) * player_skills_surge_cost_mul(g) * mods->stroke_cost_mul;
             const bool free_ink = g->internal.sandbox_infinite_ink;
             const bool free_dry = mods->dry_zero_cost && g->player.ink < 20.0f;
             if (free_ink || g->player.ink > 0.5f || free_dry) {

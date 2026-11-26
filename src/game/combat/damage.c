@@ -65,7 +65,7 @@ EntityId combat_spawn_orb(GameState *g, float x, float y)
     }
     InkOrbComp *orb = game_orb_mut(g, id);
     if (orb != NULL) {
-        orb->value = 16;
+        orb->value = COMBAT_ORB_INK_VALUE;
         orb->age = 0.0f;
     }
     return id;
@@ -218,8 +218,10 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
 
     const RunModifiers *mods = &g->internal.mods;
     if (g->run.chain >= 2) {
-        const int32_t capped = g->run.chain > 4 ? 4 : g->run.chain;
-        g->player.ink = ink_clampf(g->player.ink + 8.0f * (float)capped, 0.0f, g->player.ink_max);
+        const int32_t capped =
+            g->run.chain > COMBAT_CHAIN_INK_CAP ? COMBAT_CHAIN_INK_CAP : g->run.chain;
+        g->player.ink = ink_clampf(g->player.ink + COMBAT_CHAIN_INK_PER_STEP * (float)capped, 0.0f,
+                                   g->player.ink_max);
         g->player.dry = g->player.ink < 20.0f;
     }
     const int32_t surge_min = mods->surge_min_chain > 0 ? mods->surge_min_chain : 2;

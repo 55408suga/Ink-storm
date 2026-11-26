@@ -901,7 +901,7 @@ void roguelike_recompute_modifiers(GameState *g)
     case BRUSH_STYLE_QUILL:
         mods.brush_radius_mul *= 0.80f;
         mods.brush_force_mul *= 0.90f;
-        mods.stroke_cost_mul *= 0.70f;
+        mods.stroke_cost_mul *= 0.90f;
         mods.orb_pull_radius *= 1.30f;
         break;
     case BRUSH_STYLE_HEAVY:
