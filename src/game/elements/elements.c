@@ -585,8 +585,14 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
         }
 
         g->internal.thunderburst_block_cd[b] = 0.8f;
-        if (g->hitstop_t < 0.03f) {
-            g->hitstop_t = 0.03f;
+        /* Sweeping a fire + storm brush chains bursts across neighbouring blocks every few ticks;
+         * a freeze per burst would stutter the whole sweep, so bursts share one freeze per 0.55s
+         * while each keeps its full damage, impulse and event. */
+        if (g->internal.thunderburst_hitstop_cd <= 0.0f) {
+            if (g->hitstop_t < 0.03f) {
+                g->hitstop_t = 0.03f;
+            }
+            g->internal.thunderburst_hitstop_cd = 0.55f;
         }
         if (g->run.thunderbursts < META_MAX_COUNTERS) {
             ++g->run.thunderbursts;
@@ -881,6 +887,7 @@ void elements_step(GameState *g)
     decay_cd(&g->internal.ignite_callout_cd);
     decay_cd(&g->internal.storm_zap_cd);
     decay_cd(&g->internal.cataclysm_cd);
+    decay_cd(&g->internal.thunderburst_hitstop_cd);
     for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
         decay_cd(&g->internal.thunderburst_block_cd[b]);
     }

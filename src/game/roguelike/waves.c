@@ -598,6 +598,7 @@ static void clear_transient_field_state(GameState *g)
     memset(g->internal.maelstrom_hit_cd, 0, sizeof g->internal.maelstrom_hit_cd);
     g->internal.wind_telegraph_t = 0.0f;
     g->internal.wind_active_t = 0.0f;
+    g->internal.thunderburst_hitstop_cd = 0.0f;
     if (stage_act_index(g->run.act_index) == 2) {
         g->internal.wind_timer = 12.0f - 1.5f;
     }

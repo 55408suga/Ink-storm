@@ -125,6 +125,7 @@ typedef struct {
     /* Phase 4-A fields */
     float relic_ember_dist;
     float thunderburst_block_cd[GAME_THUNDERBURST_BLOCKS];
+    float thunderburst_hitstop_cd;
     float cataclysm_cd;
     float barrier_shield_cd;
     bool barrier_shield_ready;

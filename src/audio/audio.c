@@ -63,6 +63,10 @@ static void reset_session_audio(AudioState *audio)
     audio->brush_speed = 0.0f;
     audio->brush_hold = 0u;
     audio->brush_fast_release = true;
+    audio->thunderburst_next_sample = 0;
+    audio->thunderburst_chain_until = 0;
+    audio->thunderburst_chain = 0;
+    audio->storm_zap_next_sample = 0;
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
         AudioVoice *v = &audio->voices[i];
         if (!v->active || v->ui) {
@@ -283,6 +287,10 @@ static void spawn_event_voices(AudioState *audio, const GameState *game, uint64_
     const float brush_param = (float)skill_bits;
     bool auto_orb_played = false;
     bool purify_played = false;
+    /* Same-tick reaction repeats are dropped here rather than left to the retrigger gap: in a
+     * batched frame they would otherwise fill the pending queue ahead of later milestone cues. */
+    bool thunderburst_played = false;
+    bool storm_zap_played = false;
 
     for (int32_t i = 0; i < count; ++i) {
         const GameEvent *ev = &game->events[i];
@@ -310,10 +318,16 @@ static void spawn_event_voices(AudioState *audio, const GameState *game, uint64_
             audio_voice_spawn(audio, AUDIO_VOICE_IGNITE_FLAME, at_sample, 120.0f, 0.0f);
             break;
         case EV_STORM_ZAP:
-            audio_voice_spawn(audio, AUDIO_VOICE_STORM_ZAP, at_sample, 1320.0f, 0.0f);
+            if (!storm_zap_played) {
+                storm_zap_played = true;
+                audio_voice_spawn(audio, AUDIO_VOICE_STORM_ZAP, at_sample, 1320.0f, 0.0f);
+            }
             break;
         case EV_THUNDERBURST:
-            audio_voice_spawn(audio, AUDIO_VOICE_THUNDERBURST, at_sample, 62.0f, 0.0f);
+            if (!thunderburst_played) {
+                thunderburst_played = true;
+                audio_voice_spawn(audio, AUDIO_VOICE_THUNDERBURST, at_sample, 62.0f, 0.0f);
+            }
             break;
         case EV_CATACLYSM:
             audio_voice_spawn(audio, AUDIO_VOICE_CATACLYSM, at_sample, 54.0f, 0.0f);

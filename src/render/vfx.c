@@ -197,6 +197,7 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->shake_amp = 0.0f;
     r->flash_t = 0.0f;
     r->flash_count = 0;
+    memset(&r->thunderburst_fx, 0, sizeof r->thunderburst_fx);
     r->boss_banner_t = 0.0f;
     r->clear_banner_t = 0.0f;
     r->clear_banner_text = TEXT_NONE;
@@ -273,17 +274,29 @@ void render_consume_events(RenderState *r, const GameState *g)
         case EV_STORM_ZAP:
             push_bolt(r, ev->x, ev->y, ev->x2, ev->y2, 0.22f);
             break;
-        case EV_THUNDERBURST:
-            if (fx_budget_allows(r, ev->type)) {
-                push_stroke(r, 5, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 72.0f, 0.40f);
-                r->major_fx_active++;
+        case EV_THUNDERBURST: {
+            const VfxThunderburstFx fx = vfx_thunderburst_throttle_consume(&r->thunderburst_fx);
+            if (fx.full_burst) {
+                if (fx_budget_allows(r, ev->type)) {
+                    push_stroke(r, 5, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 72.0f,
+                                0.40f);
+                    r->major_fx_active++;
+                }
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 250.0f, 10.0f, 0.42f, PAL_SHU, true);
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 260.0f, 9.0f, 0.40f, PAL_AO_HOT, false);
+            } else {
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 3, 185.0f, 6.5f, 0.26f, PAL_SHU, false);
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 3, 195.0f, 6.0f, 0.24f, PAL_AO_HOT, false);
             }
-            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 250.0f, 10.0f, 0.42f, PAL_SHU, true);
-            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 9, 260.0f, 9.0f, 0.40f, PAL_AO_HOT, false);
-            push_callout(r, TEXT_CALLOUT_THUNDERBURST, 0, ev->x, ev->y - 26.0f, PAL_SHU, true,
-                         1.15f);
-            add_shake(r, 5.5f, 0.22f);
+            if (fx.show_callout) {
+                push_callout(r, TEXT_CALLOUT_THUNDERBURST, 0, ev->x, ev->y - 26.0f, PAL_SHU, true,
+                             1.15f);
+            }
+            if (fx.shake_amp > 0.0f && fx.shake_dur > 0.0f) {
+                add_shake(r, fx.shake_amp, fx.shake_dur);
+            }
             break;
+        }
         case EV_CATACLYSM:
             if (fx_budget_allows(r, ev->type)) {
                 push_stroke(r, 6, ev->x, ev->y, 0.0f, 0.0f, ev->x2 > 10.0f ? ev->x2 : 96.0f, 0.60f);
@@ -555,6 +568,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
     if (r->flash_t > 0.0f) {
         r->flash_t = fmaxf(0.0f, r->flash_t - dt);
     }
+    vfx_thunderburst_throttle_update(&r->thunderburst_fx, dt);
     if (r->shrine_flicker_t > 0.0f) {
         r->shrine_flicker_t = fmaxf(0.0f, r->shrine_flicker_t - dt);
     }

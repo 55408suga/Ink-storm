@@ -406,6 +406,7 @@ static uint64_t hash_internal(const GameInternal *in)
     for (int i = 0; i < GAME_THUNDERBURST_BLOCKS; ++i) {
         h = ink_hash_f32(h, in->thunderburst_block_cd[i]);
     }
+    h = ink_hash_f32(h, in->thunderburst_hitstop_cd);
     h = ink_hash_f32(h, in->cataclysm_cd);
     h = ink_hash_f32(h, in->barrier_shield_cd);
     h = hash_bool(h, in->barrier_shield_ready);
