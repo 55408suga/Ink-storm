@@ -118,7 +118,9 @@ static void demo_step_tick(GameState *game, AudioState *audio, RenderState *rend
                            const BrushInput *in, const GameCommand *cmd)
 {
     game_step(game, in, cmd);
+    audio_out_lock();
     audio_consume_events(audio, game);
+    audio_out_unlock();
     render_consume_events(render, game);
     render_update_vfx(render, game, INK_FIXED_DT);
 }

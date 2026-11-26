@@ -9,10 +9,10 @@
 
 enum { BRUSH_HOLD_SAMPLES = 1200 };
 
-static const float k_brush_attack = 0.0022f;
+static const float k_brush_attack = 0.0045f;
 static const float k_brush_release = 0.00075f;
 static const float k_brush_fast_release = 0.0020f;
-static const float k_brush_speed_glide = 0.0012f;
+static const float k_brush_speed_glide = 0.0022f;
 static const float k_surge_bloom = 0.00025f;
 static const float k_surge_fade = 0.000087f;
 static const float k_brush_silent = 1e-4f;

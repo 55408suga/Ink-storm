@@ -30,7 +30,9 @@ static float sample_track(AudioState *audio, BgmTrack track, float wind_sig)
 {
     const float sr = (float)AUDIO_SAMPLE_RATE;
 
-    if (audio->external_bgm) {
+    const bool has_masked_ext = (int)track > 0 && (int)track < 32 &&
+                                (audio->external_bgm_mask & (UINT32_C(1) << (unsigned)track)) != 0u;
+    if (audio->external_bgm || has_masked_ext) {
         /* External OGG music plays via AudioOut; keep only subtle ambient wind here. */
         return wind_sig * 0.35f;
     }

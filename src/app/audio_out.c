@@ -5,8 +5,58 @@
 
 #include <limits.h>
 #include <math.h>
+#include <pthread.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+
+enum { AUDIO_CB_CHUNK_FRAMES = 512 };
+
+/* raylib's AudioCallback carries no user pointer, so the callback reaches the state it renders
+ * through this module-level bridge. */
+static pthread_mutex_t g_audio_cb_mtx = PTHREAD_MUTEX_INITIALIZER;
+static AudioState *g_audio_cb_state = NULL;
+
+void audio_out_configure_env(void)
+{
+    /* WSLg's PulseAudio server grants a ~75 ms period unless the client asks for less; libpulse
+     * reads this when the device connects, and a value the user already set is kept. Must run
+     * during single-threaded startup before libraries can spawn threads that inspect environ. */
+    if (getenv("PULSE_SERVER") != NULL) {
+        (void)setenv("PULSE_LATENCY_MSEC", "20", 0);
+    }
+}
+
+void audio_out_lock(void) { (void)pthread_mutex_lock(&g_audio_cb_mtx); }
+
+void audio_out_unlock(void) { (void)pthread_mutex_unlock(&g_audio_cb_mtx); }
+
+static void audio_stream_callback(void *buffer_data, unsigned int frames)
+{
+    if (buffer_data == NULL || frames == 0u) {
+        return;
+    }
+    /* raylib's mixer hands in a byte buffer whose alignment and declared type are uint8_t, so
+     * render into typed PCM storage and copy the bytes in bounded chunks. */
+    unsigned char *dst = (unsigned char *)buffer_data;
+    int16_t scratch[AUDIO_CB_CHUNK_FRAMES];
+    size_t remaining = (size_t)frames;
+
+    audio_out_lock();
+    while (remaining > 0u) {
+        const size_t chunk =
+            remaining < (size_t)AUDIO_CB_CHUNK_FRAMES ? remaining : (size_t)AUDIO_CB_CHUNK_FRAMES;
+        if (g_audio_cb_state != NULL) {
+            audio_render(g_audio_cb_state, scratch, chunk);
+            memcpy(dst, scratch, chunk * sizeof(int16_t));
+        } else {
+            memset(dst, 0, chunk * sizeof(int16_t));
+        }
+        dst += chunk * sizeof(int16_t);
+        remaining -= chunk;
+    }
+    audio_out_unlock();
+}
 
 static void load_bgm_slot(AudioOut *out, BgmTrack track, const char *rel_path, bool looping)
 {
@@ -79,6 +129,11 @@ static void attach_brush_loops(AudioOut *out, AudioState *audio)
                             out->brush_swish_loaded ? (size_t)out->brush_swish.frameCount : 0u);
 }
 
+static bool track_loaded(const AudioOut *out, BgmTrack t)
+{
+    return (int)t > 0 && (int)t < AUDIO_BGM_TRACK_SLOTS && out->bgm_loaded[t];
+}
+
 void audio_out_init(AudioOut *out, AudioState *audio)
 {
     if (out == NULL) {
@@ -99,9 +154,8 @@ void audio_out_init(AudioOut *out, AudioState *audio)
         TraceLog(LOG_WARNING, "INKSTORM: audio stream unavailable; running muted");
         return;
     }
-    PlayAudioStream(out->stream);
-    /* The SE stream size is global state; music streams decoded with it underrun and stutter
-     * every ~23 ms, so restore a roomy default before any OGG is opened. */
+    /* The SE stream size is global state, and music streams decoded on the game thread with it
+     * underrun and stutter, so restore a roomy default before any OGG is opened. */
     SetAudioStreamBufferSizeDefault(AUDIO_MUSIC_STREAM_FRAMES);
     out->ready = true;
     bgm_fade_reset(&out->fade);
@@ -113,12 +167,27 @@ void audio_out_init(AudioOut *out, AudioState *audio)
 
     out->brush_flow_loaded = load_brush_loop("audio/sfx_brush_flow.ogg", &out->brush_flow);
     out->brush_swish_loaded = load_brush_loop("audio/sfx_brush_swish.ogg", &out->brush_swish);
-    attach_brush_loops(out, audio);
-}
 
-static bool track_loaded(const AudioOut *out, BgmTrack t)
-{
-    return (int)t > 0 && (int)t < AUDIO_BGM_TRACK_SLOTS && out->bgm_loaded[t];
+    uint32_t ext_bgm_mask = 0u;
+    for (int i = 1; i < AUDIO_BGM_TRACK_SLOTS; ++i) {
+        if (out->bgm_loaded[i]) {
+            ext_bgm_mask |= (UINT32_C(1) << (unsigned)i);
+        }
+    }
+
+    audio_out_lock();
+    attach_brush_loops(out, audio);
+    audio_set_realtime_mode(audio, true);
+    if (audio != NULL) {
+        /* Suppress procedural BGM on init and across scene changes before the pump runs. */
+        audio_set_external_bgm_mask(audio, ext_bgm_mask);
+        audio_set_external_bgm(audio, track_loaded(out, audio_bgm_track(audio)));
+    }
+    g_audio_cb_state = audio;
+    audio_out_unlock();
+
+    SetAudioStreamCallback(out->stream, audio_stream_callback);
+    PlayAudioStream(out->stream);
 }
 
 static float external_base_volume(const AudioState *audio)
@@ -129,9 +198,12 @@ static float external_base_volume(const AudioState *audio)
 
 static void pump_external_bgm(AudioOut *out, AudioState *audio)
 {
+    audio_out_lock();
     const BgmTrack desired = audio_bgm_track(audio);
     const bool has_ext = track_loaded(out, desired);
     audio_set_external_bgm(audio, has_ext);
+    const float base_vol = external_base_volume(audio);
+    audio_out_unlock();
 
     const BgmFadeActions act = bgm_fade_request(&out->fade, has_ext ? desired : BGM_NONE);
     if (track_loaded(out, act.stop)) {
@@ -149,7 +221,6 @@ static void pump_external_bgm(AudioOut *out, AudioState *audio)
         StopMusicStream(out->bgm[finished]);
     }
 
-    const float base_vol = external_base_volume(audio);
     if (track_loaded(out, out->fade.cur)) {
         UpdateMusicStream(out->bgm[out->fade.cur]);
         SetMusicVolume(out->bgm[out->fade.cur], base_vol * out->fade.gain_cur);
@@ -166,14 +237,6 @@ void audio_out_pump(AudioOut *out, AudioState *audio)
         return;
     }
     pump_external_bgm(out, audio);
-
-    for (int i = 0; i < 4; ++i) {
-        if (!IsAudioStreamProcessed(out->stream)) {
-            break;
-        }
-        audio_render(audio, out->pcm, AUDIO_STREAM_FRAMES);
-        UpdateAudioStream(out->stream, out->pcm, AUDIO_STREAM_FRAMES);
-    }
 }
 
 void audio_out_close(AudioOut *out)
@@ -181,8 +244,17 @@ void audio_out_close(AudioOut *out)
     if (out == NULL || !out->ready) {
         return;
     }
+    audio_out_lock();
+    g_audio_cb_state = NULL;
+    audio_out_unlock();
+    SetAudioStreamCallback(out->stream, NULL);
+    StopAudioStream(out->stream);
+    UnloadAudioStream(out->stream);
+
     if (out->attached_audio != NULL) {
         audio_set_brush_samples(out->attached_audio, NULL, 0u, NULL, 0u);
+        audio_set_external_bgm_mask(out->attached_audio, 0u);
+        audio_set_realtime_mode(out->attached_audio, false);
         out->attached_audio = NULL;
     }
     if (out->brush_flow_loaded) {
@@ -200,8 +272,6 @@ void audio_out_close(AudioOut *out)
             out->bgm_loaded[i] = false;
         }
     }
-    StopAudioStream(out->stream);
-    UnloadAudioStream(out->stream);
     CloseAudioDevice();
     memset(out, 0, sizeof *out);
 }
