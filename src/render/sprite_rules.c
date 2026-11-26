@@ -329,6 +329,34 @@ static const SpriteDef k_defs[SPR_COUNT] = {
                        .halo_pad_px = 4.0f,
                        .anchor = {ANCHOR(SPR_ANCHOR_CORE, 0.50f, 0.63f)},
                        .extent = {0.16f, 0.16f}},
+    [SPR_TERRAIN_ROCK] = {.file = "terrain_rock.png",
+                          .canvas = 256,
+                          .group = SPR_GROUP_TERRAIN,
+                          .group_required = true,
+                          .fallback = SPR_NONE,
+                          .body_frac = 0.64f,
+                          .ref_radius = 24.0f,
+                          .foot = {0.50f, 0.50f},
+                          .orient = SPR_ORIENT_NONE,
+                          .halo_pad_px = 2.5f},
+    [SPR_TERRAIN_TORII] = {.file = "terrain_torii.png",
+                           .canvas = 256,
+                           .group = SPR_GROUP_TERRAIN,
+                           .group_required = true,
+                           .fallback = SPR_NONE,
+                           .body_frac = 0.48f,
+                           .fixed_size_px = 168.0f,
+                           .ref_radius = 40.0f,
+                           .foot = {0.50f, 0.50f},
+                           .orient = SPR_ORIENT_NONE,
+                           .halo_pad_px = 4.0f},
+};
+
+static const char *const k_bg_files[SPR_BG_COUNT] = {
+    [SPR_BG_LOBBY] = "bg_lobby.png",
+    [SPR_BG_ACT1] = "bg_act1.png",
+    [SPR_BG_ACT2] = "bg_act2.png",
+    [SPR_BG_ACT3] = "bg_act3.png",
 };
 
 #undef ANCHOR
@@ -977,6 +1005,41 @@ bool sprite_alpha_usable_ex(const uint8_t *rgba, int32_t w, int32_t h, bool tile
 bool sprite_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h)
 {
     return sprite_alpha_usable_ex(rgba, w, h, false);
+}
+
+const char *sprite_bg_file(SpriteBgId id)
+{
+    return (id >= 0 && id < SPR_BG_COUNT) ? k_bg_files[id] : NULL;
+}
+
+bool sprite_bg_alpha_usable(const uint8_t *rgba, int32_t w, int32_t h)
+{
+    if (rgba == NULL || w <= 0 || h <= 0) {
+        return false;
+    }
+    const size_t uw = (size_t)w;
+    const size_t uh = (size_t)h;
+    const size_t cx0 = uw / 4u;
+    const size_t cx1 = (uw * 3u) / 4u;
+    const size_t cy0 = uh / 4u;
+    const size_t cy1 = (uh * 3u) / 4u;
+    if (cx1 <= cx0 || cy1 <= cy0) {
+        return false;
+    }
+    bool visible = false;
+    size_t center_calm = 0u;
+    const size_t center_total = (cx1 - cx0) * (cy1 - cy0);
+    for (size_t y = 0u; y < uh; ++y) {
+        const bool in_cy = y >= cy0 && y < cy1;
+        for (size_t x = 0u; x < uw; ++x) {
+            const uint8_t a = rgba[(y * uw + x) * 4u + 3u];
+            visible = visible || a >= 64u;
+            if (in_cy && x >= cx0 && x < cx1 && a <= 32u) {
+                ++center_calm;
+            }
+        }
+    }
+    return visible && center_calm * 5u >= center_total * 2u;
 }
 
 float sprite_polyline_length(const GameVec2 *pts, int32_t n)

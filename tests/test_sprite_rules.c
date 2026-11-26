@@ -67,8 +67,9 @@ static void test_manifest_every_sprite_has_valid_canvas_file_and_safe_anchors(vo
     for (int32_t g = 0; g < SPR_GROUP_COUNT; ++g) {
         TEST_ASSERT_TRUE(group_has_base[g]);
     }
-    TEST_ASSERT_EQUAL_INT(24, SPR_COUNT);
-    TEST_ASSERT_EQUAL_INT(23, sprite_core_count());
+    TEST_ASSERT_EQUAL_INT(26, SPR_COUNT);
+    TEST_ASSERT_EQUAL_INT(25, sprite_core_count());
+    TEST_ASSERT_EQUAL_INT(14, SPR_GROUP_COUNT);
     TEST_ASSERT_NULL(sprite_def(SPR_NONE));
     TEST_ASSERT_NULL(sprite_def(SPR_COUNT));
 }
@@ -217,6 +218,30 @@ static void test_missing_ryu_body_limb_or_tail_disables_ryu_group(void)
         TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_LIMB, present, group_ok));
         TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_RYU_TAIL, present, group_ok));
     }
+}
+
+static void test_missing_terrain_member_disables_terrain_group(void)
+{
+    const SpriteId required_parts[2] = {SPR_TERRAIN_ROCK, SPR_TERRAIN_TORII};
+    for (size_t k = 0; k < 2u; ++k) {
+        bool present[SPR_COUNT];
+        bool group_ok[SPR_GROUP_COUNT];
+        for (int32_t i = 0; i < SPR_COUNT; ++i) {
+            present[i] = true;
+        }
+        present[required_parts[k]] = false;
+        TEST_ASSERT_EQUAL_INT(SPR_GROUP_COUNT - 1, sprite_groups_resolve(present, group_ok));
+        TEST_ASSERT_FALSE(group_ok[SPR_GROUP_TERRAIN]);
+        TEST_ASSERT_TRUE(group_ok[SPR_GROUP_SHRINE]);
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_TERRAIN_ROCK, present, group_ok));
+        TEST_ASSERT_EQUAL_INT(SPR_NONE, sprite_resolve(SPR_TERRAIN_TORII, present, group_ok));
+    }
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 75.0f,
+                             sprite_display_size(sprite_def(SPR_TERRAIN_ROCK), 24.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 168.0f,
+                             sprite_display_size(sprite_def(SPR_TERRAIN_TORII), 0.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 168.0f,
+                             sprite_display_size(sprite_def(SPR_TERRAIN_TORII), 40.0f));
 }
 
 static void test_face_hysteresis_does_not_chatter_near_vertical(void)
@@ -687,6 +712,7 @@ static void test_atlas_slots_do_not_overlap_and_fit(void)
         }
     }
     TEST_ASSERT_EQUAL_INT(2 * SPR_COUNT, n);
+    TEST_ASSERT_EQUAL_INT(52, n);
     SpriteRect body_rc;
     SpriteRect body_halo_rc;
     TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_RYU_BODY, false, &body_rc));
@@ -697,6 +723,26 @@ static void test_atlas_slots_do_not_overlap_and_fit(void)
     TEST_ASSERT_EQUAL_INT(1536, body_halo_rc.x);
     TEST_ASSERT_EQUAL_INT(768, body_halo_rc.y);
     TEST_ASSERT_EQUAL_INT(256, body_halo_rc.w);
+    SpriteRect rock_rc;
+    SpriteRect rock_halo_rc;
+    SpriteRect torii_rc;
+    SpriteRect torii_halo_rc;
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_TERRAIN_ROCK, false, &rock_rc));
+    TEST_ASSERT_EQUAL_INT(1280, rock_rc.x);
+    TEST_ASSERT_EQUAL_INT(1536, rock_rc.y);
+    TEST_ASSERT_EQUAL_INT(256, rock_rc.w);
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_TERRAIN_ROCK, true, &rock_halo_rc));
+    TEST_ASSERT_EQUAL_INT(1664, rock_halo_rc.x);
+    TEST_ASSERT_EQUAL_INT(1536, rock_halo_rc.y);
+    TEST_ASSERT_EQUAL_INT(128, rock_halo_rc.w);
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_TERRAIN_TORII, false, &torii_rc));
+    TEST_ASSERT_EQUAL_INT(1024, torii_rc.x);
+    TEST_ASSERT_EQUAL_INT(1792, torii_rc.y);
+    TEST_ASSERT_EQUAL_INT(256, torii_rc.w);
+    TEST_ASSERT_TRUE(sprite_atlas_slot(SPR_TERRAIN_TORII, true, &torii_halo_rc));
+    TEST_ASSERT_EQUAL_INT(1792, torii_halo_rc.x);
+    TEST_ASSERT_EQUAL_INT(1536, torii_halo_rc.y);
+    TEST_ASSERT_EQUAL_INT(128, torii_halo_rc.w);
     SpriteRect rc;
     TEST_ASSERT_FALSE(sprite_atlas_slot(SPR_NONE, false, &rc));
     TEST_ASSERT_FALSE(sprite_atlas_slot(SPR_COUNT, true, &rc));
@@ -901,6 +947,70 @@ static void test_alpha_usable_ex_allows_horizontal_tiling_with_top_bottom_margin
     TEST_ASSERT_TRUE(sprite_alpha_usable_ex(rgba, TW, TH, true));
 
     free(rgba);
+}
+
+static void test_bg_file_and_alpha_usable_validation(void)
+{
+    TEST_ASSERT_EQUAL_INT(4, SPR_BG_COUNT);
+    TEST_ASSERT_EQUAL_STRING("bg_lobby.png", sprite_bg_file(SPR_BG_LOBBY));
+    TEST_ASSERT_EQUAL_STRING("bg_act1.png", sprite_bg_file(SPR_BG_ACT1));
+    TEST_ASSERT_EQUAL_STRING("bg_act2.png", sprite_bg_file(SPR_BG_ACT2));
+    TEST_ASSERT_EQUAL_STRING("bg_act3.png", sprite_bg_file(SPR_BG_ACT3));
+    TEST_ASSERT_NULL(sprite_bg_file((SpriteBgId)-1));
+    TEST_ASSERT_NULL(sprite_bg_file(SPR_BG_COUNT));
+    for (int32_t i = 0; i < SPR_BG_COUNT; ++i) {
+        const char *f = sprite_bg_file((SpriteBgId)i);
+        TEST_ASSERT_NOT_NULL(f);
+        TEST_ASSERT_TRUE(is_lower_snake_png(f));
+        for (int32_t j = 0; j < i; ++j) {
+            TEST_ASSERT_NOT_EQUAL_INT(0, strcmp(f, sprite_bg_file((SpriteBgId)j)));
+        }
+    }
+
+    enum { BW = 20, BH = 20 };
+    uint8_t rgba[BW * BH * 4];
+
+    /* Empty alpha and invalid dimensions/NULL must be rejected. */
+    memset(rgba, 0, sizeof rgba);
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, BH));
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(NULL, BW, BH));
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, 0, BH));
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, 0));
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, 1, 1));
+
+    /* Sub-threshold border alpha (< 64) is rejected; >= 64 with calm center is accepted. */
+    rgba[3] = 63u;
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, BH));
+    rgba[3] = 64u;
+    TEST_ASSERT_TRUE(sprite_bg_alpha_usable(rgba, BW, BH));
+
+    /* Opaque slab covering the central arena must be rejected. */
+    memset(rgba, 255, sizeof rgba);
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, BH));
+
+    /* Central arena is x in [5, 15), y in [5, 15) = 100 pixels. Exactly 40 calm (a <= 32) passes;
+     * 39 calm fails. */
+    memset(rgba, 0, sizeof rgba);
+    for (int32_t y = 0; y < BH; ++y) {
+        for (int32_t x = 0; x < BW; ++x) {
+            const bool border = x < 5 || x >= 15 || y < 5 || y >= 15;
+            rgba[((size_t)y * BW + (size_t)x) * 4u + 3u] = border ? 200u : 220u;
+        }
+    }
+    int32_t calmed = 0;
+    for (int32_t y = 5; y < 15 && calmed < 39; ++y) {
+        for (int32_t x = 5; x < 15 && calmed < 39; ++x) {
+            rgba[((size_t)y * BW + (size_t)x) * 4u + 3u] = 32u;
+            ++calmed;
+        }
+    }
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, BH));
+    /* Making the 40th central pixel calm (a == 32) meets the 40% quiet-center threshold. */
+    rgba[((size_t)8 * BW + 14u) * 4u + 3u] = 32u;
+    TEST_ASSERT_TRUE(sprite_bg_alpha_usable(rgba, BW, BH));
+    /* Raising that 40th pixel to a == 33 drops calm count back to 39% -> rejected. */
+    rgba[((size_t)8 * BW + 14u) * 4u + 3u] = 33u;
+    TEST_ASSERT_FALSE(sprite_bg_alpha_usable(rgba, BW, BH));
 }
 
 static uint32_t adler32_ref(const uint8_t *raw, size_t raw_len)
@@ -1411,6 +1521,73 @@ static void test_png_rgba_decode_rejects_invalid_lz77_distances_and_overflow(voi
     }
 }
 
+static void test_png_rgba_decode_bg_dimensions_and_exact_capacities(void)
+{
+    const size_t rgba_need = (size_t)SPRITE_BG_W * (size_t)SPRITE_BG_H * 4u;
+    const size_t raw_need = ((size_t)SPRITE_BG_W * 4u + 1u) * (size_t)SPRITE_BG_H;
+    const size_t zbuf_cap = 16384u;
+    const size_t guard = 8u;
+
+    uint8_t *zbuf = calloc(1u, zbuf_cap);
+    uint8_t *png = calloc(1u, zbuf_cap + 128u);
+    uint8_t *rgba_out = malloc(rgba_need + guard);
+    uint8_t *raw_scratch = calloc(1u, raw_need + guard);
+    if (zbuf == NULL || png == NULL || rgba_out == NULL || raw_scratch == NULL) {
+        free(raw_scratch);
+        free(rgba_out);
+        free(png);
+        free(zbuf);
+        TEST_FAIL_MESSAGE("heap allocation failed");
+        return;
+    }
+
+    /* Compress an all-zero SPRITE_BG_W x SPRITE_BG_H filtered scanline stream via fixed Huffman
+     * RLE (literal 0 followed by len=258, dist=1 matches). */
+    BitWriter bw = {.buf = zbuf, .cap = zbuf_cap};
+    bw_write_zlib_hdr(&bw, 7u);
+    bw_put(&bw, 1u, 1); /* bfinal = 1 */
+    bw_put(&bw, 1u, 2); /* btype = 1 (fixed Huffman) */
+    bw_put_fixed_lit(&bw, 0u);
+    size_t rem = raw_need - 1u;
+    while (rem >= 258u) {
+        bw_put_fixed_lit(&bw, 285u); /* len = 258 */
+        bw_put_fixed_dist(&bw, 0u);  /* dist = 1 */
+        rem -= 258u;
+    }
+    while (rem > 0u) {
+        bw_put_fixed_lit(&bw, 0u);
+        --rem;
+    }
+    bw_put_fixed_lit(&bw, 256u); /* EOB */
+    bw_finish_zlib(&bw, raw_scratch, raw_need);
+
+    const size_t png_len = make_png_with_idat(png, SPRITE_BG_W, SPRITE_BG_H, zbuf, bw.len);
+
+    memset(rgba_out, 0xa5, rgba_need + guard);
+    memset(raw_scratch, 0x5a, raw_need + guard);
+    TEST_ASSERT_FALSE(png_rgba_decode(png, png_len, SPRITE_BG_W, SPRITE_BG_H, rgba_out,
+                                      rgba_need - 1u, raw_scratch, raw_need));
+    TEST_ASSERT_FALSE(png_rgba_decode(png, png_len, SPRITE_BG_W, SPRITE_BG_H, rgba_out, rgba_need,
+                                      raw_scratch, raw_need - 1u));
+    TEST_ASSERT_TRUE(png_rgba_decode(png, png_len, SPRITE_BG_W, SPRITE_BG_H, rgba_out, rgba_need,
+                                     raw_scratch, raw_need));
+
+    uint8_t acc = 0u;
+    for (size_t i = 0; i < rgba_need; ++i) {
+        acc |= rgba_out[i];
+    }
+    TEST_ASSERT_EQUAL_HEX8(0x00, acc);
+    for (size_t i = 0; i < guard; ++i) {
+        TEST_ASSERT_EQUAL_HEX8(0xa5, rgba_out[rgba_need + i]);
+        TEST_ASSERT_EQUAL_HEX8(0x5a, raw_scratch[raw_need + i]);
+    }
+
+    free(raw_scratch);
+    free(rgba_out);
+    free(png);
+    free(zbuf);
+}
+
 enum { SPINE_IN = 128 };
 
 static void make_wavy_trail(GameVec2 *pts, int n)
@@ -1591,6 +1768,7 @@ int main(void)
     RUN_TEST(test_umbrella_switches_to_crouch_below_hop_height_threshold);
     RUN_TEST(test_missing_variant_falls_back_to_base_and_missing_base_disables_group);
     RUN_TEST(test_missing_ryu_body_limb_or_tail_disables_ryu_group);
+    RUN_TEST(test_missing_terrain_member_disables_terrain_group);
     RUN_TEST(test_face_hysteresis_does_not_chatter_near_vertical);
     RUN_TEST(test_paper_turn_narrows_then_reopens_on_the_new_side);
     RUN_TEST(test_quad_mirror_keeps_collision_centre_fixed);
@@ -1611,12 +1789,14 @@ int main(void)
     RUN_TEST(test_alpha_usable_rejects_blank_and_solid_squares);
     RUN_TEST(test_alpha_usable_enforces_eight_percent_outer_margin);
     RUN_TEST(test_alpha_usable_ex_allows_horizontal_tiling_with_top_bottom_margin);
+    RUN_TEST(test_bg_file_and_alpha_usable_validation);
     RUN_TEST(test_png_rgba_decode_handles_filters_and_rejects_oversized_inflate);
     RUN_TEST(test_png_rgba_decode_fixed_huffman_and_trailing_idat);
     RUN_TEST(test_png_rgba_decode_dynamic_huffman_and_long_codes);
     RUN_TEST(test_png_rgba_decode_accepts_eob_only_dynamic_final_block);
     RUN_TEST(test_png_rgba_decode_rejects_malformed_huffman_tables);
     RUN_TEST(test_png_rgba_decode_rejects_invalid_lz77_distances_and_overflow);
+    RUN_TEST(test_png_rgba_decode_bg_dimensions_and_exact_capacities);
     RUN_TEST(test_spine_resample_has_even_arc_spacing);
     RUN_TEST(test_spine_socket_replaces_the_neck_run_with_the_head_socket);
     RUN_TEST(test_spine_socket_keeps_an_exact_corner_once);

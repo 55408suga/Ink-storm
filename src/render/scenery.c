@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "sprites.h"
 
 #include "core.h"
 
@@ -738,17 +739,23 @@ void render_scenery_draw(RenderState *r, BgKey key)
         return;
     }
     if (key.kind == BG_LOBBY) {
-        scene_lobby(r);
+        if (!render_sprite_draw_bg(r, SPR_BG_LOBBY)) {
+            scene_lobby(r);
+        }
         return;
     }
     const int act = key.act_index >= 0 ? key.act_index : 0;
     const int stage_act = act % GAME_MAIN_ACT_COUNT;
-    if (stage_act == 1) {
-        scene_act2(r);
-    } else if (stage_act == 2) {
-        scene_act3(r);
-    } else {
-        scene_act1(r);
+    const SpriteBgId bg_id =
+        stage_act == 1 ? SPR_BG_ACT2 : (stage_act == 2 ? SPR_BG_ACT3 : SPR_BG_ACT1);
+    if (!render_sprite_draw_bg(r, bg_id)) {
+        if (stage_act == 1) {
+            scene_act2(r);
+        } else if (stage_act == 2) {
+            scene_act3(r);
+        } else {
+            scene_act1(r);
+        }
     }
     const int loop_n = act / GAME_MAIN_ACT_COUNT;
     if (loop_n >= 1) {

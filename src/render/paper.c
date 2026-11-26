@@ -1,5 +1,6 @@
 #include "ink_prims.h"
 #include "render_internal.h"
+#include "sprites.h"
 
 #include "core.h"
 #include "rlgl.h"
@@ -253,8 +254,28 @@ static float rock_jitter(uint32_t seed, uint32_t i)
     return (float)(paper_mix(seed * 0x9e3779b9u ^ paper_mix(i + 17u)) >> 8) * (1.0f / 16777216.0f);
 }
 
-static void draw_rock_pillar(RenderState *r, Vector2 c, float rad, uint32_t seed)
+static void draw_rock_pillar(RenderState *r, Vector2 c, float rad, uint32_t seed, int act_index)
 {
+    const SpriteId sid = render_sprite_resolve(r, SPR_TERRAIN_ROCK);
+    if (sid != SPR_NONE) {
+        const SpriteDef *d = sprite_def(sid);
+        ink_radial_glow(r, (Vector2){c.x + rad * 0.35f, c.y + rad * 0.42f}, rad * 1.25f,
+                        rad * 0.90f, pal_color_alpha(PAL_SUMI_HEAVY, 0.24f),
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.0f));
+        const SpriteXform xf = {
+            .x = c.x,
+            .y = c.y,
+            .size = sprite_display_size(d, rad),
+            .sx = (seed & 1u) != 0u ? -1.0f : 1.0f,
+            .sy = 1.0f,
+            .rot = ((float)(seed % 7u) - 3.0f) * 0.035f,
+        };
+        render_sprite_draw_halo(r, sid, &xf,
+                                pal_lerp(pal_paper_for_act(act_index), PAL_GOFUN, 0.5f, 0.85f));
+        render_sprite_draw(r, sid, &xf, pal_white());
+        return;
+    }
+
     /* A standing stone seen from above at a slight tilt: shaded side walls, a lit and uneven crown,
      * shunpo veins, moss dots and a crisp contour, resting on pale mist with a shadow cast to the
      * lower right. */
@@ -333,8 +354,30 @@ static void draw_rock_pillar(RenderState *r, Vector2 c, float rad, uint32_t seed
     ink_outline(r, base, V, true, 4.6f, (Vector2){0.707f, 0.707f}, seed + 3u);
 }
 
-static void draw_torii(RenderState *r, float cx, uint32_t seed)
+static void draw_torii(RenderState *r, float cx, uint32_t seed, int act_index)
 {
+    const SpriteId sid = render_sprite_resolve(r, SPR_TERRAIN_TORII);
+    if (sid != SPR_NONE) {
+        const SpriteDef *d = sprite_def(sid);
+        ink_radial_glow(r, (Vector2){cx + 6.0f, 332.0f}, 18.0f, 15.0f,
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.24f),
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.0f));
+        ink_radial_glow(r, (Vector2){cx + 6.0f, 396.0f}, 18.0f, 15.0f,
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.24f),
+                        pal_color_alpha(PAL_SUMI_HEAVY, 0.0f));
+        const SpriteXform xf = {
+            .x = cx - 4.0f,
+            .y = 360.0f,
+            .size = sprite_display_size(d, 0.0f),
+            .sx = 1.0f,
+            .sy = 1.0f,
+        };
+        render_sprite_draw_halo(r, sid, &xf,
+                                pal_lerp(pal_paper_for_act(act_index), PAL_GOFUN, 0.5f, 0.85f));
+        render_sprite_draw(r, sid, &xf, pal_white());
+        return;
+    }
+
     /* Solid pillars at (cx, 328) and (cx, 392) [16x16px]; the beams are visual only. Seen from
      * above: foundation stones, round bengara posts (not PAL_SHU, which fire owns), a nuki tie-beam
      * and the dark kasagi cap, all casting one soft shadow to the lower right. */
@@ -491,16 +534,16 @@ void render_paper_draw_terrain(RenderState *r, const GameState *g, int act_index
     const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
     if (stage_act == 1) {
         /* Act 2: 2 Torii gates + 4 rock pillars */
-        draw_torii(r, 384.0f, 3010u);
-        draw_torii(r, 896.0f, 3020u);
-        draw_rock_pillar(r, (Vector2){340.0f, 190.0f}, 24.0f, 3101u);
-        draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3102u);
-        draw_rock_pillar(r, (Vector2){340.0f, 530.0f}, 24.0f, 3103u);
-        draw_rock_pillar(r, (Vector2){940.0f, 530.0f}, 24.0f, 3104u);
+        draw_torii(r, 384.0f, 3010u, act_index);
+        draw_torii(r, 896.0f, 3020u, act_index);
+        draw_rock_pillar(r, (Vector2){340.0f, 190.0f}, 24.0f, 3101u, act_index);
+        draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3102u, act_index);
+        draw_rock_pillar(r, (Vector2){340.0f, 530.0f}, 24.0f, 3103u, act_index);
+        draw_rock_pillar(r, (Vector2){940.0f, 530.0f}, 24.0f, 3104u, act_index);
     } else if (stage_act == 2) {
         /* Act 3: upper 2 rock pillars */
-        draw_rock_pillar(r, (Vector2){340.0f, 190.0f}, 24.0f, 3201u);
-        draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3202u);
+        draw_rock_pillar(r, (Vector2){340.0f, 190.0f}, 24.0f, 3201u, act_index);
+        draw_rock_pillar(r, (Vector2){940.0f, 190.0f}, 24.0f, 3202u, act_index);
     }
 
     /* Draw any spirit pillars present in ECS (Act 3 gameplay or Showcase Page 1) */

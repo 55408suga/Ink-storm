@@ -11,6 +11,7 @@ void render_sprites_close(RenderState *r);
 SpriteId render_sprite_resolve(const RenderState *r, SpriteId id);
 void render_sprite_draw(RenderState *r, SpriteId id, const SpriteXform *xf, Color tint);
 void render_sprite_draw_halo(RenderState *r, SpriteId id, const SpriteXform *xf, Color tint);
+bool render_sprite_draw_bg(RenderState *r, SpriteBgId id);
 void render_sprite_draw_ryu_band(RenderState *r, SpriteId id, bool halo, const GameVec2 *spine,
                                  int32_t spine_n, bool awakened, float time_s, bool flip_v,
                                  float reveal, Color tint);
