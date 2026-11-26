@@ -493,12 +493,22 @@ def validate_wav(path: Path, expected_frames: int) -> None:
             width = wf.getsampwidth()
             rate = wf.getframerate()
             nframes = wf.getnframes()
+            actual_bytes = len(wf.readframes(expected_samples)) if (ch, width, rate, nframes) == (
+                1,
+                2,
+                AUDIO_SAMPLE_RATE,
+                expected_samples,
+            ) else -1
     except (OSError, EOFError, wave.Error) as exc:
         raise PipelineError(f"invalid WAV {path.name}: {exc}") from None
     if (ch, width, rate, nframes) != (1, 2, AUDIO_SAMPLE_RATE, expected_samples):
         raise PipelineError(
             f"invalid WAV {path.name}: expected 1ch/16bit/{AUDIO_SAMPLE_RATE}Hz/{expected_samples} "
             f"samples, got {ch}ch/{width * 8}bit/{rate}Hz/{nframes}"
+        )
+    if actual_bytes != expected_samples * 2:
+        raise PipelineError(
+            f"invalid WAV {path.name}: truncated PCM ({actual_bytes} of {expected_samples * 2} bytes)"
         )
 
 
@@ -572,10 +582,33 @@ def scenario_rules(
     return rules
 
 
-def check_passes(value, op: str, limit) -> bool:
+INTEGER_FIELDS = frozenset(
+    {
+        "frames",
+        "width",
+        "height",
+        "fps",
+        "video.black_frames",
+        "video.white_frames",
+        "video.static_frames",
+        "audio.se_peak",
+        "audio.bgm_peak",
+        "audio.mix_peak",
+        "audio.bgm_tracks_loaded",
+        "vfx.max_callouts_active",
+        "game.thunderbursts",
+        "game.kills",
+    }
+)
+
+
+def check_passes(value, op: str, limit, *, integer_only: bool = False) -> bool:
     if isinstance(limit, (bool, str)):
         return type(value) is type(limit) and OPS[op](value, limit)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if integer_only:
+        if type(value) is not int:
+            return False
+    elif isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     try:
         return math.isfinite(value) and OPS[op](value, limit)
@@ -599,7 +632,7 @@ def evaluate(name: str, report: dict, args: argparse.Namespace) -> list[dict]:
             {
                 "check": f"{path} {op} {format_limit(limit)}",
                 "value": value,
-                "ok": check_passes(value, op, limit),
+                "ok": check_passes(value, op, limit, integer_only=path in INTEGER_FIELDS),
             }
         )
     return results

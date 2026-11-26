@@ -278,6 +278,25 @@ class QaRunReportTest(unittest.TestCase):
         self.assertIn("audio.clip_ratio >= 0", failed_checks("act1_combat", neg_clip))
         neg_static = make_report("act1_combat", video={"static_frames": -1})
         self.assertIn("video.static_frames >= 0", failed_checks("act1_combat", neg_static))
+        frac_static = make_report("act1_combat", video={"static_frames": 0.5})
+        self.assertIn("video.static_frames >= 0", failed_checks("act1_combat", frac_static))
+
+    def test_truncated_wav_payload_is_rejected(self) -> None:
+        samples = qa_run.AUDIO_SAMPLES_PER_TICK * 2
+        data_size = samples * 2
+        header_only = (
+            b"RIFF"
+            + struct.pack("<I", 36 + data_size)
+            + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, 44100, 88200, 2, 16)
+            + b"data"
+            + struct.pack("<I", data_size)
+        )
+        with tempfile.TemporaryDirectory(prefix="inkstorm-qa-test-") as tmp:
+            wav = Path(tmp) / "trunc.wav"
+            wav.write_bytes(header_only)
+            with self.assertRaisesRegex(qa_run.PipelineError, "truncated PCM"):
+                qa_run.validate_wav(wav, expected_frames=2)
 
     def test_empty_wav_fails_audio_only_scenario(self) -> None:
         with tempfile.TemporaryDirectory(prefix="inkstorm-qa-test-") as tmp:
