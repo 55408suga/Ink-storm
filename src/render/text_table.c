@@ -17,6 +17,18 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_ACT1_SUBTITLE] = {.ja = "開けた和紙の社", .en = "Open Washi Shrine"},
     [TEXT_ACT2_SUBTITLE] = {.ja = "鳥居と岩柱", .en = "Torii and Rock Pillars"},
     [TEXT_ACT3_SUBTITLE] = {.ja = "嵐の霊峰", .en = "Storm of the Spirit Peak"},
+    [TEXT_ACT1_TRAIT] = {.ja = "基礎戦場・弾返しと炎風", .en = "Open Field - Deflect & Burn"},
+    [TEXT_ACT2_TRAIT] = {.ja = "柱へ叩きつけ・雷連鎖", .en = "Pillar Slams & Storm Chains"},
+    [TEXT_ACT3_TRAIT] = {.ja = "山風と霊柱・三元共鳴", .en = "Mountain Wind & Cataclysm"},
+    [TEXT_ACT1_DESC] =
+        {.ja = "障害物のない和紙戦場 — 筆の風で敵弾を撃ち返し、炎で連殺を狙え",
+         .en = "Open washi arena - deflect enemy shots with wind and chain fire kills"},
+    [TEXT_ACT2_DESC] =
+        {.ja = "鳥居と岩柱が戦場を区切る — 敵を柱へ叩きつけ、雷球で連鎖を起こせ",
+         .en = "Torii and rock pillars divide the field - slam foes and chain lightning"},
+    [TEXT_ACT3_DESC] =
+        {.ja = "山風が墨を押し流し霊柱が属性を宿す — 三元共鳴で龍脈を討て",
+         .en = "Mountain gusts drive ink while spirit pillars ignite - unleash Cataclysm"},
     [TEXT_ENDLESS_ACT_PREFIX] = {.ja = "第", .en = "Act "},
     [TEXT_ENDLESS_ACT_SUFFIX] = {.ja = "幕", .en = "Act"},
     [TEXT_ENDLESS_LOOP_LABEL] = {.ja = "周回", .en = "Loop"},
@@ -28,6 +40,9 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_HUD_INK] = {.ja = "墨", .en = "Ink"},
     [TEXT_HUD_CHAIN] = {.ja = "一筆連殺", .en = "Chain"},
     [TEXT_HUD_SHRINE] = {.ja = "社", .en = "Shrine"},
+    [TEXT_HUD_REMAINING_UNIT] = {.ja = "体", .en = "LEFT"},
+    [TEXT_HUD_WAVE_CLEAR_SHORT] = {.ja = "祓済", .en = "CLEAR"},
+    [TEXT_HUD_LOOP_SHORT] = {.ja = "周", .en = "L"},
 
     [TEXT_ENEMY_ARCHER_NAME] = {.ja = "弓妖", .en = "Bow Yokai"},
     [TEXT_ENEMY_ARCHER_INTRO] = {.ja = "矢を風筆で逸らし撃ち返せ",
@@ -367,6 +382,8 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_LOBBY_SUBTITLE] = {.ja = "水墨流体アクション・ローグライト",
                              .en = "Sumi-e Fluid Action Roguelite"},
     [TEXT_LOBBY_SORTIE] = {.ja = "出陣", .en = "Sortie"},
+    [TEXT_LOBBY_GUIDE] = {.ja = "遊び方", .en = "How to Play"},
+    [TEXT_LOBBY_GUIDE_BADGE] = {.ja = "はじめて", .en = "GUIDE"},
     [TEXT_LOBBY_BOKUAN] = {.ja = "墨庵", .en = "Bokuan"},
     [TEXT_LOBBY_SETTINGS] = {.ja = "設定", .en = "Settings"},
     [TEXT_LOBBY_QUIT] = {.ja = "終了", .en = "Quit"},
@@ -442,6 +459,8 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_RESULT_KILLS] = {.ja = "撃破数", .en = "Kills"},
     [TEXT_RESULT_MAX_CHAIN] = {.ja = "最大連殺", .en = "Max Chain"},
     [TEXT_RESULT_REACTIONS] = {.ja = "属性反応", .en = "Reactions"},
+    [TEXT_RESULT_REACTIONS_HDR] = {.ja = "属性反応の戦果", .en = "Elemental Reactions"},
+    [TEXT_RESULT_BREAKDOWN_HDR] = {.ja = "墨晶の内訳", .en = "Crystal Breakdown"},
     [TEXT_RESULT_BLAZING_LABEL] = {.ja = "紅蓮墨嵐", .en = "Blazing"},
     [TEXT_RESULT_TEMPEST_LABEL] = {.ja = "雷墨連鎖", .en = "Tempest"},
     [TEXT_RESULT_THUNDERBURST_LABEL] = {.ja = "爆雷", .en = "Thunderburst"},
@@ -451,17 +470,175 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_RESULT_SEED] = {.ja = "シード", .en = "Seed"},
     [TEXT_RESULT_CRYSTALS] = {.ja = "墨晶精算", .en = "Ink Crystals"},
     [TEXT_RESULT_CRYSTALS_PREVIEW] = {.ja = "墨晶内訳（未精算）", .en = "Ink Crystals (Preview)"},
+    [TEXT_RESULT_CRYSTALS_PREVIEW_SHORT] = {.ja = "墨晶（未精算）", .en = "Crystals (Preview)"},
     [TEXT_RESULT_CRYSTAL_ACTS] = {.ja = "幕踏破", .en = "Acts"},
     [TEXT_RESULT_CRYSTAL_KILLS] = {.ja = "撃破", .en = "Kills"},
     [TEXT_RESULT_CRYSTAL_CHAIN] = {.ja = "最大連殺", .en = "Max Chain"},
     [TEXT_RESULT_CRYSTAL_REACTIONS] = {.ja = "反応", .en = "Reactions"},
     [TEXT_RESULT_CRYSTAL_ENDLESS] = {.ja = "エンドレス", .en = "Endless"},
     [TEXT_RESULT_CRYSTAL_BONUS] = {.ja = "巻物ボーナス", .en = "Scroll Bonus"},
+    [TEXT_RESULT_CRYSTAL_BONUS_SHORT] = {.ja = "巻物", .en = "Scroll"},
     [TEXT_RESULT_CRYSTAL_TOTAL] = {.ja = "獲得計", .en = "Earned"},
     [TEXT_RESULT_CRYSTAL_OWNED] = {.ja = "所持計", .en = "Total Owned"},
+    [TEXT_RESULT_MORE_ITEMS] = {.ja = "他", .en = "more"},
     [TEXT_RESULT_ENDLESS] = {.ja = "エンドレスへ進む", .en = "Enter Endless"},
     [TEXT_RESULT_TO_LOBBY] = {.ja = "ロビーへ戻る", .en = "Return to Lobby"},
     [TEXT_RESULT_PLAY_AGAIN] = {.ja = "再出陣", .en = "Play Again"},
+
+    /* Illustrated How-to-Play Guide */
+    [TEXT_GUIDE_PREV] = {.ja = "< 前の頁", .en = "< Prev"},
+    [TEXT_GUIDE_NEXT] = {.ja = "次の頁 >", .en = "Next >"},
+    [TEXT_GUIDE_CLOSE] = {.ja = "閉じる [Esc]", .en = "Close [Esc]"},
+    [TEXT_GUIDE_FINISH] = {.ja = "閉じる [Enter]", .en = "Done [Enter]"},
+    [TEXT_GUIDE_NAV_HINT] = {.ja = "← / → ページ送り・数字 1-5・Esc 戻る",
+                             .en = "Left / Right: Page  *  Keys 1-5  *  Esc: Back"},
+    [TEXT_GUIDE_TIP_TAG] = {.ja = "心得", .en = "TIP"},
+    [TEXT_GUIDE_S0_TITLE] = {.ja = "基本ルール — 社を守り、波を祓え",
+                             .en = "Core Rules - Protect the Shrine"},
+    [TEXT_GUIDE_S0_H1] = {.ja = "中央の「社」を敵と弾から守れ", .en = "Defend the Center Shrine"},
+    [TEXT_GUIDE_S0_B1] =
+        {.ja =
+             "四方から迫る敵や弾が中央の社に触れると灯火が減り、すべて消えると落墨（敗北）となる。",
+         .en = "Foes and shots converge from all sides. Losing every shrine flame ends the run."},
+    [TEXT_GUIDE_S0_H2] = {.ja = "「あと N 体」を祓って波を突破",
+                          .en = "Clear the Remaining Enemy Quota"},
+    [TEXT_GUIDE_S0_B2] =
+        {.ja = "画面上部の黒い討伐札が目標数。波を突破するたびに強化札を1枚選べる。",
+         .en = "Watch the dark top counter for remaining foes. Clearing a wave grants a Blessing."},
+    [TEXT_GUIDE_S0_H3] = {.ja = "三つの波の先に「主（ボス）」",
+                          .en = "Face the Boss After 3 Waves"},
+    [TEXT_GUIDE_S0_B3] =
+        {.ja = "各幕3波の後に主が出現。撃破で大遺物を得て次の幕へ進み、第三幕の主を討てば勝利（エン"
+               "ドレス解放）。",
+         .en = "Beat each Act Boss for a Great Relic & next Act; clearing Act 3 wins and unlocks "
+               "Endless."},
+    [TEXT_GUIDE_S0_TIP] =
+        {.ja = "まずは画面上部の「あと N 体」と社の灯火を見ながら、近づく矢や敵を風で押し返そう。",
+         .en = "Keep an eye on the dark remaining counter and push incoming shots away from the "
+               "Shrine."},
+    [TEXT_GUIDE_D0_PROTECT] = {.ja = "社を守る", .en = "Protect Shrine"},
+    [TEXT_GUIDE_D0_THREAT] = {.ja = "敵・弾の接近", .en = "Foes & Shots"},
+    [TEXT_GUIDE_D0_TARGET] = {.ja = "討伐目標（上部の黒札）", .en = "Quota Counter (Top HUD)"},
+    [TEXT_GUIDE_D0_STEP1] = {.ja = "波 1〜3", .en = "Waves 1-3"},
+    [TEXT_GUIDE_D0_STEP2] = {.ja = "主（ボス）", .en = "Act Boss"},
+    [TEXT_GUIDE_D0_STEP3] = {.ja = "強化札・遺物", .en = "Blessing / Relic"},
+    [TEXT_GUIDE_S1_TITLE] = {.ja = "墨の操作 — 風筆・渦印・風斬り",
+                             .en = "Brush Controls - Stroke, Cyclone, Gale"},
+    [TEXT_GUIDE_S1_H1] = {.ja = "左ドラッグ：風筆（流れと墨を生む）",
+                          .en = "Left Drag: Paint Ink & Wind"},
+    [TEXT_GUIDE_S1_B1] =
+        {.ja = "和紙に墨を引き、筆の向きへ強い風を起こす。敵弾を逸らし墨で染める基本技。",
+         .en = "Drag across the washi to lay ink and push currents that bend arrows and orbs."},
+    [TEXT_GUIDE_S1_H2] = {.ja = "右クリック / E：渦印（吸い寄せ）",
+                          .en = "Right-Click / E: Cyclone Seal"},
+    [TEXT_GUIDE_S1_B2] =
+        {.ja = "カーソル位置に渦を刻み、周囲の敵・弾・火球を中央の墨へ一斉に引き寄せる。",
+         .en = "Carve a vortex at your cursor to pull enemies, shots, and fireballs into ink."},
+    [TEXT_GUIDE_S1_H3] = {.ja = "Space：風斬り（強烈な吹き飛ばし）",
+                          .en = "Space: Gale Burst (Knockback)"},
+    [TEXT_GUIDE_S1_B3] =
+        {.ja = "カーソル移動方向へ鋭い烈風を放ち、敵を壁や柱へ激しく叩き飛ばす。",
+         .en = "Unleash a sharp wind slash along your aim direction to hurl foes into walls."},
+    [TEXT_GUIDE_S1_TIP] =
+        {.ja = "筆を離すと硯で墨が素早く回復！敵が落とす墨玉を拾えば戦いながら補給できる。",
+         .en = "Release the mouse to refill ink quickly, and sweep through dropped Ink Orbs."},
+    [TEXT_GUIDE_D1_KEY_DRAG] = {.ja = "左ドラッグ", .en = "L-Drag"},
+    [TEXT_GUIDE_D1_CAP_DRAG] = {.ja = "風筆（流れを生む）", .en = "Wind Brush"},
+    [TEXT_GUIDE_D1_KEY_INK] = {.ja = "墨ゲージ", .en = "Ink Ring"},
+    [TEXT_GUIDE_D1_CAP_INK] = {.ja = "離して回復・墨玉回収", .en = "Release to Refill + Orbs"},
+    [TEXT_GUIDE_D1_DRY] = {.ja = "かすれ", .en = "Dry"},
+    [TEXT_GUIDE_D1_KEY_CYC] = {.ja = "右クリック / E", .en = "RMB / E"},
+    [TEXT_GUIDE_D1_CAP_CYC] = {.ja = "渦印（敵と弾を吸う）", .en = "Cyclone (Pulls Foes)"},
+    [TEXT_GUIDE_D1_KEY_GALE] = {.ja = "Space", .en = "Space"},
+    [TEXT_GUIDE_D1_CAP_GALE] = {.ja = "風斬り（吹き飛ばし）", .en = "Gale (Knockback)"},
+    [TEXT_GUIDE_S2_TITLE] = {.ja = "ダメージの入り方 — 弾返し ＆ 叩きつけ",
+                             .en = "Dealing Damage - Deflect & Wall Slam"},
+    [TEXT_GUIDE_S2_H1] = {.ja = "敵弾を風で曲げて撃ち返す（弾返し）",
+                          .en = "Deflect Enemy Shots Back at Foes"},
+    [TEXT_GUIDE_S2_B1] =
+        {.ja = "弓妖の矢や火球を風筆・渦印で大きく曲げると味方弾になり、敵へ自動追尾する。",
+         .en = "Curve arrows or fireballs sharply with wind to turn them into homing ally shots."},
+    [TEXT_GUIDE_S2_H2] = {.ja = "壁や岩柱へ叩きつける（叩きつけ）",
+                          .en = "Slam Foes Into Walls & Pillars"},
+    [TEXT_GUIDE_S2_B2] =
+        {.ja = "風斬りや強い風で敵を画面端・岩柱・別の敵にぶつけると大ダメージ！軽量敵は即撃破。",
+         .en = "Blast enemies into edges, rock pillars, or each other for heavy slam damage."},
+    [TEXT_GUIDE_S2_H3] = {.ja = "濃い墨で染めて「墨印」を刻め",
+                          .en = "Soak Foes With Ink for Ink Mark"},
+    [TEXT_GUIDE_S2_B3] =
+        {.ja = "濃い墨を通った敵には一定時間「墨印」が付き、その間の被ダメージが通常約2倍・主約1."
+               "5倍になる。",
+         .en = "Dense ink applies a timed Ink Mark: marked foes take ~2x damage (~1.5x on bosses) "
+               "while it lasts."},
+    [TEXT_GUIDE_S2_TIP] =
+        {.ja = "筆で直接なぞるだけでは敵は倒れない！「弾返し」「叩きつけ」「属性反応」の3つが主砲だ"
+               "。",
+         .en =
+             "Strokes alone do not hurt foes - Deflection, Slams, and Reactions are your weapons."},
+    [TEXT_GUIDE_D2_STRIP1] = {.ja = "① 弾返し", .en = "1. Deflect"},
+    [TEXT_GUIDE_D2_DEFLECT] = {.ja = "弾返し！", .en = "Deflected!"},
+    [TEXT_GUIDE_D2_STRIP2] = {.ja = "② 叩きつけ ＆ 墨印", .en = "2. Slam & Ink Mark"},
+    [TEXT_GUIDE_D2_MARK] = {.ja = "墨印 約2倍", .en = "Ink Mark ~2x"},
+    [TEXT_GUIDE_S3_TITLE] = {.ja = "炎と雷の属性反応 — 4大反応図鑑",
+                             .en = "Elemental Reactions - 4 Core Combos"},
+    [TEXT_GUIDE_S3_H1] = {.ja = "紅蓮墨嵐（墨＋炎）＆ 雷墨連鎖（墨＋雷）",
+                          .en = "Blazing (Ink+Fire) & Tempest (Ink+Storm)"},
+    [TEXT_GUIDE_S3_B1] =
+        {.ja = "炎は墨を燃やして広げ、通過弾を炎上弾に変える。雷は墨上の敵へ連鎖雷撃を飛ばす。",
+         .en =
+             "Fire spreads across ink and ignites shots. Storm arcs lightning across inked foes."},
+    [TEXT_GUIDE_S3_H2] = {.ja = "爆雷（炎＋雷）で重敵ごと吹き飛ばせ",
+                          .en = "Thunderburst (Fire + Storm) Blast"},
+    [TEXT_GUIDE_S3_B2] =
+        {.ja = "炎と雷が重なると大爆発！重い石鬼や密集した群れも一気に吹き飛ばし叩きつけを狙える。",
+         .en = "Fire meets Storm for an explosive blast that knocks back even heavy Stone Oni."},
+    [TEXT_GUIDE_S3_H3] = {.ja = "三元共鳴（墨＋炎＋雷）は最強の一掃技",
+                          .en = "Cataclysm (Ink + Fire + Storm)"},
+    [TEXT_GUIDE_S3_B3] =
+        {.ja = "三属性すべてを重ねると黄金の円相が炸裂！画面広域に大ダメージと連鎖雷撃を放つ。",
+         .en =
+             "Uniting all three elements triggers a golden enso shockwave that clears the field."},
+    [TEXT_GUIDE_S3_TIP] =
+        {.ja = "提灯妖の火球・雷球を渦印で墨溜まりへ巻き込むと、狙って大反応を起こせる！",
+         .en =
+             "Pull Lantern fireballs and storm orbs into an ink pool with Cyclone for big combos."},
+    [TEXT_GUIDE_D3_EQ_BLAZE] = {.ja = "墨 ＋ 炎", .en = "Ink + Fire"},
+    [TEXT_GUIDE_D3_SUB_BLAZE] = {.ja = "炎上拡大・継続ダメ", .en = "Spreading Burn & Fire Shots"},
+    [TEXT_GUIDE_D3_EQ_STORM] = {.ja = "墨 ＋ 雷", .en = "Ink + Storm"},
+    [TEXT_GUIDE_D3_SUB_STORM] = {.ja = "近くの敵へ連鎖雷撃", .en = "Chain Lightning Between Foes"},
+    [TEXT_GUIDE_D3_EQ_BURST] = {.ja = "炎 ＋ 雷", .en = "Fire + Storm"},
+    [TEXT_GUIDE_D3_SUB_BURST] = {.ja = "大爆発＋大吹き飛ばし",
+                                 .en = "Huge Blast + Heavy Knockback"},
+    [TEXT_GUIDE_D3_EQ_CATA] = {.ja = "墨 ＋ 炎 ＋ 雷", .en = "Ink + Fire + Storm"},
+    [TEXT_GUIDE_D3_SUB_CATA] = {.ja = "最強の広範囲一掃！", .en = "Ultimate Wide-Area Wipe!"},
+    [TEXT_GUIDE_S4_TITLE] = {.ja = "連殺・強化・墨庵 — 上達の心得",
+                             .en = "Chains, Blessings & Bokuan Mastery"},
+    [TEXT_GUIDE_S4_H1] = {.ja = "一筆連殺×2〜で「墨昇華」を発動",
+                          .en = "Chain x2+ Triggers Ink Surge"},
+    [TEXT_GUIDE_S4_B1] =
+        {.ja = "短時間に連続撃破すると2連殺から墨昇華へ突入！風筆の墨消費が半減し、筆勢と幅が強化さ"
+               "れる。",
+         .en = "Rapid kills trigger Ink Surge at Chain x2+, cutting stroke ink cost with stronger, "
+               "wider strokes."},
+    [TEXT_GUIDE_S4_H2] = {.ja = "同じ軸の強化札を重ねて型を極めよ",
+                          .en = "Stack Blessings Along a Chosen Axis"},
+    [TEXT_GUIDE_S4_B2] =
+        {.ja = "紅蓮・雷霆・烈風・墨道の4軸から軸を絞ると相乗効果が爆発。大遺物でさらに化ける。",
+         .en = "Focus on Blaze, Thunder, Gale, or Inkway synergies - then amplify with Relics."},
+    [TEXT_GUIDE_S4_H3] = {.ja = "持ち帰った墨晶は「墨庵」で永続強化",
+                          .en = "Spend Ink Crystals in the Bokuan"},
+    [TEXT_GUIDE_S4_B3] =
+        {.ja = "落墨しても墨晶は貯まる！社の最大HPや墨上限を上げ、強力な大遺物を解放しよう。",
+         .en = "Even defeats earn Ink Crystals. Upgrade Shrine HP, Ink Max, and unlock Relics."},
+    [TEXT_GUIDE_S4_TIP] =
+        {.ja = "ロビー右側の和紙では豪筆・朱筆・細筆をいつでも試し描きできる。手に馴染む筆で出陣し"
+               "よう！",
+         .en = "Test Heavy, Ember, and Quill brushes right on the Lobby paper before you Sortie!"},
+    [TEXT_GUIDE_D4_SURGE_SUB] = {.ja = "消費軽減＆筆勢強化", .en = "Lower Cost & Stronger Strokes"},
+    [TEXT_GUIDE_D4_BLESS_HDR] = {.ja = "強化札の相乗効果", .en = "Blessing Synergy"},
+    [TEXT_GUIDE_D4_BLESS_AXIS3] = {.ja = "烈風・墨道", .en = "Gale / Inkway"},
+    [TEXT_GUIDE_D4_BOKUAN_SUB] = {.ja = "墨晶で永続強化＆大遺物解放",
+                                  .en = "Permanent Upgrades & Relics"},
 
     /* Seals & Showcase */
     [TEXT_SEAL_PURIFY] = {.ja = "祓", .en = "P"},
@@ -615,6 +792,48 @@ TextId text_act_short(int act_index)
         return TEXT_ACT2_SHORT;
     case 2:
         return TEXT_ACT3_SHORT;
+    default:
+        return TEXT_NONE;
+    }
+}
+
+TextId text_act_subtitle(int act_index)
+{
+    switch (act_index) {
+    case 0:
+        return TEXT_ACT1_SUBTITLE;
+    case 1:
+        return TEXT_ACT2_SUBTITLE;
+    case 2:
+        return TEXT_ACT3_SUBTITLE;
+    default:
+        return TEXT_NONE;
+    }
+}
+
+TextId text_act_trait(int act_index)
+{
+    switch (act_index) {
+    case 0:
+        return TEXT_ACT1_TRAIT;
+    case 1:
+        return TEXT_ACT2_TRAIT;
+    case 2:
+        return TEXT_ACT3_TRAIT;
+    default:
+        return TEXT_NONE;
+    }
+}
+
+TextId text_act_desc(int act_index)
+{
+    switch (act_index) {
+    case 0:
+        return TEXT_ACT1_DESC;
+    case 1:
+        return TEXT_ACT2_DESC;
+    case 2:
+        return TEXT_ACT3_DESC;
     default:
         return TEXT_NONE;
     }

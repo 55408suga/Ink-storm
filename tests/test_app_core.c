@@ -778,6 +778,12 @@ static void test_menu_resting_mouse_yields_to_keyboard_until_moved(void)
 
     TEST_ASSERT_TRUE(menu_pointer_track(&p, 140.0f, 100.0f));
     TEST_ASSERT_EQUAL_INT32(1, menu_pointer_visible_hover(&p, 1, true, false));
+
+    /* A keyboard shortcut pressed on the same frame as mouse motion still suppresses hover until
+     * a later mouse move arrives without a keyboard shortcut. */
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 1, true, true));
+    TEST_ASSERT_EQUAL_INT32(UI_HOVER_NONE, menu_pointer_visible_hover(&p, 1, false, false));
+    TEST_ASSERT_EQUAL_INT32(1, menu_pointer_visible_hover(&p, 1, true, false));
 }
 
 static void test_menu_new_context_keeps_default_focus_under_resting_mouse(void)
@@ -857,12 +863,29 @@ static void test_menu_lobby_stroke_starts_only_on_open_canvas(void)
     TEST_ASSERT_FALSE(menu_lobby_stroke_gate(&active, false, false, true));
 }
 
+static void test_menu_guide_page_clamps_to_bounds(void)
+{
+    TEST_ASSERT_EQUAL_INT32(0, menu_nav_guide_page(0, -1));
+    TEST_ASSERT_EQUAL_INT32(0, menu_nav_guide_page(-5, 0));
+    TEST_ASSERT_EQUAL_INT32(1, menu_nav_guide_page(0, 1));
+    TEST_ASSERT_EQUAL_INT32(3, menu_nav_guide_page(4, -1));
+    TEST_ASSERT_EQUAL_INT32(GUIDE_SLIDE_COUNT - 1, menu_nav_guide_page(GUIDE_SLIDE_COUNT - 1, 1));
+    TEST_ASSERT_EQUAL_INT32(GUIDE_SLIDE_COUNT - 1, menu_nav_guide_page(99, 0));
+    for (int32_t i = 0; i < GUIDE_SLIDE_COUNT; ++i) {
+        TEST_ASSERT_EQUAL_INT32(i, menu_nav_guide_page(i, 0));
+    }
+}
+
 static void test_menu_transition_frame_skips_gameplay(void)
 {
     TEST_ASSERT_FALSE(menu_action_ends_frame(MENU_ACT_NONE));
     TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_PAUSE_RESUME));
     TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_BRUSH_PICK));
     TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_RESULT_RETRY));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_LOBBY_GUIDE));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_GUIDE_PREV));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_GUIDE_NEXT));
+    TEST_ASSERT_TRUE(menu_action_ends_frame(MENU_ACT_GUIDE_JUMP));
 }
 
 static void test_latch_anchor_starts_stroke_at_press_but_keeps_skills(void)
@@ -1070,6 +1093,7 @@ int main(void)
     RUN_TEST(test_menu_bokuan_grid_navigation);
     RUN_TEST(test_menu_result_cursor_walks_visible_buttons);
     RUN_TEST(test_menu_lobby_stroke_starts_only_on_open_canvas);
+    RUN_TEST(test_menu_guide_page_clamps_to_bounds);
     RUN_TEST(test_menu_transition_frame_skips_gameplay);
     RUN_TEST(test_latch_anchor_starts_stroke_at_press_but_keeps_skills);
     RUN_TEST(test_latch_resume_reanchors_and_drops_queued_input);

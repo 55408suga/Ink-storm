@@ -18,6 +18,7 @@ void menu_pointer_enter_context(UiPointer *p, int32_t context);
 int32_t menu_pointer_visible_hover(UiPointer *p, int32_t hit, bool moved, bool nav_key);
 int32_t menu_nav_bokuan(int32_t cursor, MenuNavKey key);
 int32_t menu_nav_result(int32_t cursor, bool has_endless, MenuNavKey key);
+int32_t menu_nav_guide_page(int32_t page, int32_t delta);
 bool menu_lobby_stroke_gate(bool *active, bool pressed, bool down, bool press_on_ui);
 bool menu_action_ends_frame(MenuAction action);
 

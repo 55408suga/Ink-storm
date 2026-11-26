@@ -7,13 +7,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define LOBBY_MENU_COUNT 5
+#define GUIDE_SLIDE_COUNT 5
+
 typedef enum {
     UI_SCENE_RUN = 0,
     UI_SCENE_SHOWCASE,
     UI_SCENE_TITLE_LOBBY,
     UI_SCENE_BRUSH_SELECT,
     UI_SCENE_BOKUAN,
-    UI_SCENE_SETTINGS
+    UI_SCENE_SETTINGS,
+    UI_SCENE_GUIDE
 } UiScene;
 
 typedef enum {
@@ -66,9 +70,10 @@ typedef struct {
     float settings_notice_t;
     int32_t settings_notice_kind;
 
-    /* Menu pointer tracking, Result keyboard cursor, Lobby test-stroke gate */
+    /* Menu pointer tracking, Result keyboard cursor, Lobby test-stroke gate, Guide slide */
     UiPointer pointer;
     int32_t result_cursor;
+    int32_t guide_page;
     bool lobby_stroke_active;
     bool lobby_canvas_hover;
 } UiView;

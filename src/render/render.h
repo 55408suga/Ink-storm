@@ -101,13 +101,26 @@ typedef struct {
     bool has_crystal;
 } RewardLayout;
 
+#define GUIDE_HOVER_PREV GUIDE_SLIDE_COUNT
+#define GUIDE_HOVER_NEXT (GUIDE_SLIDE_COUNT + 1)
+#define GUIDE_HOVER_CLOSE (GUIDE_SLIDE_COUNT + 2)
+
 typedef struct {
-    Rectangle items[4]; /* 0: Sortie, 1: Bokuan, 2: Settings, 3: Quit */
+    /* 0: Sortie, 1: Guide, 2: Bokuan, 3: Settings, 4: Quit */
+    Rectangle items[LOBBY_MENU_COUNT];
     Rectangle title_rect;
     Rectangle footer_rect;
     Rectangle brush_rect;
     Rectangle hint_rect;
 } LobbyLayout;
+
+typedef struct {
+    Rectangle panel_rect;
+    Rectangle prev_rect;
+    Rectangle next_rect;
+    Rectangle close_rect;
+    Rectangle dots[GUIDE_SLIDE_COUNT];
+} GuideLayout;
 
 typedef struct {
     Rectangle cards[BRUSH_STYLE_COUNT];
@@ -333,6 +346,7 @@ void render_close(RenderState *r);
 
 void render_reward_layout(const GameState *g, RewardLayout *out);
 void render_lobby_layout(LobbyLayout *out);
+void render_guide_layout(GuideLayout *out);
 void render_brush_select_layout(BrushSelectLayout *out);
 void render_bokuan_layout(BokuanLayout *out);
 void render_pause_layout(PauseLayout *out);

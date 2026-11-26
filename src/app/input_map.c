@@ -14,12 +14,24 @@ static bool any_nav_key_pressed(void)
            IsKeyPressed(KEY_RIGHT);
 }
 
-static int32_t pick_hover(UiView *ui, int32_t hit, bool moved)
+static bool guide_nav_key_pressed(void)
 {
-    const int32_t hover =
-        menu_pointer_visible_hover(&ui->pointer, hit, moved, any_nav_key_pressed());
+    return any_nav_key_pressed() || IsKeyPressed(KEY_A) || IsKeyPressed(KEY_D) ||
+           IsKeyPressed(KEY_SPACE) || is_enter_pressed() || IsKeyPressed(KEY_ONE) ||
+           IsKeyPressed(KEY_TWO) || IsKeyPressed(KEY_THREE) || IsKeyPressed(KEY_FOUR) ||
+           IsKeyPressed(KEY_FIVE);
+}
+
+static int32_t pick_hover_ex(UiView *ui, int32_t hit, bool moved, bool nav_key)
+{
+    const int32_t hover = menu_pointer_visible_hover(&ui->pointer, hit, moved, nav_key);
     ui->hover_choice = hover;
     return hover;
+}
+
+static int32_t pick_hover(UiView *ui, int32_t hit, bool moved)
+{
+    return pick_hover_ex(ui, hit, moved, any_nav_key_pressed());
 }
 
 RawInput input_map_read(const GameState *g, UiView *ui)
@@ -158,7 +170,7 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         LobbyLayout layout;
         render_lobby_layout(&layout);
         int32_t hit = UI_HOVER_NONE;
-        for (int32_t i = 0; i < 4; ++i) {
+        for (int32_t i = 0; i < LOBBY_MENU_COUNT; ++i) {
             if (CheckCollisionPointRec(mouse, layout.items[i])) {
                 hit = i;
                 break;
@@ -182,9 +194,9 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         }
 
         if (IsKeyPressed(KEY_UP)) {
-            ui->lobby_cursor = (ui->lobby_cursor + 3) % 4;
+            ui->lobby_cursor = (ui->lobby_cursor + LOBBY_MENU_COUNT - 1) % LOBBY_MENU_COUNT;
         } else if (IsKeyPressed(KEY_DOWN)) {
-            ui->lobby_cursor = (ui->lobby_cursor + 1) % 4;
+            ui->lobby_cursor = (ui->lobby_cursor + 1) % LOBBY_MENU_COUNT;
         }
         if (IsKeyPressed(KEY_LEFT)) {
             out.lobby_brush_step = -1;
@@ -208,23 +220,83 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
             pick = 1;
         } else if (IsKeyPressed(KEY_THREE)) {
             pick = 2;
-        } else if (IsKeyPressed(KEY_FOUR) || IsKeyPressed(KEY_ESCAPE)) {
+        } else if (IsKeyPressed(KEY_FOUR)) {
             pick = 3;
+        } else if (IsKeyPressed(KEY_FIVE) || IsKeyPressed(KEY_ESCAPE)) {
+            pick = 4;
         }
 
         if (pick == 0) {
             out.action = MENU_ACT_LOBBY_SORTIE;
         } else if (pick == 1) {
-            out.action = MENU_ACT_LOBBY_BOKUAN;
+            out.action = MENU_ACT_LOBBY_GUIDE;
         } else if (pick == 2) {
-            out.action = MENU_ACT_LOBBY_SETTINGS;
+            out.action = MENU_ACT_LOBBY_BOKUAN;
         } else if (pick == 3) {
+            out.action = MENU_ACT_LOBBY_SETTINGS;
+        } else if (pick == 4) {
             out.action = MENU_ACT_LOBBY_QUIT;
         } else {
             out.lobby_paint = stroking;
             out.lobby_stroke_started = stroking && !was_stroking;
             out.lobby_cyclone = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E);
             out.lobby_gale = IsKeyPressed(KEY_SPACE);
+        }
+        return out;
+    }
+
+    if (ui->scene == UI_SCENE_GUIDE) {
+        GuideLayout layout;
+        render_guide_layout(&layout);
+        int32_t hit = UI_HOVER_NONE;
+        for (int32_t i = 0; i < GUIDE_SLIDE_COUNT; ++i) {
+            if (CheckCollisionPointRec(mouse, layout.dots[i])) {
+                hit = i;
+                break;
+            }
+        }
+        if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.prev_rect)) {
+            hit = GUIDE_HOVER_PREV;
+        } else if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.next_rect)) {
+            hit = GUIDE_HOVER_NEXT;
+        } else if (hit == UI_HOVER_NONE && CheckCollisionPointRec(mouse, layout.close_rect)) {
+            hit = GUIDE_HOVER_CLOSE;
+        }
+        (void)pick_hover_ex(ui, hit, moved, guide_nav_key_pressed());
+
+        if (IsKeyPressed(KEY_ESCAPE) || (left_pressed && hit == GUIDE_HOVER_CLOSE)) {
+            out.action = MENU_ACT_BACK;
+            out.ui_clicked = left_pressed;
+        } else if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A) ||
+                   (left_pressed && hit == GUIDE_HOVER_PREV)) {
+            out.action = MENU_ACT_GUIDE_PREV;
+            out.ui_clicked = left_pressed;
+        } else if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D) || IsKeyPressed(KEY_SPACE) ||
+                   (left_pressed && hit == GUIDE_HOVER_NEXT)) {
+            out.action = MENU_ACT_GUIDE_NEXT;
+            out.ui_clicked = left_pressed;
+        } else if (is_enter_pressed()) {
+            out.action =
+                ui->guide_page >= GUIDE_SLIDE_COUNT - 1 ? MENU_ACT_BACK : MENU_ACT_GUIDE_NEXT;
+        } else if (left_pressed && hit >= 0 && hit < GUIDE_SLIDE_COUNT) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = hit;
+            out.ui_clicked = true;
+        } else if (IsKeyPressed(KEY_ONE)) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = 0;
+        } else if (IsKeyPressed(KEY_TWO)) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = 1;
+        } else if (IsKeyPressed(KEY_THREE)) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = 2;
+        } else if (IsKeyPressed(KEY_FOUR)) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = 3;
+        } else if (IsKeyPressed(KEY_FIVE)) {
+            out.action = MENU_ACT_GUIDE_JUMP;
+            out.arg = 4;
         }
         return out;
     }

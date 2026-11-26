@@ -91,6 +91,7 @@ static bool scene_draws_combat_world(const UiView *ui)
     case UI_SCENE_TITLE_LOBBY:
     case UI_SCENE_BRUSH_SELECT:
     case UI_SCENE_BOKUAN:
+    case UI_SCENE_GUIDE:
     default:
         return false;
     }
@@ -102,7 +103,7 @@ static bool scene_is_lobby_canvas(const UiView *ui)
         return false;
     }
     return ui->scene == UI_SCENE_TITLE_LOBBY || ui->scene == UI_SCENE_BRUSH_SELECT ||
-           ui->scene == UI_SCENE_BOKUAN ||
+           ui->scene == UI_SCENE_BOKUAN || ui->scene == UI_SCENE_GUIDE ||
            (ui->scene == UI_SCENE_SETTINGS && ui->settings_return_scene != UI_SCENE_RUN);
 }
 
@@ -157,6 +158,9 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
     case UI_SCENE_SETTINGS:
         render_draw_settings_ui(r, g, ui);
         break;
+    case UI_SCENE_GUIDE:
+        render_draw_guide_ui(r, g, ui);
+        break;
     case UI_SCENE_SHOWCASE:
         if (ui->showcase_page <= 2) {
             render_draw_clear_banner(r);
@@ -168,8 +172,12 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         } else if (ui->showcase_page == 4) {
             if (ui->showcase_subpage == 0) {
                 render_draw_lobby_ui(r, g, ui);
-            } else {
+            } else if (ui->showcase_subpage == 1) {
                 render_draw_brush_select_ui(r, g, ui);
+            } else if (ui->showcase_subpage >= 2 && ui->showcase_subpage < 2 + GUIDE_SLIDE_COUNT) {
+                UiView guide_ui = *ui;
+                guide_ui.guide_page = ui->showcase_subpage - 2;
+                render_draw_guide_ui(r, g, &guide_ui);
             }
         } else if (ui->showcase_page == 5) {
             if (ui->showcase_subpage == 0) {

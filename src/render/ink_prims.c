@@ -503,15 +503,24 @@ Color ink_knockout_color(int act_index)
     return pal_lerp(pal_paper_for_act(act_index), PAL_GOFUN, 0.5f, 0.85f);
 }
 
-/* Two-character seals (e.g. 墨嵐, 三元) overflowed the stamp when drawn on one line; carved seals
- * stack them vertically, and anything longer is shrunk to fit the square. */
+/* Two-character Japanese seals (e.g. 墨嵐, 三元) overflowed the stamp when drawn on one line;
+ * carved seals stack them vertically, and ASCII or longer labels are shrunk horizontally to fit. */
 static void draw_seal_glyphs(const RenderState *r, TextId glyph, Vector2 at, float size,
                              PaletteId pal, float alpha)
 {
-    if (!r->use_ja || glyph == TEXT_NONE) {
+    if (glyph == TEXT_NONE) {
         return;
     }
-    const char *txt = text_get(glyph, true);
+    const char *txt = text_get(glyph, r->use_ja);
+    if (txt == NULL || txt[0] == '\0') {
+        return;
+    }
+    if (!r->use_ja) {
+        const float max_sz = fmaxf(10.0f, size * 0.48f);
+        const float min_sz = fmaxf(8.0f, size * 0.24f);
+        render_draw_text_fit(r, txt, at, size * 0.78f, max_sz, min_sz, pal, alpha, false);
+        return;
+    }
     const size_t len = strlen(txt);
     const size_t first = text_utf8_next(txt, 0, len);
     const size_t second = text_utf8_next(txt, first, len);
