@@ -14,7 +14,8 @@ description: >-
 
 - 描画・キャラ・ボス・敵・背景・UI・VFX・画面揺れ（`src/render/`）
 - シェーダ・流体表現（`src/render/*.glsl`, `fluid_view.c`, `post_fx.c`, `scenery.c`）
-- 音声・筆音・SE・BGM アセット（`src/audio/`, `src/app/audio_out.*`, `assets/audio/`）
+- 音声・筆音・SE・BGM アセット（`src/audio/`, `assets/audio/`）
+- 実機オーディオ出力経路（`src/app/audio_out.*`）は `qa_record` を経由しないため、オフライン QA に加えて必ず実ウィンドウ（`nix develop -c ./build/release/inkstorm`）で実機再生・遅延・音切れも確認する。
 
 ## ローカル検証と CI 検証の役割分担
 
@@ -28,7 +29,8 @@ description: >-
 ### 1. ビルド
 
 ```sh
-nix develop -c cmake --build build/release --target inkstorm qa_record -j
+nix develop -c cmake --preset release &&
+    nix develop -c cmake --build build/release --target inkstorm qa_record -j
 ```
 
 ### 2. 変更内容に応じたシナリオを実行
