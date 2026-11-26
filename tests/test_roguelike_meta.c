@@ -2288,6 +2288,90 @@ static void test_autoplay_skill_budget_and_surge_expiry(void)
     game_destroy(g);
 }
 
+static void test_wind_return_ignores_departing_projectile(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_WIND_RETURN));
+
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    const EntityId departing =
+        game_debug_spawn_projectile(g, PROJ_ARROW, sx + 40.0f, sy, 150.0f, 0.0f);
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_GALE));
+    TEST_ASSERT_FALSE(game_proj(g, departing)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.wind_return_cd);
+
+    game_velocity_mut(g, departing)->vx = -150.0f;
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_GALE));
+    TEST_ASSERT_TRUE(game_proj(g, departing)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->internal.wind_return_cd);
+    game_destroy(g);
+}
+
+static void test_fallback_repair_overflow_contract_regular_vs_relic(void)
+{
+    /* 1. Regular wave fallback (all upgrades Lv3): repair +1 at full HP awards 0 overflow crystals
+     * so it never outpays the dedicated +10 crystal fallback card. */
+    {
+        GameState *g = game_create(NULL);
+        TEST_ASSERT_NOT_NULL(g);
+        for (int id = 0; id < (int)UPG_COUNT; ++id) {
+            for (int lv = 0; lv < 3; ++lv) {
+                TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, (UpgradeId)id));
+            }
+        }
+
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        enter_reward_phase(g);
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_FALLBACK, g->run.reward.kind);
+        TEST_ASSERT_EQUAL_INT32(1, g->run.reward.repair_amount);
+        TEST_ASSERT_EQUAL_INT32(10, g->run.reward.crystal_reward);
+        TEST_ASSERT_FALSE(rewards_repair_converts_excess(g));
+
+        const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+        game_step(g, NULL, &repair);
+        TEST_ASSERT_EQUAL_INT32(g->shrines[0].max_hp, g->shrines[0].hp);
+        TEST_ASSERT_EQUAL_INT32(0, g->run.bonus_crystals);
+        game_destroy(g);
+    }
+
+    /* 2. Relic-exhausted boss fallback: repair +3 at full HP converts all 3 excess HP -> +45 Cr. */
+    {
+        RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(6003));
+        cfg.unlocked_relic_mask = 0u;
+        GameState *g = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(g);
+        for (int r = 0; r < (int)RELIC_SEAL_OF_TRINITY; ++r) {
+            TEST_ASSERT_TRUE(roguelike_grant_relic(g, (RelicId)r));
+        }
+
+        game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+        g->internal.wave_clear_is_boss = true;
+        g->phase = RUN_PHASE_REWARD;
+        g->phase_t = 0.0f;
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        rewards_generate_relic_offer(g);
+
+        TEST_ASSERT_EQUAL_INT(REWARD_KIND_FALLBACK, g->run.reward.kind);
+        TEST_ASSERT_EQUAL_INT32(3, g->run.reward.repair_amount);
+        TEST_ASSERT_EQUAL_INT32(30, g->run.reward.crystal_reward);
+        TEST_ASSERT_TRUE(rewards_repair_converts_excess(g));
+
+        const GameCommand repair = {.type = CMD_REPAIR_SHRINE, .arg = 0};
+        game_step(g, NULL, &repair);
+        TEST_ASSERT_EQUAL_INT32(g->shrines[0].max_hp, g->shrines[0].hp);
+        TEST_ASSERT_EQUAL_INT32(45, g->run.bonus_crystals);
+        game_destroy(g);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2325,5 +2409,7 @@ int main(void)
     RUN_TEST(test_p2_fallback_offers_and_overflow_conversion);
     RUN_TEST(test_ink_economy_orb_chain_refund_and_surge_cost);
     RUN_TEST(test_autoplay_skill_budget_and_surge_expiry);
+    RUN_TEST(test_wind_return_ignores_departing_projectile);
+    RUN_TEST(test_fallback_repair_overflow_contract_regular_vs_relic);
     return UNITY_END();
 }

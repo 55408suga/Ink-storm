@@ -96,12 +96,17 @@ void render_post_init(RenderState *r, const RenderOptions *opt)
     TraceLog(LOG_INFO, "INKSTORM: post shader enabled");
 }
 
+bool render_post_available(const RenderState *r)
+{
+    return r != NULL && r->post_shader.id != 0 && r->scene.id != 0;
+}
+
 void render_set_post_enabled(RenderState *r, bool enabled)
 {
     if (r == NULL) {
         return;
     }
-    r->post_enabled = enabled && r->post_shader.id != 0 && r->scene.id != 0;
+    r->post_enabled = enabled && render_post_available(r);
 }
 
 void render_post_close(RenderState *r)

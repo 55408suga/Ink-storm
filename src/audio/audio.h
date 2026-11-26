@@ -18,6 +18,8 @@
 #define AUDIO_BRUSH_SVF_COUNT 13
 #define AUDIO_BRUSH_WALK_COUNT 6
 #define AUDIO_VOICE_SVF_COUNT 5
+#define AUDIO_EXTERNAL_SE_CEILING 0.52f
+#define AUDIO_EXTERNAL_BGM_GAIN 0.45f
 
 typedef enum { BGM_NONE = 0, BGM_LOBBY, BGM_BATTLE, BGM_BOSS, BGM_VICTORY } BgmTrack;
 
@@ -93,6 +95,18 @@ typedef struct {
 } AudioTickState;
 
 typedef struct {
+    uint64_t sample;
+    float drum_env;
+    float drum_ph;
+    float koto_env;
+    float koto_ph;
+    float koto_freq;
+    float drone_ph;
+    float victory_t;
+    int32_t victory_step;
+} AudioBgmSynth;
+
+typedef struct {
     uint64_t samples_rendered;
     uint64_t next_tick_sample;
     uint64_t last_state_sample;
@@ -152,16 +166,9 @@ typedef struct {
     float wind_lp;
     float wind_bp;
 
-    /* Procedural BGM oscillator / sequencer state */
-    uint64_t bgm_sample;
-    float bgm_drum_env;
-    float bgm_drum_ph;
-    float bgm_koto_env;
-    float bgm_koto_ph;
-    float bgm_koto_freq;
-    float bgm_drone_ph;
-    float bgm_victory_t;
-    int32_t bgm_victory_step;
+    /* Procedural BGM oscillator / sequencer decks (active + outgoing crossfade) */
+    AudioBgmSynth bgm_cur;
+    AudioBgmSynth bgm_prev;
 
     /* Reaction retrigger limits on the sample clock, so batched and per-tick rendering agree */
     uint64_t thunderburst_next_sample;
@@ -184,8 +191,9 @@ void audio_init(AudioState *audio, uint64_t seed);
 void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t se);
 void audio_set_lobby_mode(AudioState *audio, bool lobby);
 void audio_set_external_bgm(AudioState *audio, bool external_active);
-/* Bitmask of loaded external BgmTrack slots (1u << track) so scene transitions suppress the
- * procedural fallback on the very next callback without waiting for the main-thread pump. */
+/* Bitmask of loaded external BgmTrack slots (1u << track) so each crossfade deck independently
+ * suppresses procedural fallback on externally backed tracks while letting outgoing or incoming
+ * procedural fallback tracks crossfade smoothly. */
 void audio_set_external_bgm_mask(AudioState *audio, uint32_t track_mask);
 void audio_set_paused(AudioState *audio, bool paused);
 /* Off by default so offline and batched rendering keep their full sub-tick schedule. */

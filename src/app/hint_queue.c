@@ -53,3 +53,19 @@ int32_t hint_queue_step(HintQueue *q, HintId *active, float *active_t, float dt,
     *active_t = HINT_SHOW_SECONDS;
     return (int32_t)*active;
 }
+
+int32_t hint_queue_step_enabled(HintQueue *q, HintId *active, float *active_t, float dt,
+                                bool visible, bool enabled)
+{
+    if (!enabled) {
+        hint_queue_clear(q);
+        if (active != NULL) {
+            *active = HINT_STROKE;
+        }
+        if (active_t != NULL) {
+            *active_t = 0.0f;
+        }
+        return -1;
+    }
+    return hint_queue_step(q, active, active_t, dt, visible);
+}

@@ -1738,6 +1738,188 @@ static void test_audio_quick_pause_and_resume_never_replays_a_queued_stroke(void
     game_destroy(g);
 }
 
+static void test_audio_procedural_bgm_crossfade_preserves_outgoing_melody(void)
+{
+    enum { WARMUP = AUDIO_SAMPLE_RATE * 2 + 256, WIN = 256, FADE_TAIL = AUDIO_SAMPLE_RATE * 3 / 5 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *ref = calloc(1, sizeof *ref);
+    int16_t *warm = calloc(WARMUP, sizeof *warm);
+    int16_t *xfade = calloc(WIN, sizeof *xfade);
+    int16_t *cont = calloc(WIN, sizeof *cont);
+    int16_t *tail = calloc(FADE_TAIL, sizeof *tail);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(ref);
+    TEST_ASSERT_NOT_NULL(warm);
+    TEST_ASSERT_NOT_NULL(xfade);
+    TEST_ASSERT_NOT_NULL(cont);
+    TEST_ASSERT_NOT_NULL(tail);
+
+    audio_init(a, UINT64_C(41));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_lobby_mode(a, true);
+    audio_render(a, warm, WARMUP);
+    TEST_ASSERT_TRUE(a->bgm_cur.koto_env > 0.10f);
+
+    /* Clone right before starting a run so `ref` continues the lobby melody uninterrupted. */
+    *ref = *a;
+
+    game_debug_start_wave(g, 0);
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    audio_render(a, xfade, WIN);
+    audio_render(ref, cont, WIN);
+
+    /* Sample 0 of the crossfade (xfade_t == 0) must match the uninterrupted lobby melody. */
+    TEST_ASSERT_INT32_WITHIN(2, (int32_t)cont[0], (int32_t)xfade[0]);
+    TEST_ASSERT_TRUE(rms_of(cont, WIN) > 400.0);
+    TEST_ASSERT_TRUE(rms_of(xfade, WIN) > rms_of(cont, WIN) * 0.85);
+
+    audio_render(a, tail, FADE_TAIL);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, a->xfade_t);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, a->active_bgm);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(tail);
+    free(cont);
+    free(xfade);
+    free(warm);
+    free(ref);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_external_bgm_headroom_prevents_live_clipping(void)
+{
+    enum { N = AUDIO_SAMPLE_RATE / 4 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *buf = calloc(N, sizeof *buf);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(buf);
+
+    audio_init(a, UINT64_C(42));
+    audio_set_volumes(a, 100, 100, 100);
+    audio_set_external_bgm(a, true);
+
+    game_debug_start_wave(g, 0);
+    g->run.chain = 5;
+    g->event_count = 0;
+    for (int k = 0; k < 4; ++k) {
+        game_push_event(g, (GameEvent){.type = EV_KILL});
+    }
+    game_push_event(g, (GameEvent){.type = EV_SLAM});
+    audio_consume_events(a, g);
+    audio_render(a, buf, N);
+
+    const float se_peak_norm = (float)peak_abs(buf, N) / 32767.0f;
+    TEST_ASSERT_TRUE(se_peak_norm > 0.20f);
+    TEST_ASSERT_TRUE(se_peak_norm <= AUDIO_EXTERNAL_SE_CEILING + 1e-4f);
+    TEST_ASSERT_TRUE(se_peak_norm + AUDIO_EXTERNAL_BGM_GAIN <= 0.98f);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(buf);
+    free(a);
+    game_destroy(g);
+}
+
+static void test_audio_mixed_procedural_to_external_crossfade_fades_out_smoothly(void)
+{
+    enum {
+        WARMUP = AUDIO_SAMPLE_RATE * 2 + 256,
+        WIN = 256,
+        MID_SKIP = AUDIO_SAMPLE_RATE / 4 - WIN,
+        FADE_TAIL = AUDIO_SAMPLE_RATE * 3 / 5
+    };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    AudioState *ref = calloc(1, sizeof *ref);
+    int16_t *warm = calloc(WARMUP, sizeof *warm);
+    int16_t *xfade = calloc(WIN, sizeof *xfade);
+    int16_t *cont = calloc(WIN, sizeof *cont);
+    int16_t *mid_skip = calloc(MID_SKIP, sizeof *mid_skip);
+    int16_t *mid = calloc(WIN, sizeof *mid);
+    int16_t *tail = calloc(FADE_TAIL, sizeof *tail);
+    int16_t *after = calloc(WIN, sizeof *after);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(ref);
+    TEST_ASSERT_NOT_NULL(warm);
+    TEST_ASSERT_NOT_NULL(xfade);
+    TEST_ASSERT_NOT_NULL(cont);
+    TEST_ASSERT_NOT_NULL(mid_skip);
+    TEST_ASSERT_NOT_NULL(mid);
+    TEST_ASSERT_NOT_NULL(tail);
+    TEST_ASSERT_NOT_NULL(after);
+
+    /* Battle OGG is loaded externally, while Lobby OGG is missing (procedural fallback). */
+    const uint32_t mask = UINT32_C(1) << (unsigned)BGM_BATTLE;
+    audio_init(a, UINT64_C(43));
+    audio_set_volumes(a, 100, 100, 0);
+    audio_set_external_bgm_mask(a, mask);
+    audio_set_lobby_mode(a, true);
+    a->wind_target = 0.0f;
+    audio_render(a, warm, WARMUP);
+    TEST_ASSERT_TRUE(a->bgm_cur.koto_env > 0.10f);
+
+    /* Clone right before transition with matching external-headroom ceiling for sample-0 check. */
+    *ref = *a;
+    audio_set_external_bgm(ref, true);
+
+    game_debug_start_wave(g, 0);
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    a->state_q[a->state_q_head].wind_target = 0.0f;
+    audio_set_external_bgm(a, true);
+
+    audio_render(a, xfade, WIN);
+    audio_render(ref, cont, WIN);
+
+    /* Outgoing procedural lobby melody must stay continuous on sample 0 instead of dropping to 0.
+     */
+    TEST_ASSERT_INT32_WITHIN(2, (int32_t)cont[0], (int32_t)xfade[0]);
+    TEST_ASSERT_TRUE(peak_abs(xfade, 64u) > 200);
+    const double start_rms = rms_of(xfade, WIN);
+    TEST_ASSERT_TRUE(start_rms > rms_of(cont, WIN) * 0.85);
+
+    /* Mid-crossfade (~0.25s) must fade smoothly downward while still audible. */
+    audio_render(a, mid_skip, MID_SKIP);
+    audio_render(a, mid, WIN);
+    const double mid_rms = rms_of(mid, WIN);
+    TEST_ASSERT_TRUE(mid_rms > 100.0);
+    TEST_ASSERT_TRUE(mid_rms < start_rms * 0.75);
+
+    /* Once faded in, external Battle track remains silenced in procedural synth (sample == 0). */
+    audio_render(a, tail, FADE_TAIL);
+    audio_render(a, after, WIN);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, a->xfade_t);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, a->active_bgm);
+    TEST_ASSERT_EQUAL_UINT64(0u, a->bgm_cur.sample);
+    TEST_ASSERT_EQUAL_INT32(0, peak_abs(after, WIN));
+
+    /* Reverse transition: returning to procedural Lobby while external Battle still fades out
+     * (external_bgm == true) still synthesizes and fades in the incoming procedural Lobby. */
+    audio_set_lobby_mode(a, true);
+    a->wind_target = 0.0f;
+    audio_render(a, tail, AUDIO_SAMPLE_RATE / 2);
+    TEST_ASSERT_TRUE(a->bgm_cur.sample > 0u);
+    TEST_ASSERT_TRUE(peak_abs(tail, AUDIO_SAMPLE_RATE / 2) > 200);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(after);
+    free(tail);
+    free(mid);
+    free(mid_skip);
+    free(cont);
+    free(xfade);
+    free(warm);
+    free(ref);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1780,5 +1962,8 @@ int main(void)
     RUN_TEST(test_audio_grain_step_survives_non_finite_and_out_of_range_state);
     RUN_TEST(test_audio_validator_rejects_non_finite_queued_ticks_and_voices);
     RUN_TEST(test_audio_quick_pause_and_resume_never_replays_a_queued_stroke);
+    RUN_TEST(test_audio_procedural_bgm_crossfade_preserves_outgoing_melody);
+    RUN_TEST(test_audio_external_bgm_headroom_prevents_live_clipping);
+    RUN_TEST(test_audio_mixed_procedural_to_external_crossfade_fades_out_smoothly);
     return UNITY_END();
 }

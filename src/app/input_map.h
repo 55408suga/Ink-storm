@@ -51,7 +51,7 @@ typedef struct {
     int32_t lobby_brush_step;
 } MenuInput;
 
-RawInput input_map_read(const GameState *g, UiView *ui);
+RawInput input_map_read(const GameState *g, UiView *ui, bool reward_ready);
 MenuInput input_map_read_menu(const GameState *g, UiView *ui);
 
 #endif

@@ -160,7 +160,9 @@ static void wind_return_on_tick(const TickHookArgs *a)
         const ProjComp *proj = game_proj(g, id);
         bool threat = false;
         if (proj != NULL) {
-            threat = !proj->deflected && d2 <= proj_rad2;
+            const VelocityComp *vel = game_velocity(g, id);
+            threat = !proj->deflected && d2 <= proj_rad2 && vel != NULL &&
+                     ((sx - tr->x) * vel->vx + (sy - tr->y) * vel->vy) > 0.0f;
         } else if (d2 <= melee_rad2 && game_enemy_is_targetable(g, id)) {
             const VelocityComp *vel = game_velocity(g, id);
             const EnemyComp *en = game_enemy(g, id);

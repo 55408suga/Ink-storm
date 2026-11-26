@@ -352,7 +352,7 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
 
     for (int32_t i = 0; i < layout.card_count; ++i) {
         Rectangle card = layout.cards[i];
-        const bool is_hover = (hover == i);
+        const bool is_hover = (hover == i) && anim >= 0.98f;
         if (is_hover) {
             card.y -= 8.0f;
         }
@@ -364,9 +364,11 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
             const RelicId rid = (RelicId)rw->choice_ids[i];
             const PaletteId border = is_hover ? PAL_SHU : PAL_KIN;
             ink_fill_panel(r, vis, PAL_GOFUN, 0.96f, border, 0.94f, 450u + (uint32_t)i);
-            if (text_a <= 0.01f) {
+            if (text_a <= 0.01f || vis.height < 2.0f) {
                 continue;
             }
+            render_reset_blend(r);
+            BeginScissorMode((int)vis.x, (int)vis.y, (int)vis.width, (int)vis.height);
             draw_relic_emblem(r, (Vector2){cx, vis.y + 62.0f}, rid);
 
             char hdr[32];
@@ -402,15 +404,19 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                     r, tr_buf, (Rectangle){vis.x + 18.0f, vis.y + 260.0f, vis.width - 36.0f, 52.0f},
                     18.0f, 13.0f, PAL_SHU, 0.96f * text_a, false, true);
             }
+            render_reset_blend(r);
+            EndScissorMode();
         } else {
             const UpgradeId uid = (UpgradeId)rw->choice_ids[i];
             const UpgradeAxis axis = game_upgrade_axis(uid);
             const PaletteId border = is_hover ? pal_axis_color(axis) : PAL_SUMI_DARK;
             ink_fill_panel(r, vis, PAL_GOFUN, 0.95f, border, 0.94f, 450u + (uint32_t)i);
 
-            if (text_a <= 0.01f) {
+            if (text_a <= 0.01f || vis.height < 2.0f) {
                 continue;
             }
+            render_reset_blend(r);
+            BeginScissorMode((int)vis.x, (int)vis.y, (int)vis.width, (int)vis.height);
 
             draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f}, axis);
 
@@ -446,6 +452,8 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
             render_draw_text_wrapped(
                 r, eff, (Rectangle){vis.x + 18.0f, vis.y + 210.0f, vis.width - 36.0f, 96.0f}, 18.0f,
                 13.0f, PAL_SUMI_DARK, 0.94f * text_a, false, true);
+            render_reset_blend(r);
+            EndScissorMode();
         }
 
         if (is_hover) {
@@ -491,9 +499,11 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
                      text_get(TEXT_REWARD_REPAIR_SHORT, r->use_ja), rep_amt);
             render_draw_text_centered(r, rep_buf, (Vector2){rcx, card.y + 150.0f}, 26.0f,
                                       can_rep ? PAL_SUMI_SCORCH : PAL_SUMI_LIGHT, 0.98f, false);
-            render_draw_text_fit(r, text_get(TEXT_REWARD_REPAIR_EXCESS, r->use_ja),
-                                 (Vector2){rcx, card.y + 206.0f}, card.width - 32.0f, 18.0f, 13.0f,
-                                 PAL_KIN, 0.94f, false);
+            if (rewards_repair_converts_excess(g)) {
+                render_draw_text_fit(r, text_get(TEXT_REWARD_REPAIR_EXCESS, r->use_ja),
+                                     (Vector2){rcx, card.y + 206.0f}, card.width - 32.0f, 18.0f,
+                                     13.0f, PAL_KIN, 0.94f, false);
+            }
             if (hov) {
                 seal_stamp(r, TEXT_SEAL_DONE,
                            (Vector2){card.x + card.width - 32.0f, card.y + card.height - 32.0f},

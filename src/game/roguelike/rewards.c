@@ -388,6 +388,12 @@ static void add_bonus_crystals(GameState *g, int64_t gain)
     g->run.bonus_crystals = (int32_t)next;
 }
 
+bool rewards_repair_converts_excess(const GameState *g)
+{
+    return g != NULL && g->run.reward.kind == REWARD_KIND_FALLBACK &&
+           g->run.reward.repair_amount > 1;
+}
+
 bool rewards_repair_shrine(GameState *g)
 {
     if (g == NULL || g->phase != RUN_PHASE_REWARD || !g->run.reward.repair_available) {
@@ -403,8 +409,7 @@ bool rewards_repair_shrine(GameState *g)
         const int32_t healed = amount < missing ? amount : missing;
         const int32_t overflow = amount - healed;
         sh->hp += healed;
-        if (g->internal.wave_clear_is_boss && g->run.reward.kind == REWARD_KIND_FALLBACK &&
-            overflow > 0) {
+        if (g->internal.wave_clear_is_boss && rewards_repair_converts_excess(g) && overflow > 0) {
             add_bonus_crystals(g, (int64_t)overflow * 15);
         }
     }

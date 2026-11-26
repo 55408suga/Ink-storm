@@ -115,9 +115,9 @@ void render_draw_settings_ui(RenderState *r, const GameState *g, const UiView *u
         } else if (i == 2) {
             snprintf(vbuf, sizeof vbuf, "%u%%", (unsigned)st->se_vol);
         } else if (i == 3) {
-            const TextId post_id = r->post_shader.id == 0 ? TEXT_SETTINGS_UNAVAILABLE
-                                   : st->post_shader_on   ? TEXT_SETTINGS_ON
-                                                          : TEXT_SETTINGS_OFF;
+            const TextId post_id = !render_post_available(r) ? TEXT_SETTINGS_UNAVAILABLE
+                                   : st->post_shader_on      ? TEXT_SETTINGS_ON
+                                                             : TEXT_SETTINGS_OFF;
             snprintf(vbuf, sizeof vbuf, "%s", text_get(post_id, r->use_ja));
         } else if (i == 4) {
             snprintf(vbuf, sizeof vbuf, "%u%%", (unsigned)st->shake_scale);

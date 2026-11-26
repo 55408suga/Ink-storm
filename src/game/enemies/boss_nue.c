@@ -118,8 +118,8 @@ void boss_nue_step(GameState *g, EntityId id)
             }
             g->internal.nue_trail_x[0][0] = tr->x;
             g->internal.nue_trail_y[0][0] = tr->y;
-            g->internal.nue_trail_x[0][1] = wp.x;
-            g->internal.nue_trail_y[0][1] = wp.y;
+            g->internal.nue_trail_x[0][1] = tr->x;
+            g->internal.nue_trail_y[0][1] = tr->y;
             g->internal.nue_trail_t[0] = 2.0f;
 
             en->ai_state = 2;
@@ -145,11 +145,45 @@ void boss_nue_step(GameState *g, EntityId id)
         fluid_splat(&g->fluid, tr->x, tr->y, 2.8f, 0.0f, 0.0f, k_dash_dye);
 
         en->fire_cd -= INK_FIXED_DT;
-        if (dist <= step_dist + 8.0f || en->fire_cd <= 0.0f) {
-            if (!fluid_is_solid(&g->fluid, wp.x, wp.y)) {
-                tr->x = wp.x;
-                tr->y = wp.y;
+        const bool reaching_wp = (dist <= step_dist + 8.0f);
+        const float target_x = reaching_wp ? wp.x
+                                           : ink_clampf(tr->x + boss->gale_dx * step_dist, 72.0f,
+                                                        (float)INK_SCREEN_W - 72.0f);
+        const float target_y = reaching_wp ? wp.y
+                                           : ink_clampf(tr->y + boss->gale_dy * step_dist, 84.0f,
+                                                        (float)INK_SCREEN_H - 72.0f);
+        const float move_dx = target_x - tr->x;
+        const float move_dy = target_y - tr->y;
+        const float move_dist = hypotf(move_dx, move_dy);
+        int steps = 1;
+        if (move_dist > 6.0f) {
+            steps = (int)ceilf(move_dist / 6.0f);
+            if (steps > 16) {
+                steps = 16;
             }
+        }
+        bool hit_solid = false;
+        float safe_x = tr->x;
+        float safe_y = tr->y;
+        for (int s = 1; s <= steps; ++s) {
+            const float frac = (float)s / (float)steps;
+            const float probe_x = tr->x + move_dx * frac;
+            const float probe_y = tr->y + move_dy * frac;
+            if (fluid_is_solid(&g->fluid, probe_x, probe_y)) {
+                hit_solid = true;
+                break;
+            }
+            safe_x = probe_x;
+            safe_y = probe_y;
+        }
+        tr->x = safe_x;
+        tr->y = safe_y;
+        if (g->internal.nue_trail_t[0] > 0.0f) {
+            g->internal.nue_trail_x[0][1] = tr->x;
+            g->internal.nue_trail_y[0][1] = tr->y;
+        }
+
+        if (hit_solid || reaching_wp || en->fire_cd <= 0.0f) {
             en->ai_state = 1;
             vel->mass_tier = MASS_MEDIUM;
             vel->vx = 0.0f;
@@ -158,11 +192,6 @@ void boss_nue_step(GameState *g, EntityId id)
             en->fire_cd = fmaxf(1.5f * enemy_endless_boss_cd_mul(g), en->windup + 0.10f);
             boss->telegraph = 0.0f;
             boss->telegraph_pattern = (boss->phase_idx >= 1 && (boss->pattern & 1) == 1) ? 3 : 1;
-        } else {
-            tr->x =
-                ink_clampf(tr->x + boss->gale_dx * step_dist, 72.0f, (float)INK_SCREEN_W - 72.0f);
-            tr->y =
-                ink_clampf(tr->y + boss->gale_dy * step_dist, 84.0f, (float)INK_SCREEN_H - 72.0f);
         }
     } else {
         /* Stopped & attacking (1.5s; vulnerable to gale knockback and slam). */
