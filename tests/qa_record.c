@@ -452,8 +452,9 @@ static void mix_audio_tick(QaSession *s, int16_t out[AUDIO_SAMPLES_PER_TICK], bo
     audio_render(s->audio, se, AUDIO_SAMPLES_PER_TICK);
 
     const AudioState *a = s->audio;
-    const float base_vol =
-        ((float)a->master_vol * 0.01f) * ((float)a->bgm_vol * 0.01f) * (a->paused ? 0.35f : 1.0f);
+    const float pause_duck = bgm_fade_step_duck(&b->fade, a->paused, INK_FIXED_DT);
+    const float base_vol = ((float)a->master_vol * 0.01f) * ((float)a->bgm_vol * 0.01f) *
+                           AUDIO_EXTERNAL_BGM_GAIN * pause_duck;
     const BgmTrack cur = b->fade.cur;
     const BgmTrack prev = b->fade.prev;
     const float gain_cur = base_vol * b->fade.gain_cur;

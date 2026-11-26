@@ -183,6 +183,80 @@ bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
     return save_write_with_ops(path, meta, &io);
 }
 
+bool save_persist_meta(const char *path, bool enabled, const MetaState *meta, bool *dirty,
+                       const SaveIoOps *ops)
+{
+    if (!enabled || path == NULL || path[0] == '\0' || meta == NULL) {
+        if (dirty != NULL) {
+            *dirty = false;
+        }
+        return true;
+    }
+    if (!save_write(path, meta, ops)) {
+        if (dirty != NULL) {
+            *dirty = true;
+        }
+        return false;
+    }
+    if (dirty != NULL) {
+        *dirty = false;
+    }
+    return true;
+}
+
+bool save_retry_if_dirty(const char *path, bool enabled, const MetaState *meta, bool *dirty,
+                         const SaveIoOps *ops)
+{
+    if (dirty == NULL || !*dirty) {
+        return true;
+    }
+    return save_persist_meta(path, enabled, meta, dirty, ops);
+}
+
+bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bool *dirty,
+                             GameState *game, bool active_run, MetaSettleBreakdown *out_breakdown,
+                             const SaveIoOps *ops)
+{
+    if (out_breakdown != NULL) {
+        memset(out_breakdown, 0, sizeof *out_breakdown);
+    }
+    if (!enabled || meta == NULL) {
+        return true;
+    }
+
+    bool settled_now = false;
+    if (active_run && game != NULL) {
+        /* Drain final-kill hitstop and Act-3 boss victory aftermath so exiting right after the
+         * final boss dies still settles as a campaign clear instead of an aborted run. */
+        for (int t = 0; t < 12 && game->phase == RUN_PHASE_PLAYING && game_wave_goal_met(game);
+             ++t) {
+            game_step(game, NULL, NULL);
+        }
+        for (int t = 0; t < 90 && game_aftermath_reaches_victory(game); ++t) {
+            game_step(game, NULL, NULL);
+        }
+        if (game->phase == RUN_PHASE_VICTORY && !game->run.run_settled) {
+            settled_now = meta_settle_run(meta, game, out_breakdown);
+        } else if (game->phase != RUN_PHASE_VICTORY && game->phase != RUN_PHASE_GAME_OVER &&
+                   !(game->run.act_index == 0 && game->phase == RUN_PHASE_ACT_TRANSITION)) {
+            const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
+            game_step(game, NULL, &abort_cmd);
+            if ((game->phase == RUN_PHASE_GAME_OVER ||
+                 (game->phase == RUN_PHASE_VICTORY && game->run.endless_loop > 0)) &&
+                !game->run.run_settled) {
+                settled_now = meta_settle_run(meta, game, out_breakdown);
+            }
+        }
+    }
+
+    bool local_dirty = false;
+    bool *dirty_flag = dirty != NULL ? dirty : &local_dirty;
+    if (settled_now && save_persist_meta(path, enabled, meta, dirty_flag, ops)) {
+        return true;
+    }
+    return save_retry_if_dirty(path, enabled, meta, dirty_flag, ops);
+}
+
 static bool files_identical(const char *a, const char *b)
 {
     FILE *fa = fopen(a, "rb");

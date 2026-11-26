@@ -102,7 +102,21 @@ bool app_snap_capture(RenderState *render, const GameState *game, const UiView *
         fprintf(stderr, "INKSTORM: failed to read offscreen texture for '%s'\n", path);
         return false;
     }
+    if (img.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
+        ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    }
+    if (img.data == NULL) {
+        fprintf(stderr, "INKSTORM: failed to convert offscreen texture for '%s'\n", path);
+        return false;
+    }
     ImageFlipVertical(&img);
+    if (img.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 && img.width > 0 && img.height > 0) {
+        unsigned char *px = (unsigned char *)img.data;
+        const size_t pixel_count = (size_t)img.width * (size_t)img.height;
+        for (size_t i = 0; i < pixel_count; ++i) {
+            px[i * 4u + 3u] = 255u;
+        }
+    }
     const bool ok = ExportImage(img, path);
     UnloadImage(img);
     if (!ok) {

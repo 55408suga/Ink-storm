@@ -499,15 +499,23 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
                 g->player.aim_x = nx;
                 g->player.aim_y = ny;
             } else {
-                const float ax = g->player.aim_x * 0.65f + nx * 0.35f;
-                const float ay = g->player.aim_y * 0.65f + ny * 0.35f;
-                const float al = hypotf(ax, ay);
-                if (al > 1e-6f) {
-                    g->player.aim_x = ax / al;
-                    g->player.aim_y = ay / al;
-                } else {
+                const float dot = g->player.aim_x * nx + g->player.aim_y * ny;
+                if (dot < -0.5f) {
+                    /* Sharp reversal (> 120 deg): snap immediately so a 180 deg turn never
+                     * renormalizes back to the old aim direction. */
                     g->player.aim_x = nx;
                     g->player.aim_y = ny;
+                } else {
+                    const float ax = g->player.aim_x * 0.65f + nx * 0.35f;
+                    const float ay = g->player.aim_y * 0.65f + ny * 0.35f;
+                    const float al = hypotf(ax, ay);
+                    if (al > 1e-6f) {
+                        g->player.aim_x = ax / al;
+                        g->player.aim_y = ay / al;
+                    } else {
+                        g->player.aim_x = nx;
+                        g->player.aim_y = ny;
+                    }
                 }
             }
         }

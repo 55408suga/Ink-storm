@@ -1307,6 +1307,60 @@ static void test_wave_quotas_ramp_across_waves_and_acts(void)
     game_destroy(g);
 }
 
+static void test_tengu_phase2_transition_preserves_telegraph_warning(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+
+    const EntityId tengu = g->run.boss_id;
+    EnemyComp *ten = game_enemy_mut(g, tengu);
+    BossComp *tb = game_boss_mut(g, tengu);
+    const HealthComp *thp = game_health(g, tengu);
+    const int32_t pat_before = tb->pattern;
+    ten->fire_cd = 0.05f;
+    tb->telegraph = 0.9f;
+
+    (void)combat_apply_damage(g, tengu, 220, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(1, tb->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, thp->invuln_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, tb->telegraph);
+    TEST_ASSERT_TRUE(ten->fire_cd >= 0.75f);
+
+    g->internal.spawn_cd = 999.0f;
+    int invuln_ticks = 0;
+    while (thp->invuln_t > 0.0f && invuln_ticks < 100) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        ++invuln_ticks;
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, thp->invuln_t);
+    TEST_ASSERT_EQUAL_INT32(pat_before, tb->pattern);
+    TEST_ASSERT_TRUE(ten->fire_cd >= 0.70f && ten->fire_cd <= 0.95f);
+
+    /* Must play a full telegraph before firing after invuln ends. */
+    float max_telegraph = 0.0f;
+    int tele_ticks = 0;
+    for (int t = 0; t < 90; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        if (tb->pattern != pat_before) {
+            break;
+        }
+        if (tb->telegraph > max_telegraph) {
+            max_telegraph = tb->telegraph;
+        }
+        if (tb->telegraph > 0.0f) {
+            ++tele_ticks;
+        }
+    }
+    TEST_ASSERT_NOT_EQUAL_INT32(pat_before, tb->pattern);
+    TEST_ASSERT_TRUE(max_telegraph > 0.90f);
+    TEST_ASSERT_TRUE(tele_ticks >= 30);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1320,5 +1374,6 @@ int main(void)
     RUN_TEST(test_ofuda_fox_barrier_homing_and_act3_roster);
     RUN_TEST(test_endless_loop_scaling_all_six_items);
     RUN_TEST(test_wave_quotas_ramp_across_waves_and_acts);
+    RUN_TEST(test_tengu_phase2_transition_preserves_telegraph_warning);
     return UNITY_END();
 }

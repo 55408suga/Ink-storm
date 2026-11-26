@@ -78,6 +78,10 @@ void boss_tengu_step(GameState *g, EntityId id)
     }
 
     if (hp->invuln_t > 0.0f) {
+        const float min_cd = (boss->pattern == 3 ? 0.8f : 0.6f) + 0.15f;
+        if (en->fire_cd < min_cd) {
+            en->fire_cd = min_cd;
+        }
         boss->telegraph = 0.0f;
         return;
     }

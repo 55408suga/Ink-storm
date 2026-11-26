@@ -34,7 +34,7 @@ static int32_t pick_hover(UiView *ui, int32_t hit, bool moved)
     return pick_hover_ex(ui, hit, moved, any_nav_key_pressed());
 }
 
-RawInput input_map_read(const GameState *g, UiView *ui)
+RawInput input_map_read(const GameState *g, UiView *ui, bool reward_ready)
 {
     const Vector2 mouse = GetMousePosition();
     const bool left_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
@@ -59,6 +59,9 @@ RawInput input_map_read(const GameState *g, UiView *ui)
     }
 
     if (g->phase == RUN_PHASE_REWARD) {
+        if (!reward_ready) {
+            return raw;
+        }
         RewardLayout layout;
         render_reward_layout(g, &layout);
 

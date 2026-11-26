@@ -122,6 +122,17 @@ static void handle_command(GameState *g, const GameCommand *cmd)
     }
 }
 
+bool game_aftermath_reaches_victory(const GameState *g)
+{
+    if (g == NULL || g->phase != RUN_PHASE_WAVE_AFTERMATH || !g->internal.wave_clear_is_boss) {
+        return false;
+    }
+    const bool reached_main_victory =
+        (g->run.endless_loop == 0 && g->run.act_index + 1 >= g->run.act_count);
+    const bool reached_endless_cap = (g->run.act_index + 1 >= META_MAX_BEST_ACT);
+    return reached_main_victory || reached_endless_cap;
+}
+
 /* Chain and Surge timers stay frozen here: the purification window is not player time. */
 static void step_aftermath(GameState *g)
 {
@@ -135,23 +146,18 @@ static void step_aftermath(GameState *g)
 
     g->phase_t += INK_FIXED_DT;
     if (g->phase_t + 0.5f * INK_FIXED_DT >= 1.0f) {
-        if (g->internal.wave_clear_is_boss) {
-            const bool reached_main_victory =
-                (g->run.endless_loop == 0 && g->run.act_index + 1 >= g->run.act_count);
-            const bool reached_endless_cap = (g->run.act_index + 1 >= META_MAX_BEST_ACT);
-            if (reached_main_victory || reached_endless_cap) {
-                g->phase = RUN_PHASE_VICTORY;
-                g->phase_t = 0.0f;
-                (void)game_push_event(g, (GameEvent){
-                                             .type = EV_VICTORY,
-                                             .value = g->run.act_index,
-                                             .flags = 0,
-                                         });
-            } else {
-                rewards_generate_relic_offer(g);
-                g->phase = RUN_PHASE_REWARD;
-                g->phase_t = 0.0f;
-            }
+        if (game_aftermath_reaches_victory(g)) {
+            g->phase = RUN_PHASE_VICTORY;
+            g->phase_t = 0.0f;
+            (void)game_push_event(g, (GameEvent){
+                                         .type = EV_VICTORY,
+                                         .value = g->run.act_index,
+                                         .flags = 0,
+                                     });
+        } else if (g->internal.wave_clear_is_boss) {
+            rewards_generate_relic_offer(g);
+            g->phase = RUN_PHASE_REWARD;
+            g->phase_t = 0.0f;
         } else {
             rewards_generate_offer(g);
             g->phase = RUN_PHASE_REWARD;

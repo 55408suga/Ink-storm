@@ -688,6 +688,204 @@ static void test_lobby_sandbox_never_runs_dry_but_keeps_skill_cooldowns(void)
     game_destroy(g);
 }
 
+static void test_gale_straight_180_reversal_snaps_aim(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    g->player.ink = g->player.ink_max;
+    g->player.gale_charges = g->player.gale_max_charges;
+    g->player.aim_x = 1.0f;
+    g->player.aim_y = 0.0f;
+    g->event_count = 0;
+
+    const BrushInput rev = {.pmx = 500.0f, .pmy = 300.0f, .mx = 460.0f, .my = 300.0f, .gale = true};
+    player_skills_step(g, &rev);
+
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, -1.0f, g->player.aim_x);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->player.aim_y);
+    bool saw_left_gale = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_GALE && g->events[i].x2 < -0.99f) {
+            saw_left_gale = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_left_gale);
+    game_destroy(g);
+}
+
+static void test_high_speed_knocked_enemy_slams_into_torii_pillar_without_tunneling(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 368.0f, 328.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 384.0f, 328.0f));
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 398.0f, 328.0f));
+
+    /* Light enemy (Umbrella) at 1800 px/s must slam and die on the pillar instead of tunneling. */
+    const EntityId umb = sturdy_enemy(g, ENEMY_UMBRELLA, 368.0f, 328.0f, 30);
+    game_velocity_mut(g, umb)->vx = 1800.0f;
+    game_velocity_mut(g, umb)->vy = 0.0f;
+    game_status_mut(g, umb)->knockback_t = 1.0f;
+    g->event_count = 0;
+
+    combat_physics_and_slams_step(g);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SLAM, 0));
+    TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, umb));
+
+    /* Heavy enemy (Stone Oni) at 1800 px/s must slam, take damage, and stay in front of pillar. */
+    const EntityId oni = sturdy_enemy(g, ENEMY_STONE_ONI, 368.0f, 328.0f, 200);
+    game_velocity_mut(g, oni)->vx = 1800.0f;
+    game_velocity_mut(g, oni)->vy = 0.0f;
+    game_status_mut(g, oni)->knockback_t = 1.0f;
+    g->event_count = 0;
+
+    combat_physics_and_slams_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SLAM, 0));
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, oni));
+    TEST_ASSERT_TRUE(game_health(g, oni)->hp < 200);
+    TEST_ASSERT_TRUE(game_transform(g, oni)->x < 376.0f);
+    game_destroy(g);
+}
+
+static void test_arrow_diagonal_corner_hits_torii_pillar(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 374.0f, 323.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 376.5f, 320.5f));
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 379.0f, 318.0f));
+
+    const EntityId arrow = projectiles_spawn(g, PROJ_ARROW, 374.0f, 323.0f, 300.0f, -300.0f);
+    projectiles_step(g);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, arrow));
+    game_destroy(g);
+}
+
+static void test_arrow_shallow_diagonal_corner_hits_torii_pillar(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 373.6f, 322.8f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 376.2f, 320.2f));
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 377.9f, 318.5f));
+
+    const EntityId arrow = projectiles_spawn(g, PROJ_ARROW, 373.6f, 322.8f, 300.0f, -300.0f);
+    projectiles_step(g);
+    ecs_flush_destroy(&g->ecs);
+    TEST_ASSERT_FALSE(ecs_is_alive(&g->ecs, arrow));
+    game_destroy(g);
+}
+
+static void test_nue_dash_halts_at_solid_torii_pillar(void)
+{
+    /* 1. Solid-pillar dash stop: lightning trail endpoint advances with Nue and ends at impact. */
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 348.0f, 326.0f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 384.0f, 328.0f));
+
+    const EntityId nue = sturdy_enemy(g, ENEMY_BOSS_NUE, 348.0f, 326.0f, 700);
+    EnemyComp *en = game_enemy_mut(g, nue);
+    en->ai_state = 0;
+    en->phase = 2; /* Waypoint (1080, 360) crosses the left Torii pillar at (376..392, 320..336) */
+    en->windup = 0.0f;
+    en->fire_cd = 0.0f;
+
+    enemies_ai_step(g);
+    stage_gimmicks_step(g);
+    TEST_ASSERT_EQUAL_INT32(2, en->ai_state);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 348.0f, g->internal.nue_trail_x[0][0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 326.0f, g->internal.nue_trail_y[0][0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 348.0f, g->internal.nue_trail_x[0][1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 326.0f, g->internal.nue_trail_y[0][1]);
+
+    for (int t = 0; t < 16 && en->ai_state == 2; ++t) {
+        enemies_ai_step(g);
+        stage_gimmicks_step(g);
+    }
+    const TransformComp *tr = game_transform(g, nue);
+    TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+    TEST_ASSERT_TRUE(tr->x < 376.0f);
+    TEST_ASSERT_TRUE(g->internal.nue_trail_t[0] > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, tr->x, g->internal.nue_trail_x[0][1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, tr->y, g->internal.nue_trail_y[0][1]);
+    float beyond_pillar_dye[FLUID_MAX_CHANNELS] = {0};
+    fluid_sample(&g->fluid, 600.0f, 340.0f, NULL, NULL, beyond_pillar_dye);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, beyond_pillar_dye[2]);
+    game_destroy(g);
+
+    /* 2. Slowed/timed-out dash: trail endpoint matches Nue's actual stop, never the far target. */
+    g = arena(BRUSH_STYLE_HEAVY);
+    const EntityId slow_nue = sturdy_enemy(g, ENEMY_BOSS_NUE, 200.0f, 360.0f, 700);
+    EnemyComp *sen = game_enemy_mut(g, slow_nue);
+    StatusComp *sst = game_status_mut(g, slow_nue);
+    sen->ai_state = 0;
+    sen->phase = 2; /* Waypoint (1080, 360), 880 px away: 600 * 0.66 * 1.5s = 594 px < 880 px */
+    sen->windup = 0.0f;
+    sen->fire_cd = 0.0f;
+    sst->ink_mark_t = 3.0f;
+
+    enemies_ai_step(g);
+    stage_gimmicks_step(g);
+    TEST_ASSERT_EQUAL_INT32(2, sen->ai_state);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 200.0f, g->internal.nue_trail_x[0][1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 360.0f, g->internal.nue_trail_y[0][1]);
+
+    for (int t = 0; t < 120 && sen->ai_state == 2; ++t) {
+        sst->ink_mark_t = 3.0f;
+        enemies_ai_step(g);
+        stage_gimmicks_step(g);
+    }
+    const TransformComp *str = game_transform(g, slow_nue);
+    TEST_ASSERT_EQUAL_INT32(1, sen->ai_state);
+    TEST_ASSERT_TRUE(str->x > 700.0f && str->x < 900.0f);
+    TEST_ASSERT_TRUE(g->internal.nue_trail_t[0] > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, str->x, g->internal.nue_trail_x[0][1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, str->y, g->internal.nue_trail_y[0][1]);
+    float unreached_dye[FLUID_MAX_CHANNELS] = {0};
+    fluid_sample(&g->fluid, 1060.0f, 360.0f, NULL, NULL, unreached_dye);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, unreached_dye[2]);
+    game_destroy(g);
+}
+
+static void test_act3_boss_hitstop_and_aftermath_reach_victory(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_act(g, 2);
+    for (int t = 0; t < 240 && g->phase == RUN_PHASE_ACT_TRANSITION; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    for (int s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        (void)combat_apply_damage(g, g->ryu_body.orb_ids[s], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    const EntityId head = g->run.boss_id;
+    game_health_mut(g, head)->invuln_t = 0.0f;
+    game_health_mut(g, head)->hp = 10;
+    (void)combat_apply_damage(g, head, 100, DMG_PHYSICAL, 0.0f, 0.0f);
+    g->hitstop_t = 0.05f;
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_TRUE(game_wave_goal_met(g));
+    TEST_ASSERT_FALSE(game_aftermath_reaches_victory(g));
+
+    for (int t = 0; t < 12 && g->phase == RUN_PHASE_PLAYING && game_wave_goal_met(g); ++t) {
+        game_step(g, NULL, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_WAVE_AFTERMATH, g->phase);
+    TEST_ASSERT_TRUE(game_aftermath_reaches_victory(g));
+
+    for (int t = 0; t < 90 && game_aftermath_reaches_victory(g); ++t) {
+        game_step(g, NULL, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, g->phase);
+    TEST_ASSERT_FALSE(game_aftermath_reaches_victory(g));
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -715,5 +913,11 @@ int main(void)
     RUN_TEST(test_long_ember_stroke_keeps_every_ember_and_huge_input_stays_finite);
     RUN_TEST(test_lobby_sandbox_paints_with_combat_brush_and_no_waves);
     RUN_TEST(test_lobby_sandbox_never_runs_dry_but_keeps_skill_cooldowns);
+    RUN_TEST(test_gale_straight_180_reversal_snaps_aim);
+    RUN_TEST(test_high_speed_knocked_enemy_slams_into_torii_pillar_without_tunneling);
+    RUN_TEST(test_arrow_diagonal_corner_hits_torii_pillar);
+    RUN_TEST(test_arrow_shallow_diagonal_corner_hits_torii_pillar);
+    RUN_TEST(test_nue_dash_halts_at_solid_torii_pillar);
+    RUN_TEST(test_act3_boss_hitstop_and_aftermath_reach_victory);
     return UNITY_END();
 }

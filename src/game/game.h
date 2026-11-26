@@ -174,6 +174,7 @@ bool game_is_boss_enemy(EnemyDefId id);
 bool game_is_boss_part(EnemyDefId id);
 bool game_enemy_is_targetable(const GameState *g, EntityId id);
 bool game_wave_goal_met(const GameState *g);
+bool game_aftermath_reaches_victory(const GameState *g);
 bool game_shrine_can_be_hit(const GameState *g);
 int32_t game_relic_unlock_slot(RelicId id);
 bool game_is_relic_unlocked(const GameState *g, RelicId id);

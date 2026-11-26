@@ -22,6 +22,7 @@ typedef struct {
     MetaState meta;
     char save_path[PATH_MAX];
     bool save_enabled;
+    bool save_dirty;
     bool cli_use_post;
     bool quit_requested;
     UiView ui;
@@ -89,12 +90,17 @@ static void clear_hint_queue(AppRunContext *ctx)
     ctx->ui.active_hint_t = 0.0f;
 }
 
-static void persist_meta(const AppRunContext *ctx)
+static void persist_meta(AppRunContext *ctx)
 {
-    if (!ctx->save_enabled || ctx->save_path[0] == '\0') {
-        return;
+    if (!save_persist_meta(ctx->save_path, ctx->save_enabled, &ctx->meta, &ctx->save_dirty, NULL)) {
+        fprintf(stderr, "INKSTORM: failed to write save file '%s'\n", ctx->save_path);
     }
-    if (!save_write(ctx->save_path, &ctx->meta, NULL)) {
+}
+
+static void flush_dirty_save(AppRunContext *ctx)
+{
+    if (!save_retry_if_dirty(ctx->save_path, ctx->save_enabled, &ctx->meta, &ctx->save_dirty,
+                             NULL)) {
         fprintf(stderr, "INKSTORM: failed to write save file '%s'\n", ctx->save_path);
     }
 }
@@ -102,6 +108,7 @@ static void persist_meta(const AppRunContext *ctx)
 static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *render,
                           AudioState *audio, BrushStyleId brush)
 {
+    flush_dirty_save(ctx);
     const uint64_t seed = next_run_seed(&ctx->meta);
     const RunConfig cfg = meta_build_run_config(&ctx->meta, brush, seed);
     game_init(game, &cfg);
@@ -128,6 +135,7 @@ static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *rend
 static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *render,
                               AudioState *audio)
 {
+    flush_dirty_save(ctx);
     ctx->ui.scene = UI_SCENE_TITLE_LOBBY;
     ctx->ui.paused = false;
     ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
@@ -179,8 +187,8 @@ static bool hint_strip_visible(const AppRunContext *ctx, const GameState *game)
 static void step_hint_queue(AppRunContext *ctx, const GameState *game, float dt)
 {
     const int32_t started =
-        hint_queue_step(&ctx->hints, &ctx->ui.active_hint, &ctx->ui.active_hint_t, dt,
-                        hint_strip_visible(ctx, game));
+        hint_queue_step_enabled(&ctx->hints, &ctx->ui.active_hint, &ctx->ui.active_hint_t, dt,
+                                hint_strip_visible(ctx, game), ctx->meta.settings.hints_on);
     if (started >= 0) {
         meta_mark_hint_seen(&ctx->meta, (uint32_t)started);
         sync_meta_view(ctx);
@@ -253,11 +261,19 @@ static void abort_current_run_if_started(AppRunContext *ctx, GameState *game)
 
 static void app_finish_run_on_exit(AppRunContext *ctx, GameState *game)
 {
-    if (!ctx->save_enabled || !is_active_run_scene(&ctx->ui)) {
-        return;
+    MetaSettleBreakdown br = {0};
+    const bool was_settled = game != NULL && game->run.run_settled;
+    if (!save_finish_run_on_exit(ctx->save_path, ctx->save_enabled, &ctx->meta, &ctx->save_dirty,
+                                 game, is_active_run_scene(&ctx->ui), &br, NULL)) {
+        fprintf(stderr, "INKSTORM: failed to write save file '%s'\n", ctx->save_path);
     }
-    settle_victory_if_pending(ctx, game);
-    abort_current_run_if_started(ctx, game);
+    if (!was_settled && game != NULL && game->run.run_settled) {
+        ctx->ui.settled = true;
+        ctx->ui.settle_preview = false;
+        ctx->ui.settle = br;
+        ctx->ui.crystals_after = ctx->meta.ink_crystals;
+        sync_meta_view(ctx);
+    }
 }
 
 static void init_save_context(AppRunContext *ctx, const CliOptions *opts)
@@ -314,6 +330,10 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
         const int v = (int)st->se_vol + delta * 10;
         st->se_vol = (uint8_t)(v < 0 ? 0 : (v > 100 ? 100 : v));
     } else if (row == 3) {
+        if (!ctx->cli_use_post || !render_post_available(render)) {
+            play_ui_cue(audio, AUDIO_UI_DENY);
+            return;
+        }
         st->post_shader_on = !st->post_shader_on;
     } else if (row == 4) {
         if (delta > 0) {
@@ -323,6 +343,9 @@ static void apply_settings_change(AppRunContext *ctx, RenderState *render, Audio
         }
     } else if (row == 5) {
         st->hints_on = !st->hints_on;
+        if (!st->hints_on) {
+            clear_hint_queue(ctx);
+        }
     } else if (row == 6) {
         const int next_lang =
             ((int)st->ui_lang + (delta > 0 ? 1 : (UI_LANG_COUNT - 1))) % (int)UI_LANG_COUNT;
@@ -376,6 +399,7 @@ static void cycle_lobby_brush(AppRunContext *ctx, AudioState *audio, int32_t ste
 
 static void on_scene_entered(AppRunContext *ctx, InputLatch *latch, const MenuInput *menu)
 {
+    flush_dirty_save(ctx);
     if (ctx->ui.scene == UI_SCENE_TITLE_LOBBY) {
         ctx->ui.lobby_stroke_active = false;
         input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y, menu->left_down);
@@ -529,8 +553,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         frame_clock_reset(clock);
         /* Always re-anchor the latch: a stale pre-pause position would replay as one huge stroke
          * and a queued key would fire on the first resumed tick. */
-        input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
-                                            menu->ui_clicked && menu->left_down);
+        input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y, menu->left_down);
         break;
     case MENU_ACT_PAUSE_RESTART:
         ctx->ui.pause_confirm = PAUSE_CONFIRM_RESTART;
@@ -574,6 +597,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_RESULT_ENDLESS:
         if (render->victory_scroll_t >= 0.75f && game->phase == RUN_PHASE_VICTORY &&
             !game->run.run_settled && game->run.endless_loop == 0) {
+            flush_dirty_save(ctx);
             play_ui_stamp(audio);
             const GameCommand cmd = {.type = CMD_START_ENDLESS, .arg = 0};
             game_step(game, NULL, &cmd);
@@ -592,6 +616,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         if (render->victory_scroll_t >= 0.75f) {
             play_ui_cue(audio, AUDIO_UI_BACK);
             settle_victory_if_pending(ctx, game);
+            flush_dirty_save(ctx);
             enter_lobby_scene(ctx, game, render, audio);
             frame_clock_reset(clock);
         }
@@ -600,6 +625,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         if (render->victory_scroll_t >= 0.75f) {
             play_ui_stamp(audio);
             settle_victory_if_pending(ctx, game);
+            flush_dirty_save(ctx);
             start_new_run(ctx, game, render, audio, ctx->ui.selected_brush);
             frame_clock_reset(clock);
             input_latch_reset_for_ui_transition(latch, menu->mouse_x, menu->mouse_y,
@@ -704,7 +730,9 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
              * (e.g. picking a reward card) in the same frame. */
             const bool frame_free = !menu_action_ends_frame(menu.action);
             if (frame_free && ctx.ui.scene == UI_SCENE_RUN && !ctx.ui.paused) {
-                const RawInput raw = input_map_read(game, &ctx.ui);
+                const bool reward_ready =
+                    render->reward_anim_t >= 0.98f && render->reward_reroll_t <= 0.0f;
+                const RawInput raw = input_map_read(game, &ctx.ui, reward_ready);
                 input_latch_feed(&latch, &raw);
 
                 const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
@@ -713,7 +741,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                     const BrushInput in = input_latch_take_subtick(&latch, ticks - t);
                     GameCommand cmd = input_latch_take_command(&latch, game->phase);
                     if (game->phase == RUN_PHASE_REWARD &&
-                        (render->reward_anim_t < 0.75f || render->reward_reroll_t > 0.0f)) {
+                        (render->reward_anim_t < 0.98f || render->reward_reroll_t > 0.0f)) {
                         cmd = (GameCommand){.type = CMD_NONE, .arg = 0};
                     }
                     game_step(game, &in, &cmd);

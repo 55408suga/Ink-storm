@@ -1,12 +1,15 @@
 #include "audio_cb.h"
 #include "bgm_fade.h"
 #include "cli.h"
+#include "combat/damage.h"
 #include "frame_clock.h"
 #include "hint_queue.h"
 #include "input_latch.h"
 #include "menu_nav.h"
+#include "save.h"
 #include "unity.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
@@ -14,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 void setUp(void) {}
 
@@ -1065,6 +1069,302 @@ static void test_audio_cb_concurrent_render_and_detach(void)
     game_destroy(g);
 }
 
+static void test_hints_off_clears_queued_and_active_hints(void)
+{
+    HintQueue q;
+    hint_queue_clear(&q);
+    TEST_ASSERT_TRUE(hint_queue_push(&q, HINT_STROKE));
+    TEST_ASSERT_TRUE(hint_queue_push(&q, HINT_INK_REGEN));
+    HintId active = HINT_STROKE;
+    float active_t = 0.0f;
+
+    TEST_ASSERT_EQUAL_INT32(
+        HINT_STROKE, hint_queue_step_enabled(&q, &active, &active_t, 1.0f / 60.0f, true, true));
+    TEST_ASSERT_EQUAL_FLOAT(HINT_SHOW_SECONDS, active_t);
+
+    /* Turning hints OFF drops both active and queued hints without marking anything seen. */
+    TEST_ASSERT_EQUAL_INT32(
+        -1, hint_queue_step_enabled(&q, &active, &active_t, 1.0f / 60.0f, true, false));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, active_t);
+    TEST_ASSERT_EQUAL_INT32(0, q.count);
+
+    for (int i = 0; i < 10; ++i) {
+        TEST_ASSERT_EQUAL_INT32(
+            -1, hint_queue_step_enabled(&q, &active, &active_t, 1.0f / 60.0f, true, true));
+    }
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, active_t);
+}
+
+static FILE *test_fail_fopen(const char *path, const char *mode)
+{
+    (void)path;
+    (void)mode;
+    errno = EIO;
+    return NULL;
+}
+
+static void test_dirty_save_retries_after_transient_write_failure(void)
+{
+    const char *base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    char dir[PATH_MAX];
+    const int dn = snprintf(dir, sizeof dir, "%s/inkstorm-dirty-XXXXXX", base);
+    TEST_ASSERT_TRUE(dn > 0 && (size_t)dn < sizeof dir);
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+
+    char path[PATH_MAX + 32];
+    const int pn = snprintf(path, sizeof path, "%s/save.txt", dir);
+    TEST_ASSERT_TRUE(pn > 0 && (size_t)pn < sizeof path);
+
+    MetaState meta;
+    meta_init_default(&meta);
+    meta.runs_played = 5;
+    meta.ink_crystals = 140;
+
+    bool dirty = false;
+    const SaveIoOps fail_ops = {.fopen = test_fail_fopen};
+    TEST_ASSERT_FALSE(save_persist_meta(path, true, &meta, &dirty, &fail_ops));
+    TEST_ASSERT_TRUE(dirty);
+
+    TEST_ASSERT_TRUE(save_retry_if_dirty(path, true, &meta, &dirty, NULL));
+    TEST_ASSERT_FALSE(dirty);
+
+    /* Clean state is a no-op even if the disk later fails. */
+    TEST_ASSERT_TRUE(save_retry_if_dirty(path, true, &meta, &dirty, &fail_ops));
+    TEST_ASSERT_FALSE(dirty);
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(5, loaded.runs_played);
+    TEST_ASSERT_EQUAL_INT32(140, loaded.ink_crystals);
+
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_bgm_pause_duck_ramps_smoothly(void)
+{
+    BgmFade f;
+    bgm_fade_reset(&f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, f.pause_duck);
+
+    const float after_one_pause = bgm_fade_step_duck(&f, true, 1.0f / 60.0f);
+    TEST_ASSERT_TRUE(after_one_pause < 1.0f && after_one_pause > 0.35f);
+
+    float duck = after_one_pause;
+    for (int i = 0; i < 10; ++i) {
+        duck = bgm_fade_step_duck(&f, true, 1.0f / 60.0f);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.35f, duck);
+
+    const float after_one_resume = bgm_fade_step_duck(&f, false, 1.0f / 60.0f);
+    TEST_ASSERT_TRUE(after_one_resume > 0.35f && after_one_resume < 1.0f);
+
+    for (int i = 0; i < 10; ++i) {
+        duck = bgm_fade_step_duck(&f, false, 1.0f / 60.0f);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.0f, duck);
+}
+
+static void test_esc_resume_with_held_lmb_suppresses_paint(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 400.0f, 300.0f);
+    /* Resuming via Esc while LMB is held must suppress paint until LMB is released. */
+    input_latch_reset_for_ui_transition(&l, 400.0f, 300.0f, true);
+
+    RawInput held = make_raw(450.0f, 320.0f);
+    held.left_down = true;
+    input_latch_feed(&l, &held);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    RawInput released = make_raw(450.0f, 320.0f);
+    input_latch_feed(&l, &released);
+    TEST_ASSERT_FALSE(input_latch_take_tick(&l).paint);
+
+    RawInput repressed = make_raw(470.0f, 320.0f);
+    repressed.left_down = true;
+    input_latch_feed(&l, &repressed);
+    TEST_ASSERT_TRUE(input_latch_take_tick(&l).paint);
+}
+
+static int g_fail_fopen_calls = 0;
+static int g_fail_fopen_limit = 0;
+
+static FILE *test_fail_n_fopen(const char *path, const char *mode)
+{
+    ++g_fail_fopen_calls;
+    if (g_fail_fopen_calls <= g_fail_fopen_limit) {
+        errno = EIO;
+        return NULL;
+    }
+    return fopen(path, mode);
+}
+
+static void test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save(void)
+{
+    const char *base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    char dir[PATH_MAX];
+    const int dn = snprintf(dir, sizeof dir, "%s/inkstorm-exit-XXXXXX", base);
+    TEST_ASSERT_TRUE(dn > 0 && (size_t)dn < sizeof dir);
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+
+    char path[PATH_MAX + 32];
+    const int pn = snprintf(path, sizeof path, "%s/save.txt", dir);
+    TEST_ASSERT_TRUE(pn > 0 && (size_t)pn < sizeof path);
+
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_act(g, 2);
+    g->run.acts_cleared = 2;
+    for (int t = 0; t < 240 && g->phase == RUN_PHASE_ACT_TRANSITION; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    for (int s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        (void)combat_apply_damage(g, g->ryu_body.orb_ids[s], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    const EntityId head = g->run.boss_id;
+    game_health_mut(g, head)->invuln_t = 0.0f;
+    game_health_mut(g, head)->hp = 10;
+    (void)combat_apply_damage(g, head, 100, DMG_PHYSICAL, 0.0f, 0.0f);
+    g->hitstop_t = 0.05f;
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_TRUE(game_wave_goal_met(g));
+
+    MetaState meta;
+    meta_init_default(&meta);
+    bool dirty = false;
+    MetaSettleBreakdown br = {0};
+    g_fail_fopen_calls = 0;
+    g_fail_fopen_limit = 1;
+    const SaveIoOps fail_once_ops = {.fopen = test_fail_n_fopen};
+
+    /* Production exit helper drains hitstop + victory aftermath, settles 1 campaign clear, and
+     * retries a transient first write failure before shutdown so one exit call persists on disk. */
+    TEST_ASSERT_TRUE(
+        save_finish_run_on_exit(path, true, &meta, &dirty, g, true, &br, &fail_once_ops));
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
+    TEST_ASSERT_FALSE(dirty);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, g->phase);
+    TEST_ASSERT_TRUE(g->run.run_settled);
+    TEST_ASSERT_EQUAL_INT32(1, meta.clears);
+    TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
+
+    const MetaRunResult res = game_run_result(g);
+    const MetaSettleBreakdown expected = meta_calc_crystals(&res);
+    TEST_ASSERT_TRUE(expected.total_crystals >= 120);
+    TEST_ASSERT_EQUAL_INT32(expected.total_crystals, br.total_crystals);
+    TEST_ASSERT_EQUAL_INT32(expected.total_crystals, meta.ink_crystals);
+
+    /* Calling exit settlement again on an already-settled run is an idempotent no-op. */
+    TEST_ASSERT_TRUE(
+        save_finish_run_on_exit(path, true, &meta, &dirty, g, true, NULL, &fail_once_ops));
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
+    TEST_ASSERT_EQUAL_INT32(1, meta.clears);
+    TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
+    TEST_ASSERT_EQUAL_INT32(expected.total_crystals, meta.ink_crystals);
+
+    /* Reload from disk and verify persisted campaign clear + exact victory crystals. */
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(1, loaded.clears);
+    TEST_ASSERT_EQUAL_INT32(1, loaded.runs_played);
+    TEST_ASSERT_EQUAL_INT32(expected.total_crystals, loaded.ink_crystals);
+
+    /* Act-1 intro scroll exit does not abort or count as a played run. */
+    GameState *intro = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(intro);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_ACT_TRANSITION, intro->phase);
+    TEST_ASSERT_EQUAL_INT32(0, intro->run.act_index);
+    TEST_ASSERT_TRUE(save_finish_run_on_exit(path, true, &meta, &dirty, intro, true, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
+    TEST_ASSERT_FALSE(intro->run.run_settled);
+    game_destroy(intro);
+
+    /* Mid-run exit aborts and settles as a non-clear run. */
+    GameState *mid = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(mid);
+    game_debug_start_wave(mid, 0);
+    TEST_ASSERT_TRUE(save_finish_run_on_exit(path, true, &meta, &dirty, mid, true, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_GAME_OVER, mid->phase);
+    TEST_ASSERT_TRUE(mid->run.run_settled);
+    TEST_ASSERT_EQUAL_INT32(1, meta.clears);
+    TEST_ASSERT_EQUAL_INT32(2, meta.runs_played);
+    game_destroy(mid);
+
+    game_destroy(g);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_exit_settlement_double_write_failure_recovers_on_dirty_retry(void)
+{
+    const char *base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    char dir[PATH_MAX];
+    const int dn = snprintf(dir, sizeof dir, "%s/inkstorm-exit2-XXXXXX", base);
+    TEST_ASSERT_TRUE(dn > 0 && (size_t)dn < sizeof dir);
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+
+    char path[PATH_MAX + 32];
+    const int pn = snprintf(path, sizeof path, "%s/save.txt", dir);
+    TEST_ASSERT_TRUE(pn > 0 && (size_t)pn < sizeof path);
+
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+
+    MetaState meta;
+    meta_init_default(&meta);
+    bool dirty = false;
+    g_fail_fopen_calls = 0;
+    g_fail_fopen_limit = 2;
+    const SaveIoOps fail_twice_ops = {.fopen = test_fail_n_fopen};
+
+    /* Initial exit write and built-in exit retry both fail: run settles in memory, dirty stays
+     * set, and nothing is written to disk yet. */
+    TEST_ASSERT_FALSE(
+        save_finish_run_on_exit(path, true, &meta, &dirty, g, true, NULL, &fail_twice_ops));
+    TEST_ASSERT_EQUAL_INT(2, g_fail_fopen_calls);
+    TEST_ASSERT_TRUE(dirty);
+    TEST_ASSERT_TRUE(g->run.run_settled);
+    TEST_ASSERT_EQUAL_INT32(1, meta.runs_played);
+
+    MetaState missing_check;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_MISSING, save_load(path, &missing_check));
+
+    /* A later retry via save_retry_if_dirty flushes the settled state cleanly. */
+    TEST_ASSERT_TRUE(save_retry_if_dirty(path, true, &meta, &dirty, &fail_twice_ops));
+    TEST_ASSERT_EQUAL_INT(3, g_fail_fopen_calls);
+    TEST_ASSERT_FALSE(dirty);
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(1, loaded.runs_played);
+
+    /* An earlier mid-run dirty flag (without settling a new run) is also flushed on exit. */
+    meta.ink_crystals += 55;
+    dirty = true;
+    TEST_ASSERT_TRUE(save_finish_run_on_exit(path, true, &meta, &dirty, g, false, NULL, NULL));
+    TEST_ASSERT_FALSE(dirty);
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(meta.ink_crystals, loaded.ink_crystals);
+
+    game_destroy(g);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1098,5 +1398,11 @@ int main(void)
     RUN_TEST(test_latch_anchor_starts_stroke_at_press_but_keeps_skills);
     RUN_TEST(test_latch_resume_reanchors_and_drops_queued_input);
     RUN_TEST(test_audio_cb_concurrent_render_and_detach);
+    RUN_TEST(test_hints_off_clears_queued_and_active_hints);
+    RUN_TEST(test_dirty_save_retries_after_transient_write_failure);
+    RUN_TEST(test_bgm_pause_duck_ramps_smoothly);
+    RUN_TEST(test_esc_resume_with_held_lmb_suppresses_paint);
+    RUN_TEST(test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save);
+    RUN_TEST(test_exit_settlement_double_write_failure_recovers_on_dirty_retry);
     return UNITY_END();
 }

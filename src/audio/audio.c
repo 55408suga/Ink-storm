@@ -44,6 +44,7 @@ void audio_init(AudioState *audio, uint64_t seed)
     audio->active_bgm = BGM_NONE;
     audio->prev_bgm = BGM_NONE;
     audio->xfade_t = 1.0f;
+    audio->bgm_prev_start_gain = 0.0f;
     audio->bgm_duck = 1.0f;
     audio->brush_rng = seed ^ UINT64_C(0x8f1bbcdcca62c1d6);
     audio_brush_reset_dsp(audio);
@@ -634,6 +635,12 @@ static void drain_state_queue(AudioState *audio, uint64_t sample_idx)
     }
 }
 
+static bool track_in_external_mask(const AudioState *audio, BgmTrack track)
+{
+    const int t = (int)track;
+    return t > 0 && t < 32 && (audio->external_bgm_mask & (UINT32_C(1) << (unsigned)t)) != 0u;
+}
+
 void audio_render(AudioState *audio, int16_t *samples, size_t sample_count)
 {
     if (samples == NULL || sample_count == 0) {
@@ -672,7 +679,12 @@ void audio_render(AudioState *audio, int16_t *samples, size_t sample_count)
         if (!isfinite(mix) || master_gain <= 0.0f) {
             mix = 0.0f;
         }
-        const float clipped = ink_clampf(tanhf(mix * 1.15f), -1.0f, 1.0f);
+        const bool ext_bgm =
+            audio->external_bgm || track_in_external_mask(audio, audio->active_bgm) ||
+            (audio->xfade_t < 1.0f && track_in_external_mask(audio, audio->prev_bgm));
+        const float ceiling = ext_bgm ? AUDIO_EXTERNAL_SE_CEILING : 1.0f;
+        const float clipped =
+            ink_clampf(ceiling * tanhf((mix * 1.15f) / ceiling), -ceiling, ceiling);
         int32_t pcm = (int32_t)lroundf(clipped * 32767.0f);
         if (pcm > 32767) {
             pcm = 32767;
@@ -719,17 +731,22 @@ static bool pending_voices_finite(const AudioState *audio)
     return true;
 }
 
+static bool bgm_synth_finite(const AudioBgmSynth *s)
+{
+    return isfinite(s->drum_env) && isfinite(s->drum_ph) && isfinite(s->koto_env) &&
+           isfinite(s->koto_ph) && isfinite(s->koto_freq) && isfinite(s->drone_ph) &&
+           isfinite(s->victory_t);
+}
+
 bool audio_validate_finite(const AudioState *audio)
 {
     if (audio == NULL) {
         return false;
     }
-    if (!isfinite(audio->xfade_t) || !isfinite(audio->wind_target) || !isfinite(audio->wind_env) ||
-        !isfinite(audio->wind_lp) || !isfinite(audio->wind_bp) || !isfinite(audio->bgm_drum_env) ||
-        !isfinite(audio->bgm_drum_ph) || !isfinite(audio->bgm_koto_env) ||
-        !isfinite(audio->bgm_koto_ph) || !isfinite(audio->bgm_koto_freq) ||
-        !isfinite(audio->bgm_drone_ph) || !isfinite(audio->bgm_victory_t) ||
-        !isfinite(audio->bgm_duck)) {
+    if (!isfinite(audio->xfade_t) || !isfinite(audio->bgm_prev_start_gain) ||
+        !isfinite(audio->wind_target) || !isfinite(audio->wind_env) || !isfinite(audio->wind_lp) ||
+        !isfinite(audio->wind_bp) || !isfinite(audio->bgm_duck) ||
+        !bgm_synth_finite(&audio->bgm_cur) || !bgm_synth_finite(&audio->bgm_prev)) {
         return false;
     }
     if (!audio_brush_validate_finite(audio) || !queued_ticks_finite(audio) ||

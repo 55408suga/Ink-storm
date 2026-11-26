@@ -36,7 +36,11 @@ static void load_bgm_slot(AudioOut *out, BgmTrack track, const char *rel_path, b
         return;
     }
     Music m = LoadMusicStream(full_path);
-    if (!IsMusicValid(m)) {
+    if (!IsMusicValid(m) || m.frameCount == 0u) {
+        /* A corrupt or zero-frame Vorbis stream can still open a decoder/stream allocation. */
+        if (m.ctxData != NULL || m.stream.buffer != NULL) {
+            UnloadMusicStream(m);
+        }
         TraceLog(LOG_WARNING,
                  "INKSTORM: failed to load external BGM '%s'; procedural fallback active",
                  rel_path);
@@ -158,8 +162,8 @@ void audio_out_init(AudioOut *out, AudioState *audio)
 
 static float external_base_volume(const AudioState *audio)
 {
-    const float pause_duck = audio->paused ? 0.35f : 1.0f;
-    return ((float)audio->master_vol * 0.01f) * ((float)audio->bgm_vol * 0.01f) * pause_duck;
+    return ((float)audio->master_vol * 0.01f) * ((float)audio->bgm_vol * 0.01f) *
+           AUDIO_EXTERNAL_BGM_GAIN;
 }
 
 static void pump_external_bgm(AudioOut *out, AudioState *audio)
@@ -167,8 +171,8 @@ static void pump_external_bgm(AudioOut *out, AudioState *audio)
     audio_out_lock();
     const BgmTrack desired = audio_bgm_track(audio);
     const bool has_ext = track_loaded(out, desired);
-    audio_set_external_bgm(audio, has_ext);
-    const float base_vol = external_base_volume(audio);
+    const bool paused = audio->paused;
+    const float raw_vol = external_base_volume(audio);
     audio_out_unlock();
 
     const BgmFadeActions act = bgm_fade_request(&out->fade, has_ext ? desired : BGM_NONE);
@@ -183,9 +187,17 @@ static void pump_external_bgm(AudioOut *out, AudioState *audio)
 
     const float dt = ink_clampf(GetFrameTime(), 0.0f, 0.1f);
     const BgmTrack finished = bgm_fade_step(&out->fade, dt);
+    const float pause_duck = bgm_fade_step_duck(&out->fade, paused, dt);
+    const float base_vol = raw_vol * pause_duck;
     if (track_loaded(out, finished)) {
         StopMusicStream(out->bgm[finished]);
     }
+
+    const bool ext_playing = track_loaded(out, out->fade.cur) ||
+                             (out->fade.prev != out->fade.cur && track_loaded(out, out->fade.prev));
+    audio_out_lock();
+    audio_set_external_bgm(audio, ext_playing);
+    audio_out_unlock();
 
     if (track_loaded(out, out->fade.cur)) {
         UpdateMusicStream(out->bgm[out->fade.cur]);
@@ -217,6 +229,7 @@ void audio_out_close(AudioOut *out)
 
     if (out->attached_audio != NULL) {
         audio_set_brush_samples(out->attached_audio, NULL, 0u, NULL, 0u);
+        audio_set_external_bgm(out->attached_audio, false);
         audio_set_external_bgm_mask(out->attached_audio, 0u);
         audio_set_realtime_mode(out->attached_audio, false);
         out->attached_audio = NULL;

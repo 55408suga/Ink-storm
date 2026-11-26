@@ -3,11 +3,17 @@
 #include <stddef.h>
 
 static const float k_fade_per_second = 2.0f;
+static const float k_pause_duck_min = 0.35f;
+static const float k_pause_duck_slew = (1.0f - 0.35f) / 0.08f;
 
 void bgm_fade_reset(BgmFade *f)
 {
     if (f != NULL) {
-        *f = (BgmFade){.cur = BGM_NONE, .prev = BGM_NONE, .gain_cur = 0.0f, .gain_prev = 0.0f};
+        *f = (BgmFade){.cur = BGM_NONE,
+                       .prev = BGM_NONE,
+                       .gain_cur = 0.0f,
+                       .gain_prev = 0.0f,
+                       .pause_duck = 1.0f};
     }
 }
 
@@ -65,4 +71,24 @@ BgmTrack bgm_fade_step(BgmFade *f, float dt)
     const BgmTrack finished = f->prev;
     f->prev = BGM_NONE;
     return finished;
+}
+
+float bgm_fade_step_duck(BgmFade *f, bool paused, float dt)
+{
+    if (f == NULL) {
+        return paused ? k_pause_duck_min : 1.0f;
+    }
+    if (f->pause_duck <= 0.0f) {
+        f->pause_duck = 1.0f;
+    }
+    const float target = paused ? k_pause_duck_min : 1.0f;
+    if (dt > 0.0f) {
+        const float step = dt * k_pause_duck_slew;
+        if (f->pause_duck < target) {
+            f->pause_duck = f->pause_duck + step > target ? target : f->pause_duck + step;
+        } else if (f->pause_duck > target) {
+            f->pause_duck = f->pause_duck - step < target ? target : f->pause_duck - step;
+        }
+    }
+    return f->pause_duck;
 }
