@@ -850,7 +850,7 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
     /* Top Header: dark lacquer page indicator + 32px brush title + Close button */
     const Rectangle pg_pill = {116.0f, 70.0f, 84.0f, 34.0f};
     ink_fill_panel(r, pg_pill, PAL_SUMI_SCORCH, 0.96f, PAL_KIN, 0.95f, 1283u);
-    char pg_buf[16];
+    char pg_buf[32];
     snprintf(pg_buf, sizeof pg_buf, "%d / %d", page + 1, GUIDE_SLIDE_COUNT);
     render_draw_text_centered(
         r, pg_buf, (Vector2){pg_pill.x + pg_pill.width * 0.5f, pg_pill.y + pg_pill.height * 0.5f},
@@ -899,7 +899,7 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
 
         const Rectangle num_badge = {card.x + 14.0f, card.y + 14.0f, 28.0f, 28.0f};
         ink_fill_panel(r, num_badge, PAL_SUMI_SCORCH, 0.96f, PAL_KIN, 0.94f, 1294u + (uint32_t)i);
-        char num_s[8];
+        char num_s[16];
         snprintf(num_s, sizeof num_s, "%d", i + 1);
         render_draw_text_centered(
             r, num_s,
@@ -945,7 +945,7 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
         ink_fill_panel(r, dot, active ? PAL_SUMI_SCORCH : PAL_GOFUN, 0.96f,
                        active ? PAL_KIN : (hov ? PAL_SHU : PAL_SUMI_DARK), 0.94f,
                        1412u + (uint32_t)i);
-        char d_s[8];
+        char d_s[16];
         snprintf(d_s, sizeof d_s, "%d", i + 1);
         render_draw_text_centered(
             r, d_s, (Vector2){dot.x + dot.width * 0.5f, dot.y + dot.height * 0.5f}, 18.0f,

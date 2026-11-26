@@ -7,6 +7,18 @@
 #include <math.h>
 #include <stdio.h>
 
+static bool is_multipart_ryu_hud_active(const GameState *g)
+{
+    if (g == NULL || g->run.wave_index != GAME_BOSS_WAVE_INDEX ||
+        g->run.boss_id.index == ECS_INVALID_INDEX ||
+        g->ryu_body.head_id.index != g->run.boss_id.index ||
+        g->ryu_body.head_id.gen != g->run.boss_id.gen) {
+        return false;
+    }
+    const HealthComp *boss_hp = game_health(g, g->run.boss_id);
+    return boss_hp != NULL && boss_hp->max_hp > 0;
+}
+
 /* Drawn before the VFX seals so the 祓/討 stamp lands on top of the band, in its right-hand slot;
  * the title keeps to the left part of the band. */
 void render_draw_clear_banner(RenderState *r)
@@ -113,7 +125,8 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const EnemyDefId eid = r->intro_queue[r->intro_head];
         const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
                                           : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);
-        const Rectangle box = {cx - 300.0f, 74.0f, 600.0f, 66.0f};
+        const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
+        const Rectangle box = {cx - 300.0f, base_y, 600.0f, 66.0f};
         ink_fill_panel(r, box, PAL_GOFUN, 0.92f * a, PAL_SUMI_DARK, 0.85f * a, 620u);
         render_draw_text_fit(r, text_get(text_enemy_name(eid), r->use_ja),
                              (Vector2){cx, box.y + 22.0f}, box.width - 32.0f, 22.0f, 16.0f,
@@ -159,11 +172,12 @@ void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui
     }
 
     const float cx = (float)INK_SCREEN_W * 0.5f;
-    float y = 74.0f;
+    const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
+    float y = base_y;
     if (r->boss_banner_t > 0.0f) {
         y = 178.0f;
     } else if (r->intro_count > 0) {
-        y = 148.0f;
+        y = base_y + 74.0f;
     }
 
     const float t = ui->active_hint_t;
