@@ -3,6 +3,7 @@
 #include "core.h"
 #include "render_internal.h"
 #include "rlgl.h"
+#include "sprites.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -33,12 +34,13 @@ void render_set_blend(RenderState *r, int mode)
     }
     if (r->cur_blend != BLEND_ALPHA) {
         EndBlendMode();
+        r->metrics.blend_switches++;
     }
     if (mode != BLEND_ALPHA) {
         BeginBlendMode(mode);
+        r->metrics.blend_switches++;
     }
     r->cur_blend = mode;
-    r->metrics.blend_switches++;
 }
 
 void render_reset_blend(RenderState *r)
@@ -69,6 +71,7 @@ void render_init(RenderState *r, const RenderOptions *opt)
     render_post_init(r, opt);
     render_fluid_init(r, opt);
     render_fonts_init(r, opt);
+    render_sprites_init(r, opt);
     render_reset_vfx(r, UINT64_C(1));
 }
 
@@ -243,6 +246,7 @@ static void render_draw_internal(RenderState *r, const GameState *g, const UiVie
         draw_ui_layers(r, g, ui);
     }
 
+    rlDrawRenderBatchActive();
     r->metrics.draw_ms = (GetTime() - t0) * 1000.0;
     r->last_metrics = r->metrics;
     if (to_texture) {
@@ -276,6 +280,7 @@ void render_close(RenderState *r)
     if (r == NULL) {
         return;
     }
+    render_sprites_close(r);
     render_fonts_close(r);
     render_post_close(r);
     render_fluid_close(r);

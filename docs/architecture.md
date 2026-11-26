@@ -604,6 +604,13 @@ typedef struct {
 - **GPU 資源の検査**: RenderTexture は ID と添付に加えて `rlFramebufferComplete` で FBO の完全性を確かめてから使い（`render_texture_usable`。背景キャッシュ・ポスト用シーン・`--snap` の描画先）、不完全なら直接描画へ切り替える。コンパイルに失敗したシェーダが持つ `locs` は `render_discard_shader` で解放する。
 - **背景キャッシュ**: `bg_cache` は四辺に 16px（`RENDER_BG_PAD`）の余白を持つ不透明な RenderTexture。和紙テクスチャ（継ぎ目のない 512×512）と山水背景・砂子を、色は通常合成・保存先アルファは 1 固定（`BLEND_CUSTOM_SEPARATE`）で焼き込み、描き戻しでアルファが二重に掛からないようにする。キャッシュキーは `(BgKind { BG_LOBBY, BG_ACT }, act_index)`（`render_rules.h`）で、ロビーと第 1 幕を区別する。FBO を作れない環境では毎フレーム直接描画する。画面揺れでも余白により紙の端が見えない。
 - **流体の描画経路**: ポスト処理が有効で、流体シェーダと和紙テクスチャ（`texture1`）が揃ったとき（`render_fluid_use_gpu`）は、`(ink, fire, storm, solid)` を `FLUID_W × FLUID_H` の RGBA8 1 枚（濃度は `sqrt(v / max_dye)` で符号化）に詰めて 1 回 `UpdateTexture` し、埋め込み GLSL 330（4095 バイト以内）で 1280×720 に描く（B スプライン双三次補間、和紙の繊維に沿ったにじみと粒状感、連続した墨のトーン曲線と勾配による墨溜まり、火・雷・金の乗算済みアルファ合成、にじみで動かさないセル位置を `texelFetch` して `solid` セルを正確に除外。復元した濃度は有限な範囲へ制限する）。流体テクスチャは 2 枚ずつ交互に更新し、前フレームが描画中のテクスチャへの転送で CPU が GPU を待たないようにする。`--no-post`・設定でのポスト無効・`INKSTORM_DEBUG_FAULTS=shader` では CPU 経路（同じトーン曲線を表引きにした墨の乗算テクスチャ＋火・雷の乗算済みアルファテクスチャ）へ切り替える。`F1` に `fluid_shader: GPU/CPU` を表示する。色計算・符号化・判定は raylib 非依存の `render_rules.c` に置き、`test_render_rules` で検証する。
+- **絵の登場物（スプライト）**: [art-direction.md](art-direction.md) §10.7 の絵を、社・敵・ボス・龍玉の体に使う。
+  - `RenderOptions.sprite_dir` は `app` が実行ファイル基準で解決した `assets/sprites` のパスで、`render_init` の間だけ借用する。`NULL` なら手続き描画だけで描く。
+  - `RenderState.sprites`（`SpriteBank`）が 2048² のアトラス 1 枚を所有し、`render_close` で解放する。読み込み用の画素バッファ（約 16 MiB）は `render_sprites_init` の中で確保して、戻る前に解放する。PNG は IHDR の寸法を展開前に確かめ、キャンバスと違えば弾く。ログには相対名だけを 1 行出す。
+  - 左右反転の履歴（±0.25）と紙の裏返しの開始ティックは `RenderState.sprite_face*` に `EntityId` の世代付きで持つ。描画が変えるのは描画側の状態だけで、ゲーム状態は変えない。
+  - `sprite_rules.{h,c}`（raylib 非依存）にマニフェスト・状態の選択・表示の大きさ・四角形とアンカーの変換・反転の履歴・紙抜き縁のマスク・アトラスの配置・龍の背骨（弧長 64 点への置き直し、首と玉で止めるうねり）を置き、`test_sprite_rules` で検証する。`sprites.{h,c}` は読み込みと四角形の描画、`draw_entities_sprite.c` はキャラクターごとの合成を受け持つ。`draw_entities.c` の手続き描画はフォールバックとしてそのまま残す。
+  - 紙抜きの色は `ink_knockout_color(act)` に一本化し、尾や胴の筆線の縁は `ink_stroke_knockout` で描く。
+  - `INKSTORM_DEBUG_FAULTS=sprites`（`APP_FAULT_SPRITES` と `RENDER_FAULT_SPRITES` は同じビット）で、絵が無いときと同じ手続き描画の経路を通す。
 - **再現性と描画順契約（[art-direction.md](art-direction.md) 準拠）**:
   - 登場物のシルエット揺らぎ（ボイル）は `EntityId`（`index`, `gen`）由来の固定シードで生成し、`vfx_rng` は粒子エフェクトのみに用いる（`--snap` 比較の再現性を維持）。
   - HUD・UI は必ずポストシェーダの**後**に描画し、文字のにじみを防ぐ。

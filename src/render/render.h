@@ -3,6 +3,7 @@
 
 #include "game.h"
 #include "raylib.h"
+#include "sprite_rules.h"
 #include "text_table.h"
 #include "ui_view.h"
 #include "vfx_rules.h"
@@ -28,7 +29,57 @@ typedef struct {
     uint32_t fault_mask;
     const char *font_path;
     const char *title_font_path;
+    const char *sprite_dir; /* NULL なら手続き描画のみ。render_init の間だけ借用する */
 } RenderOptions;
+
+typedef struct {
+    bool enabled;    /* アトラスを転送済みで、1 群以上が揃っている */
+    Texture2D atlas; /* render_close で解放する */
+    bool present[SPR_COUNT];
+    bool group_ok[SPR_GROUP_COUNT];
+    int32_t loaded;
+    int32_t groups_ok;
+    double load_ms; /* 起動時の読み込み・縁取り・転送にかかった時間 */
+} SpriteBank;
+
+/* 1 フレームの描画計画。毎フレーム作り直し、縁取り・体・乗算・芯の各段で共有する */
+typedef struct {
+    bool valid;
+    uint32_t gen;
+    uint32_t seed; /* 6 tick ごとのボイルの種 */
+    SpritePlan plan;
+} SpriteFrameEntry;
+
+typedef struct {
+    uint64_t frame; /* 作ったときの frames_drawn。古い計画を使わない */
+    bool built;
+    uint32_t high_water;
+    SpriteFrameEntry ent[ECS_MAX_ENTITIES];
+    bool shrine_ok[GAME_MAX_SHRINES];
+    SpritePlan shrine[GAME_MAX_SHRINES];
+    uint16_t lanterns[ECS_MAX_ENTITIES];
+    int32_t lantern_n;
+    bool ryu_ok;
+    EntityId ryu_id;
+    GameVec2 ryu_spine[RENDER_RYU_SPINE_PTS];
+    int32_t ryu_spine_n;
+} SpriteFrameCache;
+
+/* 一筆龍の撃破時は頭が即座に ECS から消えるため、最後に描いた姿を描画側で持ってほどく */
+typedef struct {
+    bool live;   /* 生きている頭の最後の姿を保持している */
+    bool active; /* ほどきの最中 */
+    uint64_t snap_tick;
+    EntityId head_id;
+    SpritePlan plan;
+    GameVec2 spine[RENDER_RYU_SPINE_PTS];
+    int32_t spine_n;
+    bool awakened;
+    uint8_t broken_mask;
+    uint32_t seed;
+    float x, y, radius;
+    float t_s;
+} RyuDeathSnap;
 
 typedef struct {
     Rectangle cards[GAME_MAX_REWARD_CHOICES];
@@ -227,6 +278,14 @@ typedef struct {
     uint32_t prev_proj_gen[ECS_MAX_ENTITIES];
     Vector2 prev_nue_pos;
     EntityId prev_nue_id;
+
+    /* 描いた絵の向き（±0.25 の履歴付き）と紙の裏返し。世代が変わったら初期化する */
+    SpriteBank sprites;
+    int8_t sprite_face[ECS_MAX_ENTITIES];
+    uint32_t sprite_turn_tick[ECS_MAX_ENTITIES];
+    uint32_t sprite_face_gen[ECS_MAX_ENTITIES];
+    SpriteFrameCache sprite_frame;
+    RyuDeathSnap ryu_snap;
 
     EnemyDefId intro_queue[RENDER_MAX_INTRO_QUEUE];
     int32_t intro_head;
