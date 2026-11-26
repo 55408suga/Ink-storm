@@ -15,15 +15,15 @@ void render_lobby_layout(LobbyLayout *out)
     memset(out, 0, sizeof *out);
     const float x = 112.0f;
     const float w = 296.0f;
-    const float h = 58.0f;
-    const float gap = 16.0f;
-    const float y0 = 236.0f;
-    for (int i = 0; i < 4; ++i) {
+    const float h = 52.0f;
+    const float gap = 12.0f;
+    const float y0 = 198.0f;
+    for (int i = 0; i < LOBBY_MENU_COUNT; ++i) {
         out->items[i] = (Rectangle){x, y0 + (float)i * (h + gap), w, h};
     }
     out->title_rect = (Rectangle){548.0f, 168.0f, 556.0f, 198.0f};
     out->footer_rect = (Rectangle){64.0f, 608.0f, (float)INK_SCREEN_W - 128.0f, 58.0f};
-    out->brush_rect = (Rectangle){x, y0 + 4.0f * (h + gap) + 4.0f, w, 52.0f};
+    out->brush_rect = (Rectangle){x, 520.0f, w, 52.0f};
     out->hint_rect = (Rectangle){500.0f, 566.0f, 640.0f, 32.0f};
 }
 
@@ -74,7 +74,7 @@ static void draw_footer_records(RenderState *r, Rectangle footer, const MetaStat
     snprintf(vals[3], sizeof vals[3], "%d", m->clears);
     static const TextId k_labels[4] = {TEXT_LOBBY_CRYSTALS, TEXT_LOBBY_BEST_ACT,
                                        TEXT_LOBBY_BEST_SCORE, TEXT_LOBBY_CLEARS};
-    static const PaletteId k_val_pal[4] = {PAL_KIN, PAL_SUMI_SCORCH, PAL_SUMI_SCORCH, PAL_SHU};
+    static const PaletteId k_val_pal[4] = {PAL_BENGARA, PAL_SUMI_SCORCH, PAL_SUMI_SCORCH, PAL_SHU};
     const float slot_w = (footer.width - 32.0f) / 4.0f;
     const float fy = footer.y + 18.0f;
     for (int i = 0; i < 4; ++i) {
@@ -123,26 +123,40 @@ void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui)
                               (Vector2){810.0f, 348.0f}, 20.0f, PAL_SUMI_HEAVY, 0.94f, false);
 
     /* Left-side menu buttons */
-    static const TextId k_menu_ids[4] = {
-        TEXT_LOBBY_SORTIE,
-        TEXT_LOBBY_BOKUAN,
-        TEXT_LOBBY_SETTINGS,
-        TEXT_LOBBY_QUIT,
+    static const TextId k_menu_ids[LOBBY_MENU_COUNT] = {
+        TEXT_LOBBY_SORTIE,   TEXT_LOBBY_GUIDE, TEXT_LOBBY_BOKUAN,
+        TEXT_LOBBY_SETTINGS, TEXT_LOBBY_QUIT,
     };
-    const int32_t active =
-        ui->hover_choice >= 0 && ui->hover_choice < 4 ? ui->hover_choice : ui->lobby_cursor;
+    const int32_t active = ui->hover_choice >= 0 && ui->hover_choice < LOBBY_MENU_COUNT
+                               ? ui->hover_choice
+                               : ui->lobby_cursor;
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < LOBBY_MENU_COUNT; ++i) {
         const bool sel = (active == i);
+        const bool show_guide_badge = (i == 1 && ui->meta_view.runs_played == 0);
         const Rectangle rect = layout.items[i];
-        ink_fill_panel(r, rect, PAL_GOFUN, sel ? 0.96f : 0.86f, sel ? PAL_SHU : PAL_SUMI_DARK,
+        ink_fill_panel(r, rect, PAL_GOFUN, sel ? 0.96f : 0.88f, sel ? PAL_SHU : PAL_SUMI_DARK,
                        0.92f, 910u + (uint32_t)i);
-        render_draw_text_centered(
-            r, text_get(k_menu_ids[i], r->use_ja),
-            (Vector2){rect.x + rect.width * 0.5f, rect.y + rect.height * 0.5f}, 24.0f,
-            sel ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
+        if (show_guide_badge) {
+            const Rectangle badge = {rect.x + rect.width - 82.0f, rect.y + 14.0f, 70.0f, 24.0f};
+            const float lbl_cx = rect.x + (rect.width - 74.0f) * 0.5f + (sel ? 10.0f : 0.0f);
+            render_draw_text_fit(r, text_get(k_menu_ids[i], r->use_ja),
+                                 (Vector2){lbl_cx, rect.y + rect.height * 0.5f},
+                                 rect.width - 122.0f, 23.0f, 16.0f, sel ? PAL_SHU : PAL_SUMI_SCORCH,
+                                 0.96f, false);
+            ink_fill_panel(r, badge, sel ? PAL_SUMI_SCORCH : PAL_SHU, 0.96f, PAL_KIN, 0.95f, 918u);
+            render_draw_text_fit(
+                r, text_get(TEXT_LOBBY_GUIDE_BADGE, r->use_ja),
+                (Vector2){badge.x + badge.width * 0.5f, badge.y + badge.height * 0.5f},
+                badge.width - 10.0f, 13.0f, 10.0f, sel ? PAL_KIN_HOT : PAL_GOFUN, 0.98f, false);
+        } else {
+            render_draw_text_centered(
+                r, text_get(k_menu_ids[i], r->use_ja),
+                (Vector2){rect.x + rect.width * 0.5f, rect.y + rect.height * 0.5f}, 23.0f,
+                sel ? PAL_SHU : PAL_SUMI_SCORCH, 0.96f, false);
+        }
         if (sel) {
-            ink_teardrop(r, (Vector2){rect.x + 26.0f, rect.y + rect.height * 0.5f},
+            ink_teardrop(r, (Vector2){rect.x + 24.0f, rect.y + rect.height * 0.5f},
                          (Vector2){1.0f, 0.0f}, 9.0f, 6.0f, pal_color_alpha(PAL_SHU, 0.92f));
         }
     }

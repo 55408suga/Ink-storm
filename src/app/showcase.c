@@ -457,7 +457,8 @@ static void populate_lobby_or_brush_page(GameState *g, UiView *ui, int subpage)
     paint_fluid_blob(&g->fluid, 0, 128.0f, 56.0f, 20.0f, 14.0f, 0.85f);
     fluid_sanitize_channels(&g->fluid);
     populate_demo_meta(&ui->meta_view);
-    ui->showcase_subpage = subpage % 2;
+    ui->showcase_subpage = subpage % (2 + GUIDE_SLIDE_COUNT);
+    ui->guide_page = ui->showcase_subpage >= 2 ? (ui->showcase_subpage - 2) : 0;
     ui->lobby_cursor = 0;
     ui->selected_brush = BRUSH_STYLE_EMBER;
 }
@@ -704,10 +705,11 @@ int app_run_showcase(GameState *game, RenderState *render, const CliOptions *opt
         int next_sub = subpage;
 
         if (remaining > 0) {
-            /* Automatically sweep all 6 pages & key P2 subpages during --smoke-frames 30 */
-            static const int k_sweep_page[10] = {1, 1, 2, 3, 3, 3, 4, 5, 6, 6};
-            static const int k_sweep_sub[10] = {0, 1, 0, 0, 2, 4, 0, 2, 0, 1};
-            const int slot = (frame_idx / 3) % 10;
+            /* Automatically sweep all 6 pages, reward variants, Lobby, Guide & Result during
+             * --smoke-frames (12 slots every 2 frames = 24 frames per full cycle). */
+            static const int k_sweep_page[12] = {1, 1, 2, 3, 3, 3, 4, 4, 4, 5, 6, 6};
+            static const int k_sweep_sub[12] = {0, 1, 0, 0, 2, 4, 0, 2, 5, 2, 0, 1};
+            const int slot = (frame_idx / 2) % 12;
             next_page = k_sweep_page[slot];
             next_sub = k_sweep_sub[slot];
         } else {
@@ -737,10 +739,12 @@ int app_run_showcase(GameState *game, RenderState *render, const CliOptions *opt
                 next_sub = 0;
             }
             if (IsKeyPressed(KEY_TAB)) {
-                if (page == 1 || page == 4 || page == 6) {
+                if (page == 1 || page == 6) {
                     next_sub = (subpage + 1) % 2;
                 } else if (page == 3) {
                     next_sub = (subpage + 1) % 5;
+                } else if (page == 4) {
+                    next_sub = (subpage + 1) % (2 + GUIDE_SLIDE_COUNT);
                 } else if (page == 5) {
                     next_sub = (subpage + 1) % 3;
                 }

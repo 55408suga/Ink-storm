@@ -73,15 +73,24 @@ static void test_text_table_content_mappings(void)
     }
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_axis_name(AXIS_COUNT));
 
-    /* All 3 acts (title & short name) */
+    /* All 3 acts (title, short name, subtitle, trait & tactical desc) */
     for (int act = 0; act < 3; ++act) {
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_act_title(act));
         TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_act_short(act));
+        TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_act_subtitle(act));
+        TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_act_trait(act));
+        TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_act_desc(act));
     }
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_title(-1));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_title(3));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_short(-1));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_short(3));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_subtitle(-1));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_subtitle(3));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_trait(-1));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_trait(3));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_desc(-1));
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_act_desc(3));
 
     /* All 15 relics (name & effect; tradeoffs on the 7 with drawbacks: 4 initial + 3 unlocked) */
     TEST_ASSERT_EQUAL_INT(15, RELIC_COUNT);
@@ -109,16 +118,46 @@ static void test_text_table_content_mappings(void)
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_ONI_TILE));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_relic_tradeoff(RELIC_COUNT));
 
-    /* Expanded settings, notices, endless & fallback strings */
+    /* Expanded settings, notices, endless, fallback, HUD, Result & Guide strings */
     static const TextId p2_ui_ids[] = {
-        TEXT_SETTINGS_LANG,         TEXT_SETTINGS_LANG_AUTO,
-        TEXT_SETTINGS_LANG_JA,      TEXT_SETTINGS_LANG_EN,
-        TEXT_SETTINGS_REDUCE_FLASH, TEXT_SETTINGS_CURSOR_SCALE,
-        TEXT_SETTINGS_RESET_HINTS,  TEXT_SETTINGS_RESET_DEFAULTS,
-        TEXT_SETTINGS_NOTICE_HINTS, TEXT_SETTINGS_NOTICE_DEFAULTS,
-        TEXT_REWARD_CRYSTAL_TITLE,  TEXT_REWARD_REPAIR_EXCESS,
-        TEXT_RESULT_ENDLESS,        TEXT_RESULT_CRYSTAL_ENDLESS,
-        TEXT_RESULT_CRYSTAL_BONUS,  TEXT_ENDLESS_ACT_PREFIX,
+        TEXT_SETTINGS_LANG,
+        TEXT_SETTINGS_LANG_AUTO,
+        TEXT_SETTINGS_LANG_JA,
+        TEXT_SETTINGS_LANG_EN,
+        TEXT_SETTINGS_REDUCE_FLASH,
+        TEXT_SETTINGS_CURSOR_SCALE,
+        TEXT_SETTINGS_RESET_HINTS,
+        TEXT_SETTINGS_RESET_DEFAULTS,
+        TEXT_SETTINGS_NOTICE_HINTS,
+        TEXT_SETTINGS_NOTICE_DEFAULTS,
+        TEXT_REWARD_CRYSTAL_TITLE,
+        TEXT_REWARD_REPAIR_EXCESS,
+        TEXT_RESULT_ENDLESS,
+        TEXT_RESULT_CRYSTAL_ENDLESS,
+        TEXT_RESULT_CRYSTAL_BONUS,
+        TEXT_RESULT_CRYSTAL_BONUS_SHORT,
+        TEXT_RESULT_REACTIONS_HDR,
+        TEXT_RESULT_BREAKDOWN_HDR,
+        TEXT_RESULT_CRYSTALS_PREVIEW_SHORT,
+        TEXT_RESULT_MORE_ITEMS,
+        TEXT_ENDLESS_ACT_PREFIX,
+        TEXT_HUD_REMAINING_UNIT,
+        TEXT_HUD_WAVE_CLEAR_SHORT,
+        TEXT_HUD_LOOP_SHORT,
+        TEXT_LOBBY_GUIDE,
+        TEXT_LOBBY_GUIDE_BADGE,
+        TEXT_GUIDE_PREV,
+        TEXT_GUIDE_NEXT,
+        TEXT_GUIDE_CLOSE,
+        TEXT_GUIDE_FINISH,
+        TEXT_GUIDE_NAV_HINT,
+        TEXT_GUIDE_TIP_TAG,
+        TEXT_GUIDE_S0_TITLE,
+        TEXT_GUIDE_S1_TITLE,
+        TEXT_GUIDE_S2_TITLE,
+        TEXT_GUIDE_S3_TITLE,
+        TEXT_GUIDE_S4_TITLE,
+        TEXT_GUIDE_D4_BOKUAN_SUB,
     };
     for (size_t i = 0; i < sizeof p2_ui_ids / sizeof p2_ui_ids[0]; ++i) {
         TEST_ASSERT_TRUE(text_get(p2_ui_ids[i], true)[0] != '\0');

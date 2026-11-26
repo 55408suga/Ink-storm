@@ -7,6 +7,18 @@
 #include <math.h>
 #include <stdio.h>
 
+static bool is_multipart_ryu_hud_active(const GameState *g)
+{
+    if (g == NULL || g->run.wave_index != GAME_BOSS_WAVE_INDEX ||
+        g->run.boss_id.index == ECS_INVALID_INDEX ||
+        g->ryu_body.head_id.index != g->run.boss_id.index ||
+        g->ryu_body.head_id.gen != g->run.boss_id.gen) {
+        return false;
+    }
+    const HealthComp *boss_hp = game_health(g, g->run.boss_id);
+    return boss_hp != NULL && boss_hp->max_hp > 0;
+}
+
 /* Drawn before the VFX seals so the 祓/討 stamp lands on top of the band, in its right-hand slot;
  * the title keeps to the left part of the band. */
 void render_draw_clear_banner(RenderState *r)
@@ -42,15 +54,16 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const float u = ink_clampf(g->phase_t / 2.0f, 0.0f, 1.0f);
         const float open =
             u < 0.25f ? (u / 0.25f) : (u > 0.80f ? (1.0f - (u - 0.80f) / 0.20f) : 1.0f);
+        const int32_t stage_act =
+            g->run.act_index >= 0 ? (g->run.act_index % GAME_MAIN_ACT_COUNT) : 0;
 
         char title_buf[128];
         const char *title_str = NULL;
         if (g->run.act_index >= GAME_MAIN_ACT_COUNT) {
-            static const TextId k_subtitles[GAME_MAIN_ACT_COUNT] = {
-                TEXT_ACT1_SUBTITLE, TEXT_ACT2_SUBTITLE, TEXT_ACT3_SUBTITLE};
-            const int32_t stage_act = g->run.act_index % GAME_MAIN_ACT_COUNT;
             const int32_t loop_n = g->run.act_index / GAME_MAIN_ACT_COUNT;
-            const char *sub = text_get(k_subtitles[stage_act], r->use_ja);
+            const TextId sub_id = text_act_subtitle(stage_act);
+            const char *sub =
+                text_get(sub_id != TEXT_NONE ? sub_id : TEXT_ACT1_SUBTITLE, r->use_ja);
             if (r->use_ja) {
                 snprintf(title_buf, sizeof title_buf, "%s%d%s (%s%d) %s",
                          text_get(TEXT_ENDLESS_ACT_PREFIX, true), g->run.act_index + 1,
@@ -66,14 +79,32 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
             title_str = text_get(title_id != TEXT_NONE ? title_id : TEXT_ACT1_TITLE, r->use_ja);
         }
 
+        const TextId desc_id = text_act_desc(stage_act);
+        const char *desc_str = text_get(desc_id != TEXT_NONE ? desc_id : TEXT_ACT1_DESC, r->use_ja);
+
         const Vector2 tm = render_measure_text(r, title_str, 44.0f, true);
-        const float target_bw = ink_clampf(fmaxf(720.0f, tm.x + 96.0f), 720.0f, 1180.0f);
+        const Vector2 dm = render_measure_text(r, desc_str, 19.0f, false);
+        const float target_bw =
+            ink_clampf(fmaxf(760.0f, fmaxf(tm.x + 104.0f, dm.x + 96.0f)), 760.0f, 1180.0f);
         const float bw = target_bw * ink_clampf(open, 0.1f, 1.0f);
-        const Rectangle band = {cx - bw * 0.5f, (float)INK_SCREEN_H * 0.38f, bw, 118.0f};
-        ink_fill_panel(r, band, PAL_GOFUN, 0.92f * open, PAL_SUMI_DARK, 0.88f * open, 600u);
+        const Rectangle band = {cx - bw * 0.5f, 260.0f, bw, 148.0f};
+        ink_fill_panel(r, band, PAL_GOFUN, 0.94f * open, PAL_SUMI_DARK, 0.90f * open, 600u);
         if (open > 0.35f) {
-            render_draw_text_centered(r, title_str, (Vector2){cx, band.y + band.height * 0.5f},
-                                      44.0f, PAL_SUMI_SCORCH, open, true);
+            render_draw_text_fit(r, title_str, (Vector2){cx, band.y + 48.0f}, band.width - 64.0f,
+                                 44.0f, 26.0f, PAL_SUMI_SCORCH, open, true);
+            const float rule_hw = fminf(band.width * 0.40f, 360.0f);
+            const Vector2 rule_pts[2] = {{cx - rule_hw, band.y + 86.0f},
+                                         {cx + rule_hw, band.y + 86.0f}};
+            ink_stroke(r, rule_pts, 2,
+                       (BrushProfile){.w_max = 2.6f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.16f,
+                                      .exit = 0.28f,
+                                      .dry = 0.35f,
+                                      .seed = 602u},
+                       (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.78f * open}, 1.0f);
+            render_draw_text_fit(r, desc_str, (Vector2){cx, band.y + 116.0f}, band.width - 64.0f,
+                                 19.0f, 13.0f, PAL_BENGARA, open, false);
         }
     }
 
@@ -94,7 +125,8 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const EnemyDefId eid = r->intro_queue[r->intro_head];
         const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
                                           : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);
-        const Rectangle box = {cx - 300.0f, 68.0f, 600.0f, 66.0f};
+        const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
+        const Rectangle box = {cx - 300.0f, base_y, 600.0f, 66.0f};
         ink_fill_panel(r, box, PAL_GOFUN, 0.92f * a, PAL_SUMI_DARK, 0.85f * a, 620u);
         render_draw_text_fit(r, text_get(text_enemy_name(eid), r->use_ja),
                              (Vector2){cx, box.y + 22.0f}, box.width - 32.0f, 22.0f, 16.0f,
@@ -140,11 +172,12 @@ void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui
     }
 
     const float cx = (float)INK_SCREEN_W * 0.5f;
-    float y = 66.0f;
+    const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
+    float y = base_y;
     if (r->boss_banner_t > 0.0f) {
         y = 178.0f;
     } else if (r->intro_count > 0) {
-        y = 142.0f;
+        y = base_y + 74.0f;
     }
 
     const float t = ui->active_hint_t;

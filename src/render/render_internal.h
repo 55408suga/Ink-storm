@@ -96,6 +96,7 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_clear_banner(RenderState *r);
 void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_lobby_ui(RenderState *r, const GameState *g, const UiView *ui);
+void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_bokuan_ui(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui);

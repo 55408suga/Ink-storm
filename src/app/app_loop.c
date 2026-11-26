@@ -400,6 +400,39 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.scene = UI_SCENE_BRUSH_SELECT;
         ctx->ui.hover_choice = UI_HOVER_NONE;
         break;
+    case MENU_ACT_LOBBY_GUIDE:
+        play_ui_stamp(audio);
+        ctx->ui.scene = UI_SCENE_GUIDE;
+        ctx->ui.guide_page = 0;
+        ctx->ui.hover_choice = UI_HOVER_NONE;
+        break;
+    case MENU_ACT_GUIDE_PREV: {
+        const int32_t next = menu_nav_guide_page(ctx->ui.guide_page, -1);
+        if (next != ctx->ui.guide_page) {
+            ctx->ui.guide_page = next;
+            play_ui_cue(audio, AUDIO_UI_CLICK);
+        }
+        break;
+    }
+    case MENU_ACT_GUIDE_NEXT:
+        if (ctx->ui.guide_page >= GUIDE_SLIDE_COUNT - 1) {
+            play_ui_cue(audio, AUDIO_UI_BACK);
+            ctx->ui.scene = UI_SCENE_TITLE_LOBBY;
+            ctx->ui.hover_choice = UI_HOVER_NONE;
+            sync_meta_view(ctx);
+        } else {
+            ctx->ui.guide_page = menu_nav_guide_page(ctx->ui.guide_page, 1);
+            play_ui_cue(audio, AUDIO_UI_CLICK);
+        }
+        break;
+    case MENU_ACT_GUIDE_JUMP: {
+        const int32_t target = menu_nav_guide_page(menu->arg, 0);
+        if (target != ctx->ui.guide_page) {
+            ctx->ui.guide_page = target;
+            play_ui_cue(audio, AUDIO_UI_CLICK);
+        }
+        break;
+    }
     case MENU_ACT_LOBBY_BOKUAN:
         play_ui_stamp(audio);
         ctx->ui.scene = UI_SCENE_BOKUAN;

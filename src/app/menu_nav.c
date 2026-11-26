@@ -109,6 +109,17 @@ int32_t menu_nav_result(int32_t cursor, bool has_endless, MenuNavKey key)
     return order[pos];
 }
 
+int32_t menu_nav_guide_page(int32_t page, int32_t delta)
+{
+    int64_t next = (int64_t)page + (int64_t)delta;
+    if (next < 0) {
+        next = 0;
+    } else if (next >= GUIDE_SLIDE_COUNT) {
+        next = GUIDE_SLIDE_COUNT - 1;
+    }
+    return (int32_t)next;
+}
+
 /* A Lobby test stroke may only begin on open canvas, but once begun it keeps painting while the
  * drag crosses buttons, and the press that started it never doubles as a button click. */
 bool menu_lobby_stroke_gate(bool *active, bool pressed, bool down, bool press_on_ui)
