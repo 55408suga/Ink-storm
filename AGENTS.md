@@ -106,13 +106,13 @@ nix develop -c ./build/release/inkstorm --no-post --smoke-frames 5
 
 - [ ] 差分と仕様を照合し、他の担当範囲への変更や一時的な検証コードが入っていない。
 - [ ] 変更範囲の最小ビルド・関連テストを通した（フル ASan/CTest・`format-check`・`lint`・`dist` は CI 委譲、失敗時やツール変更時のみローカル実行）。
-- [ ] 描画変更は実ウィンドウ、シェーダ経路、`--no-post`、必要なキャプチャをローカルで確認した。
+- [ ] 見た目（描画・キャラ/ボス・背景・シェーダ・VFX・UI）や音（BGM・筆音・SE）を変更した場合は `tools/qa_run.py`（必要時 `--no-post`・`--no-bgm`・`--showcase --snap` 併用）で該当シナリオをリポジトリ外へ録画し、自動合否と `contact_sheet.png`・音付き MP4 を直接確認した。
 - [ ] `flake.nix` を変更した場合はローカルで `nix develop` 評価を確認した。
 - [ ] 実行した確認の結果と、CI に委譲した項目・環境上の制約を報告する。
 
 ## プロジェクト専用 Skill
 
-- ビルド、静的解析、シェーダ検証、表示やキャプチャの確認に使用する。[inkstorm-verify-and-visual](.agents/skills/inkstorm-verify-and-visual/SKILL.md)
+- 見た目・音の変更時のオフライン音付き動画 QA（`tools/qa_run.py`）、ビルド、静的解析、シェーダ検証、視覚・聴覚レビューに使用する。[inkstorm-verify-and-visual](.agents/skills/inkstorm-verify-and-visual/SKILL.md)
 - 流体、属性反応、格子境界、決定性や性能予算の変更に使用する。[inkstorm-fluid-sim](.agents/skills/inkstorm-fluid-sim/SKILL.md)
 - 敵、ボス、遺物、アップグレード、アビリティ、ウェーブの追加に使用する。[inkstorm-content-authoring](.agents/skills/inkstorm-content-authoring/SKILL.md)
 - PR の準備、CodeRabbit のコメント取得とトリアージに使用する。[inkstorm-pr-and-coderabbit](.agents/skills/inkstorm-pr-and-coderabbit/SKILL.md)
