@@ -579,16 +579,14 @@ void render_paper_draw_weather(RenderState *r, const GameState *g, int act_index
     }
     render_set_blend(r, BLEND_ALPHA);
 
-    /* Act 3 diagonal clear-ink rain lines drifting at 60 px/s */
+    /* Act 3 diagonal clear-ink rain lines drifting continuously with independent wrap phases */
     const int stage_act = act_index >= 0 ? (act_index % GAME_MAIN_ACT_COUNT) : 0;
     if (stage_act == 2) {
-        const float drift = fmodf(r->vfx_time * 60.0f, 160.0f);
         const InkTone rain_tone = {.color = PAL_SUMI_CLEAR, .alpha = 0.30f};
         for (int i = 0; i < 16; ++i) {
-            const float bx =
-                fmodf((float)i * 88.0f + drift * 0.45f, (float)INK_SCREEN_W + 60.0f) - 30.0f;
-            const float by =
-                fmodf((float)(i * 137 % 720) + drift, (float)INK_SCREEN_H + 80.0f) - 40.0f;
+            float bx = 0.0f;
+            float by = 0.0f;
+            render_rain_streak_pos(i, r->rain_phase_x, r->rain_phase_y, &bx, &by);
             const Vector2 pts[2] = {{bx, by}, {bx - 16.0f, by + 34.0f}};
             ink_stroke(r, pts, 2,
                        (BrushProfile){.w_max = 1.8f,

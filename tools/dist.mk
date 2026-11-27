@@ -15,11 +15,13 @@ inkstorm: $(OBJECTS)
 	$(CC) $(LDFLAGS) -o "$@" $(OBJECTS) "$(RAYLIB_DIR)/lib/libraylib.a" -lGL -lm -lpthread -ldl -lrt -lX11 $(LDLIBS)
 
 build/obj/render/%.o build/obj/app/%.o: RAYLIB_INCLUDE = -isystem "$(RAYLIB_DIR)/include"
+SOLVER_VECT_FLAG := $(if $(findstring gcc,$(notdir $(CC))),-fvect-cost-model=cheap,)
+build/obj/fluid/solver.o: EXTRA_CFLAGS = $(SOLVER_VECT_FLAG)
 
 build/obj/%.o: src/%.c Makefile
 	mkdir -p "$(@D)"
 	$(CC) $(CPPFLAGS) -D_DEFAULT_SOURCE $(MODULE_INCLUDES) $(RAYLIB_INCLUDE) \
-	    $(CFLAGS) -std=c11 -Wall -Wextra -Wpedantic -Wshadow -MMD -MP -c "$<" -o "$@"
+	    $(CFLAGS) $(EXTRA_CFLAGS) -std=c11 -Wall -Wextra -Wpedantic -Wshadow -MMD -MP -c "$<" -o "$@"
 
 run: inkstorm
 	$(GL_ENV) ./inkstorm

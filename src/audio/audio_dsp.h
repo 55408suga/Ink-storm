@@ -39,6 +39,15 @@ typedef struct {
     float base[2];
 } AudioGrainLoop;
 
+typedef struct {
+    float k;
+    float a1;
+    float a2;
+    float a3;
+} AudioSvfCoeffs;
+
+AudioSvfCoeffs audio_svf_make_coeffs(float cutoff_hz, float q);
+AudioSvfOut audio_svf_step_coeffs(AudioSvf *f, float in, AudioSvfCoeffs c);
 AudioSvfOut audio_svf_step(AudioSvf *f, float in, float cutoff_hz, float q);
 float audio_pink_step(AudioPink *p, float white);
 float audio_walk_step(AudioWalk *w, float white, float hz);

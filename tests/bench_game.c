@@ -24,9 +24,18 @@ static double elapsed_ms(struct timespec start, struct timespec end)
     return sec * 1000.0 + nsec * 1e-6;
 }
 
-static double percentile(const double sorted[MEASURED_TICKS], int percent)
+static double percentile(const double *sorted, int count, int percent)
 {
-    return sorted[(MEASURED_TICKS * percent + 99) / 100 - 1];
+    if (count <= 0) {
+        return 0.0;
+    }
+    int idx = (count * percent + 99) / 100 - 1;
+    if (idx < 0) {
+        idx = 0;
+    } else if (idx >= count) {
+        idx = count - 1;
+    }
+    return sorted[idx];
 }
 
 static int32_t count_projectiles(const GameState *g)
@@ -92,6 +101,9 @@ static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
     double game_p95s[TRIALS];
     double fluid_means[TRIALS];
     double fluid_p95s[TRIALS];
+    double fluid_solved_means[TRIALS];
+    double fluid_solved_p95s[TRIALS];
+    int skipped_totals[TRIALS];
     uint64_t ref_hash = 0;
     bool valid = true;
 
@@ -125,14 +137,19 @@ static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
 
         double game_samples[MEASURED_TICKS];
         double fluid_samples[MEASURED_TICKS];
+        double fluid_solved_samples[MEASURED_TICKS];
         double game_total = 0.0;
         double fluid_total = 0.0;
+        double fluid_solved_total = 0.0;
+        int solved_count = 0;
+        int skipped_hitstop = 0;
         double alive_sum = 0.0;
         double proj_sum = 0.0;
         bool all_playing = true;
 
         for (int tick = 0; tick < WARMUP_TICKS + MEASURED_TICKS; ++tick) {
             const BrushInput in = game_autoplay_input(g);
+            const uint64_t steps_before = g->fluid.steps;
             struct timespec t0 = {0};
             struct timespec t1 = {0};
             clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -140,10 +157,18 @@ static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
             clock_gettime(CLOCK_MONOTONIC, &t1);
             if (tick >= WARMUP_TICKS) {
                 const int idx = tick - WARMUP_TICKS;
+                const bool solved = g->fluid.steps > steps_before;
+                const double f_ms = solved ? g->fluid.stats.solve_ms : 0.0;
                 game_samples[idx] = elapsed_ms(t0, t1);
-                fluid_samples[idx] = g->fluid.stats.solve_ms;
+                fluid_samples[idx] = f_ms;
                 game_total += game_samples[idx];
-                fluid_total += fluid_samples[idx];
+                fluid_total += f_ms;
+                if (solved) {
+                    fluid_solved_samples[solved_count++] = f_ms;
+                    fluid_solved_total += f_ms;
+                } else {
+                    ++skipped_hitstop;
+                }
                 alive_sum += (double)ecs_alive_count(&g->ecs);
                 proj_sum += (double)count_projectiles(g);
                 if (g->phase != RUN_PHASE_PLAYING) {
@@ -154,25 +179,36 @@ static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
 
         qsort(game_samples, MEASURED_TICKS, sizeof game_samples[0], compare_ms);
         qsort(fluid_samples, MEASURED_TICKS, sizeof fluid_samples[0], compare_ms);
+        if (solved_count > 0) {
+            qsort(fluid_solved_samples, (size_t)solved_count, sizeof fluid_solved_samples[0],
+                  compare_ms);
+        }
 
         game_means[trial] = game_total / (double)MEASURED_TICKS;
-        game_p95s[trial] = percentile(game_samples, 95);
+        game_p95s[trial] = percentile(game_samples, MEASURED_TICKS, 95);
         fluid_means[trial] = fluid_total / (double)MEASURED_TICKS;
-        fluid_p95s[trial] = percentile(fluid_samples, 95);
+        fluid_p95s[trial] = percentile(fluid_samples, MEASURED_TICKS, 95);
+        fluid_solved_means[trial] =
+            solved_count > 0 ? fluid_solved_total / (double)solved_count : 0.0;
+        fluid_solved_p95s[trial] = percentile(fluid_solved_samples, solved_count, 95);
+        skipped_totals[trial] = skipped_hitstop;
 
         const uint64_t h = game_hash(g);
         const bool finite = fluid_validate_finite(&g->fluid);
         if (trial == 0) {
             ref_hash = h;
         }
-        if (!finite || !all_playing || h != ref_hash) {
+        const bool trial_ok = finite && all_playing && solved_count > 0 && h == ref_hash;
+        if (!trial_ok) {
             valid = false;
         }
 
         printf("endless_trial=%d status=%s game_mean=%.6f game_p95=%.6f fluid_mean=%.6f "
-               "fluid_p95=%.6f avg_alive=%.2f avg_proj=%.2f hash=%016" PRIx64 " finite=%s\n",
-               trial + 1, all_playing ? "PLAYING" : "INVALID", game_means[trial], game_p95s[trial],
-               fluid_means[trial], fluid_p95s[trial], alive_sum / (double)MEASURED_TICKS,
+               "fluid_p95=%.6f fluid_solved_mean=%.6f fluid_solved_p95=%.6f skipped_hitstop=%d "
+               "avg_alive=%.2f avg_proj=%.2f hash=%016" PRIx64 " finite=%s\n",
+               trial + 1, trial_ok ? "PLAYING" : "INVALID", game_means[trial], game_p95s[trial],
+               fluid_means[trial], fluid_p95s[trial], fluid_solved_means[trial],
+               fluid_solved_p95s[trial], skipped_hitstop, alive_sum / (double)MEASURED_TICKS,
                proj_sum / (double)MEASURED_TICKS, h, finite ? "true" : "false");
 
         game_destroy(g);
@@ -182,22 +218,28 @@ static bool run_endless_ryu_fox_bench(const RunConfig *cfg)
     qsort(game_p95s, TRIALS, sizeof game_p95s[0], compare_ms);
     qsort(fluid_means, TRIALS, sizeof fluid_means[0], compare_ms);
     qsort(fluid_p95s, TRIALS, sizeof fluid_p95s[0], compare_ms);
+    qsort(fluid_solved_means, TRIALS, sizeof fluid_solved_means[0], compare_ms);
+    qsort(fluid_solved_p95s, TRIALS, sizeof fluid_solved_p95s[0], compare_ms);
 
     const double med_game_mean = game_means[TRIALS / 2];
     const double med_game_p95 = game_p95s[TRIALS / 2];
-    printf("endless_ryu_fox median game_mean=%.6f game_p95=%.6f fluid_mean=%.6f fluid_p95=%.6f\n",
-           med_game_mean, med_game_p95, fluid_means[TRIALS / 2], fluid_p95s[TRIALS / 2]);
+    const bool budget_ok = valid && med_game_mean < 4.0 && med_game_p95 < 4.0;
+    printf("endless_ryu_fox median game_mean=%.6f game_p95=%.6f fluid_mean=%.6f fluid_p95=%.6f "
+           "fluid_solved_mean=%.6f fluid_solved_p95=%.6f skipped_hitstop=%d\n",
+           med_game_mean, med_game_p95, fluid_means[TRIALS / 2], fluid_p95s[TRIALS / 2],
+           fluid_solved_means[TRIALS / 2], fluid_solved_p95s[TRIALS / 2],
+           skipped_totals[TRIALS / 2]);
     printf("endless_ryu_fox budget(<4.0ms mean & p95): %s\n",
-           (med_game_mean < 4.0 && med_game_p95 < 4.0) ? "PASS" : "FAIL");
+           budget_ok ? "PASS" : (valid ? "FAIL" : "FAIL(INVALID)"));
     return valid;
 }
 
-static void run_extra_stress_load(void)
+static bool run_extra_stress_load(void)
 {
     const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x5eed));
     GameState *g = game_create(&cfg);
     if (g == NULL) {
-        return;
+        return false;
     }
     /* Act 2 Torii + Rock Pillar solids + Nue + 16 mixed enemies + 48 mixed projectiles. */
     setup_act_boss_bench(g, 1);
@@ -230,13 +272,18 @@ static void run_extra_stress_load(void)
 
     double game_ms[MEASURED_TICKS];
     double fluid_ms[MEASURED_TICKS];
+    double fluid_solved_ms[MEASURED_TICKS];
     double game_sum = 0.0;
     double fluid_sum = 0.0;
+    double fluid_solved_sum = 0.0;
+    int solved_count = 0;
+    int skipped_hitstop = 0;
     double alive_sum = 0.0;
     double proj_sum = 0.0;
     bool all_playing = true;
     for (int tick = 0; tick < WARMUP_TICKS + MEASURED_TICKS; ++tick) {
         const BrushInput in = game_autoplay_input(g);
+        const uint64_t steps_before = g->fluid.steps;
         struct timespec t0 = {0};
         struct timespec t1 = {0};
         clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -244,10 +291,18 @@ static void run_extra_stress_load(void)
         clock_gettime(CLOCK_MONOTONIC, &t1);
         if (tick >= WARMUP_TICKS) {
             const int idx = tick - WARMUP_TICKS;
+            const bool solved = g->fluid.steps > steps_before;
+            const double f_ms = solved ? g->fluid.stats.solve_ms : 0.0;
             game_ms[idx] = elapsed_ms(t0, t1);
-            fluid_ms[idx] = g->fluid.stats.solve_ms;
+            fluid_ms[idx] = f_ms;
             game_sum += game_ms[idx];
-            fluid_sum += fluid_ms[idx];
+            fluid_sum += f_ms;
+            if (solved) {
+                fluid_solved_ms[solved_count++] = f_ms;
+                fluid_solved_sum += f_ms;
+            } else {
+                ++skipped_hitstop;
+            }
             alive_sum += (double)ecs_alive_count(&g->ecs);
             proj_sum += (double)count_projectiles(g);
             if (g->phase != RUN_PHASE_PLAYING) {
@@ -257,15 +312,25 @@ static void run_extra_stress_load(void)
     }
     qsort(game_ms, MEASURED_TICKS, sizeof game_ms[0], compare_ms);
     qsort(fluid_ms, MEASURED_TICKS, sizeof fluid_ms[0], compare_ms);
+    if (solved_count > 0) {
+        qsort(fluid_solved_ms, (size_t)solved_count, sizeof fluid_solved_ms[0], compare_ms);
+    }
+    const bool finite = fluid_validate_finite(&g->fluid);
+    const bool ok = all_playing && finite && solved_count > 0;
     printf("stress(act2 solids,+16 enemies,+48 proj) status=%s game_mean=%.6f game_p50=%.6f "
-           "game_p95=%.6f game_max=%.6f fluid_mean=%.6f fluid_p95=%.6f avg_alive=%.2f "
+           "game_p95=%.6f game_max=%.6f fluid_mean=%.6f fluid_p95=%.6f "
+           "fluid_solved_mean=%.6f fluid_solved_p95=%.6f skipped_hitstop=%d avg_alive=%.2f "
            "avg_proj=%.2f finite=%s\n",
-           all_playing ? "PLAYING" : "INVALID", game_sum / (double)MEASURED_TICKS,
-           percentile(game_ms, 50), percentile(game_ms, 95), game_ms[MEASURED_TICKS - 1],
-           fluid_sum / (double)MEASURED_TICKS, percentile(fluid_ms, 95),
+           ok ? "PLAYING" : "INVALID", game_sum / (double)MEASURED_TICKS,
+           percentile(game_ms, MEASURED_TICKS, 50), percentile(game_ms, MEASURED_TICKS, 95),
+           game_ms[MEASURED_TICKS - 1], fluid_sum / (double)MEASURED_TICKS,
+           percentile(fluid_ms, MEASURED_TICKS, 95),
+           solved_count > 0 ? fluid_solved_sum / (double)solved_count : 0.0,
+           percentile(fluid_solved_ms, solved_count, 95), skipped_hitstop,
            alive_sum / (double)MEASURED_TICKS, proj_sum / (double)MEASURED_TICKS,
-           fluid_validate_finite(&g->fluid) ? "true" : "false");
+           finite ? "true" : "false");
     game_destroy(g);
+    return ok;
 }
 
 int main(void)
@@ -275,6 +340,9 @@ int main(void)
     double game_p95s[TRIALS];
     double fluid_means[TRIALS];
     double fluid_p95s[TRIALS];
+    double fluid_solved_means[TRIALS];
+    double fluid_solved_p95s[TRIALS];
+    int skipped_totals[TRIALS];
     uint64_t ref_hash = 0;
     bool valid = true;
 
@@ -296,8 +364,12 @@ int main(void)
 
         double game_samples[MEASURED_TICKS];
         double fluid_samples[MEASURED_TICKS];
+        double fluid_solved_samples[MEASURED_TICKS];
         double game_total = 0.0;
         double fluid_total = 0.0;
+        double fluid_solved_total = 0.0;
+        int solved_count = 0;
+        int skipped_hitstop = 0;
         double alive_sum = 0.0;
         double proj_sum = 0.0;
         double react_sum = 0.0;
@@ -305,6 +377,7 @@ int main(void)
 
         for (int tick = 0; tick < WARMUP_TICKS + MEASURED_TICKS; ++tick) {
             const BrushInput in = game_autoplay_input(g);
+            const uint64_t steps_before = g->fluid.steps;
             struct timespec t0 = {0};
             struct timespec t1 = {0};
             clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -312,10 +385,18 @@ int main(void)
             clock_gettime(CLOCK_MONOTONIC, &t1);
             if (tick >= WARMUP_TICKS) {
                 const int idx = tick - WARMUP_TICKS;
+                const bool solved = g->fluid.steps > steps_before;
+                const double f_ms = solved ? g->fluid.stats.solve_ms : 0.0;
                 game_samples[idx] = elapsed_ms(t0, t1);
-                fluid_samples[idx] = g->fluid.stats.solve_ms;
+                fluid_samples[idx] = f_ms;
                 game_total += game_samples[idx];
-                fluid_total += fluid_samples[idx];
+                fluid_total += f_ms;
+                if (solved) {
+                    fluid_solved_samples[solved_count++] = f_ms;
+                    fluid_solved_total += f_ms;
+                } else {
+                    ++skipped_hitstop;
+                }
                 alive_sum += (double)ecs_alive_count(&g->ecs);
                 proj_sum += (double)count_projectiles(g);
                 react_sum += (double)count_reaction_events(g);
@@ -327,28 +408,40 @@ int main(void)
 
         qsort(game_samples, MEASURED_TICKS, sizeof game_samples[0], compare_ms);
         qsort(fluid_samples, MEASURED_TICKS, sizeof fluid_samples[0], compare_ms);
+        if (solved_count > 0) {
+            qsort(fluid_solved_samples, (size_t)solved_count, sizeof fluid_solved_samples[0],
+                  compare_ms);
+        }
 
         game_means[trial] = game_total / (double)MEASURED_TICKS;
-        game_p95s[trial] = percentile(game_samples, 95);
+        game_p95s[trial] = percentile(game_samples, MEASURED_TICKS, 95);
         fluid_means[trial] = fluid_total / (double)MEASURED_TICKS;
-        fluid_p95s[trial] = percentile(fluid_samples, 95);
+        fluid_p95s[trial] = percentile(fluid_samples, MEASURED_TICKS, 95);
+        fluid_solved_means[trial] =
+            solved_count > 0 ? fluid_solved_total / (double)solved_count : 0.0;
+        fluid_solved_p95s[trial] = percentile(fluid_solved_samples, solved_count, 95);
+        skipped_totals[trial] = skipped_hitstop;
 
         const uint64_t h = game_hash(g);
         const bool finite = fluid_validate_finite(&g->fluid);
         if (trial == 0) {
             ref_hash = h;
         }
-        if (!finite || h != ref_hash) {
+        const bool trial_ok = finite && all_playing && solved_count > 0 && h == ref_hash;
+        if (!trial_ok) {
             valid = false;
         }
 
         printf("trial=%d status=%s game_mean=%.6f game_p50=%.6f game_p95=%.6f game_max=%.6f "
                "fluid_mean=%.6f fluid_p50=%.6f fluid_p95=%.6f fluid_max=%.6f "
+               "fluid_solved_mean=%.6f fluid_solved_p95=%.6f skipped_hitstop=%d "
                "avg_alive=%.2f avg_proj=%.2f avg_react=%.3f hash=%016" PRIx64 " finite=%s\n",
-               trial + 1, all_playing ? "PLAYING" : "INVALID", game_means[trial],
-               percentile(game_samples, 50), game_p95s[trial], game_samples[MEASURED_TICKS - 1],
-               fluid_means[trial], percentile(fluid_samples, 50), fluid_p95s[trial],
-               fluid_samples[MEASURED_TICKS - 1], alive_sum / (double)MEASURED_TICKS,
+               trial + 1, trial_ok ? "PLAYING" : "INVALID", game_means[trial],
+               percentile(game_samples, MEASURED_TICKS, 50), game_p95s[trial],
+               game_samples[MEASURED_TICKS - 1], fluid_means[trial],
+               percentile(fluid_samples, MEASURED_TICKS, 50), fluid_p95s[trial],
+               fluid_samples[MEASURED_TICKS - 1], fluid_solved_means[trial],
+               fluid_solved_p95s[trial], skipped_hitstop, alive_sum / (double)MEASURED_TICKS,
                proj_sum / (double)MEASURED_TICKS, react_sum / (double)MEASURED_TICKS, h,
                finite ? "true" : "false");
 
@@ -359,19 +452,28 @@ int main(void)
     qsort(game_p95s, TRIALS, sizeof game_p95s[0], compare_ms);
     qsort(fluid_means, TRIALS, sizeof fluid_means[0], compare_ms);
     qsort(fluid_p95s, TRIALS, sizeof fluid_p95s[0], compare_ms);
+    qsort(fluid_solved_means, TRIALS, sizeof fluid_solved_means[0], compare_ms);
+    qsort(fluid_solved_p95s, TRIALS, sizeof fluid_solved_p95s[0], compare_ms);
 
     const double med_game_mean = game_means[TRIALS / 2];
     const double med_game_p95 = game_p95s[TRIALS / 2];
     const double med_fluid_mean = fluid_means[TRIALS / 2];
     const double med_fluid_p95 = fluid_p95s[TRIALS / 2];
-    printf("median game_mean=%.6f game_p95=%.6f fluid_mean=%.6f fluid_p95=%.6f\n", med_game_mean,
-           med_game_p95, med_fluid_mean, med_fluid_p95);
+    const double med_fluid_solved_mean = fluid_solved_means[TRIALS / 2];
+    const double med_fluid_solved_p95 = fluid_solved_p95s[TRIALS / 2];
+    const bool act3_budget_ok = valid && med_game_mean < 4.0 && med_game_p95 < 4.0;
+    printf("median game_mean=%.6f game_p95=%.6f fluid_mean=%.6f fluid_p95=%.6f "
+           "fluid_solved_mean=%.6f fluid_solved_p95=%.6f skipped_hitstop=%d\n",
+           med_game_mean, med_game_p95, med_fluid_mean, med_fluid_p95, med_fluid_solved_mean,
+           med_fluid_solved_p95, skipped_totals[TRIALS / 2]);
     printf("budget(<4.0ms mean & p95): %s\n",
-           (med_game_mean < 4.0 && med_game_p95 < 4.0) ? "PASS" : "FAIL");
+           act3_budget_ok ? "PASS" : (valid ? "FAIL" : "FAIL(INVALID)"));
 
     if (!run_endless_ryu_fox_bench(&cfg)) {
         valid = false;
     }
-    run_extra_stress_load();
+    if (!run_extra_stress_load()) {
+        valid = false;
+    }
     return valid ? EXIT_SUCCESS : EXIT_FAILURE;
 }

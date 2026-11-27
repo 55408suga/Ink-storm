@@ -732,6 +732,135 @@ static void test_extreme_flt_max_config_stays_finite(void)
     }
 }
 
+static void test_oblique_near_wall_backtrace_does_not_leak_across_pillar_corner(void)
+{
+    FluidConfig cfg = fluid_config_default();
+    cfg.project_iters = 0;
+    cfg.vorticity_eps = 0.0f;
+    cfg.vel_damp = 1.0f;
+    cfg.dye_damp[0] = 1.0f;
+    fluid_init(f, &cfg);
+    fluid_set_solid_rect(f, 31.0f * FLUID_CELL_PX, 29.0f * FLUID_CELL_PX, 2.0f * FLUID_CELL_PX,
+                         2.0f * FLUID_CELL_PX, true);
+
+    /* Paint dye across the far side of the 2x2 pillar at cols 31..32, rows 29..30. */
+    for (int y = 26; y <= 28; ++y) {
+        for (int x = 32; x <= 35; ++x) {
+            f->dye[0][cell(x, y)] = 1.5f;
+        }
+    }
+    f->dye[0][cell(33, 29)] = 1.5f;
+    /* Backtrace from (30, 30) with (-dt*u, -dt*v) = (+2.0, -1.75) points across the pillar corner.
+     */
+    f->u[cell(30, 30)] = -120.0f;
+    f->v[cell(30, 30)] = 105.0f;
+
+    fluid_step(f, k_dt);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, f->dye[0][cell(30, 30)]);
+}
+
+static void test_trace_solid_segment_face_normals_and_corners(void)
+{
+    fluid_init(f, NULL);
+    /* Act 2 west torii pillar: x in [376, 392), y in [320, 336). */
+    fluid_set_solid_rect(f, 376.0f, 320.0f, 16.0f, 16.0f, true);
+
+    const FluidRayHit west = fluid_trace_solid_segment(f, 360.0f, 328.0f, 390.0f, 328.0f);
+    TEST_ASSERT_TRUE(west.hit);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, -1.0f, west.nx);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, west.ny);
+    TEST_ASSERT_FALSE(fluid_is_solid(f, west.hit_x, west.hit_y));
+    TEST_ASSERT_TRUE(west.hit_x < 376.0f);
+
+    const FluidRayHit corner = fluid_trace_solid_segment(f, 375.0f, 327.0f, 376.0f, 323.3333f);
+    TEST_ASSERT_TRUE(corner.hit);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, -1.0f, corner.nx);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, corner.ny);
+    TEST_ASSERT_FALSE(fluid_is_solid(f, corner.hit_x, corner.hit_y));
+
+    const FluidRayHit diag = fluid_trace_solid_segment(f, 372.0f, 316.0f, 380.0f, 324.0f);
+    TEST_ASSERT_TRUE(diag.hit);
+    TEST_ASSERT_TRUE(diag.nx < 0.0f && diag.ny < 0.0f);
+    TEST_ASSERT_FALSE(fluid_is_solid(f, diag.hit_x, diag.hit_y));
+
+    /* Extreme finite coordinates must not trigger float-to-int overflow under UBSan. */
+    const FluidRayHit huge_start = fluid_trace_solid_segment(f, FLT_MAX, -FLT_MAX, 640.0f, 360.0f);
+    TEST_ASSERT_TRUE(huge_start.hit);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, huge_start.t);
+    TEST_ASSERT_EQUAL_INT(FLUID_W, huge_start.cell_x);
+    TEST_ASSERT_EQUAL_INT(-1, huge_start.cell_y);
+
+    const FluidRayHit huge_end = fluid_trace_solid_segment(f, 640.0f, 360.0f, FLT_MAX, 360.0f);
+    TEST_ASSERT_TRUE(huge_end.hit);
+    TEST_ASSERT_FALSE(fluid_is_solid(f, huge_end.hit_x, huge_end.hit_y));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, -1.0f, huge_end.nx);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, huge_end.ny);
+    TEST_ASSERT_EQUAL_INT(FLUID_W - 1, huge_end.cell_x);
+}
+
+static void test_tiny_dye_flushes_to_zero_without_subnormals(void)
+{
+    FluidConfig cfg = fluid_config_default();
+    cfg.project_iters = 0;
+    cfg.vorticity_eps = 0.0f;
+    fluid_init(f, &cfg);
+
+    f->dye[0][cell(40, 40)] = 5e-7f;
+    f->dye[1][cell(40, 40)] = 5e-7f;
+    f->dye[2][cell(40, 40)] = 5e-7f;
+    f->dye[0][cell(44, 44)] = 0.01f;
+    fluid_step(f, k_dt);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, f->dye[0][cell(40, 40)]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, f->dye[1][cell(40, 40)]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, f->dye[2][cell(40, 40)]);
+    TEST_ASSERT_TRUE(f->dye[0][cell(44, 44)] > 0.005f);
+
+    /* A small configured max_dye (< 1e-6) must preserve valid saturated dye while still flushing
+     * subnormal floats (< FLT_MIN). */
+    FluidConfig tiny_cfg = fluid_config_default();
+    tiny_cfg.project_iters = 0;
+    tiny_cfg.vorticity_eps = 0.0f;
+    tiny_cfg.max_dye = 5e-7f;
+    tiny_cfg.vel_damp = 1.0f;
+    tiny_cfg.dye_damp[0] = 1.0f;
+    fluid_init(f, &tiny_cfg);
+    f->dye[0][cell(40, 40)] = 5e-7f;
+    f->dye[0][cell(42, 42)] = FLT_MIN * 0.25f;
+    fluid_step(f, k_dt);
+    TEST_ASSERT_FLOAT_WITHIN(1e-9f, 5e-7f, f->dye[0][cell(40, 40)]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, f->dye[0][cell(42, 42)]);
+}
+
+static void test_pristine_flag_tracks_mutations_and_resets(void)
+{
+    fluid_init(f, NULL);
+    TEST_ASSERT_TRUE(fluid_is_pristine(f));
+    const uint64_t rev0 = f->mutation_rev;
+    const uint64_t hash_pristine = fluid_hash(f);
+
+    const float dye[FLUID_MAX_CHANNELS] = {0.5f, 0.0f, 0.0f, 0.0f};
+    fluid_splat(f, 320.0f, 240.0f, 3.0f, 10.0f, 0.0f, dye);
+    TEST_ASSERT_FALSE(fluid_is_pristine(f));
+    TEST_ASSERT_TRUE(f->mutation_rev > rev0);
+
+    fluid_reset(f);
+    TEST_ASSERT_TRUE(fluid_is_pristine(f));
+    TEST_ASSERT_EQUAL_HEX64(hash_pristine, fluid_hash(f));
+
+    fluid_add_radial_impulse(f, 320.0f, 240.0f, 4.0f, 20.0f);
+    TEST_ASSERT_FALSE(fluid_is_pristine(f));
+    fluid_reset(f);
+    TEST_ASSERT_TRUE(fluid_is_pristine(f));
+
+    (void)fluid_channel_mut(f, 0);
+    TEST_ASSERT_FALSE(fluid_is_pristine(f));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_NOT_EQUAL_UINT64(hash_pristine, fluid_hash(f));
+
+    fluid_step(f, k_dt);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -751,5 +880,9 @@ int main(void)
     RUN_TEST(test_deterministic_replay_and_hash_fields);
     RUN_TEST(test_geometry_cache_invalidation_on_solid_changes);
     RUN_TEST(test_extreme_flt_max_config_stays_finite);
+    RUN_TEST(test_oblique_near_wall_backtrace_does_not_leak_across_pillar_corner);
+    RUN_TEST(test_trace_solid_segment_face_normals_and_corners);
+    RUN_TEST(test_tiny_dye_flushes_to_zero_without_subnormals);
+    RUN_TEST(test_pristine_flag_tracks_mutations_and_resets);
     return UNITY_END();
 }

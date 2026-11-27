@@ -202,6 +202,7 @@ void render_fonts_close(RenderState *r)
     r->owns_title_font = false;
     r->title_is_brush = false;
     r->use_ja = false;
+    r->guide_cache.valid = false;
 }
 
 void render_set_lang_mode(RenderState *r, UiLangMode mode)
@@ -319,12 +320,133 @@ float render_draw_text_wrapped(const RenderState *r, const char *text, Rectangle
         } else {
             (void)copy_span(buf, text + lines[i].start, lines[i].len);
         }
-        const float w = render_measure_text(r, buf, size, title_font).x;
+        const float w = center ? render_measure_text(r, buf, size, title_font).x : 0.0f;
         const float x = center ? box.x + (box.width - w) * 0.5f : box.x;
         render_draw_text(r, buf, (Vector2){x, y}, size, color, alpha, title_font);
         y += line_h;
     }
     return total_h;
+}
+
+static void copy_into_cached_line(char dst[RENDER_CACHED_LINE_CAP], const char *src, size_t len)
+{
+    const size_t n = text_utf8_clip(src, len, RENDER_CACHED_LINE_CAP - 1);
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+void render_layout_text_fit(const RenderState *r, const char *text, Vector2 center, float max_w,
+                            float size, float min_size, bool title_font, RenderCachedText *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof *out);
+    if (r == NULL || text == NULL || text[0] == '\0') {
+        return;
+    }
+    const size_t src_len = strlen(text);
+    const size_t keep_src = text_utf8_clip(text, src_len, sizeof out->src - 1);
+    memcpy(out->src, text, keep_src);
+    out->src[keep_src] = '\0';
+    out->box = (Rectangle){center.x, center.y, max_w, 0.0f};
+    out->req_size = size;
+    out->min_size = min_size;
+    out->title_font = title_font;
+    out->center = true;
+    out->is_wrapped = false;
+
+    float s = size;
+    Vector2 m = render_measure_text(r, text, s, title_font);
+    while (s > min_size && m.x > max_w) {
+        s -= 1.0f;
+        m = render_measure_text(r, text, s, title_font);
+    }
+    if (m.x <= max_w) {
+        copy_into_cached_line(out->lines[0], text, src_len);
+    } else {
+        char buf[SPAN_BUF];
+        ellipsize_into(r, buf, text, src_len, max_w, s, title_font);
+        copy_into_cached_line(out->lines[0], buf, strlen(buf));
+        m = render_measure_text(r, out->lines[0], s, title_font);
+    }
+    out->x[0] = center.x - m.x * 0.5f;
+    out->y[0] = center.y - m.y * 0.5f;
+    out->font_size = s;
+    out->line_count = 1;
+}
+
+void render_layout_text_wrapped(const RenderState *r, const char *text, Rectangle box, float size,
+                                float min_size, bool title_font, bool center, RenderCachedText *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof *out);
+    if (r == NULL || text == NULL || text[0] == '\0' || box.width <= 1.0f) {
+        return;
+    }
+    const size_t src_len = strlen(text);
+    const size_t keep_src = text_utf8_clip(text, src_len, sizeof out->src - 1);
+    memcpy(out->src, text, keep_src);
+    out->src[keep_src] = '\0';
+    out->box = box;
+    out->req_size = size;
+    out->min_size = min_size;
+    out->title_font = title_font;
+    out->center = center;
+    out->is_wrapped = true;
+
+    TextLine lines[TEXT_LAYOUT_MAX_LINES];
+    SpanMeasure m = {.r = r, .size = size, .title_font = title_font};
+    int32_t n = 0;
+    bool truncated = false;
+    float cur_size = size;
+    float line_h = cur_size * 1.2f;
+    for (;;) {
+        m.size = cur_size;
+        int32_t max_lines = (int32_t)(box.height / line_h);
+        max_lines = max_lines < 1
+                        ? 1
+                        : (max_lines > TEXT_LAYOUT_MAX_LINES ? TEXT_LAYOUT_MAX_LINES : max_lines);
+        n = text_layout_wrap(text, box.width, measure_span, &m, lines, max_lines, &truncated);
+        if (!truncated || cur_size <= min_size) {
+            break;
+        }
+        cur_size -= 1.0f;
+        line_h = cur_size * 1.2f;
+    }
+    const float total_h = (float)n * line_h;
+    float y = box.y + fmaxf(0.0f, (box.height - total_h) * 0.5f);
+    for (int32_t i = 0; i < n; ++i) {
+        char buf[SPAN_BUF];
+        if (truncated && i == n - 1) {
+            ellipsize_into(r, buf, text + lines[i].start, lines[i].len, box.width, cur_size,
+                           title_font);
+        } else {
+            (void)copy_span(buf, text + lines[i].start, lines[i].len);
+        }
+        copy_into_cached_line(out->lines[i], buf, strlen(buf));
+        const float w =
+            center ? render_measure_text(r, out->lines[i], cur_size, title_font).x : 0.0f;
+        out->x[i] = center ? box.x + (box.width - w) * 0.5f : box.x;
+        out->y[i] = y;
+        y += line_h;
+    }
+    out->font_size = cur_size;
+    out->line_count = n;
+}
+
+void render_draw_cached_text(const RenderState *r, const RenderCachedText *ct, PaletteId color,
+                             float alpha)
+{
+    if (r == NULL || ct == NULL || ct->line_count <= 0) {
+        return;
+    }
+    for (int32_t i = 0; i < ct->line_count; ++i) {
+        render_draw_text(r, ct->lines[i], (Vector2){ct->x[i], ct->y[i]}, ct->font_size, color,
+                         alpha, ct->title_font);
+    }
 }
 
 void render_draw_text(const RenderState *r, const char *text, Vector2 pos, float size,

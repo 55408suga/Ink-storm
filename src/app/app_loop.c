@@ -246,17 +246,17 @@ static bool is_active_run_scene(const UiView *ui)
            (ui->scene == UI_SCENE_SETTINGS && ui->settings_return_scene == UI_SCENE_RUN);
 }
 
-static void abort_current_run_if_started(AppRunContext *ctx, GameState *game)
+static void finish_current_run_on_leave(AppRunContext *ctx, GameState *game)
 {
-    if (game->phase == RUN_PHASE_VICTORY || game->phase == RUN_PHASE_GAME_OVER) {
-        return;
+    MetaSettleBreakdown br = {0};
+    if (save_resolve_and_settle_run(&ctx->meta, game, &br)) {
+        ctx->ui.settled = true;
+        ctx->ui.settle_preview = false;
+        ctx->ui.settle = br;
+        ctx->ui.crystals_after = ctx->meta.ink_crystals;
+        sync_meta_view(ctx);
+        persist_meta(ctx);
     }
-    if (game->run.act_index == 0 && game->phase == RUN_PHASE_ACT_TRANSITION) {
-        return;
-    }
-    const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
-    game_step(game, NULL, &abort_cmd);
-    app_after_tick(ctx, game);
 }
 
 static void app_finish_run_on_exit(AppRunContext *ctx, GameState *game)
@@ -542,6 +542,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
         ctx->ui.pause_cursor = 0;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
         ctx->ui.hover_choice = UI_HOVER_NONE;
+        input_latch_clear_skills(latch);
         set_audio_paused(audio, true);
         break;
     case MENU_ACT_PAUSE_RESUME:
@@ -582,7 +583,7 @@ static void handle_menu_action(AppRunContext *ctx, GameState *game, RenderState 
     case MENU_ACT_CONFIRM_YES: {
         const PauseConfirmKind kind = ctx->ui.pause_confirm;
         ctx->ui.pause_confirm = PAUSE_CONFIRM_NONE;
-        abort_current_run_if_started(ctx, game);
+        finish_current_run_on_leave(ctx, game);
         if (kind == PAUSE_CONFIRM_RESTART) {
             start_new_run(ctx, game, render, audio, ctx->ui.selected_brush);
             frame_clock_reset(clock);
@@ -738,13 +739,17 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                 const int ticks = frame_clock_advance(&clock, (double)GetFrameTime());
                 for (int t = 0; t < ticks; ++t) {
                     const RunPhase prev_phase = game->phase;
-                    const BrushInput in = input_latch_take_subtick(&latch, ticks - t);
+                    const BrushInput in =
+                        input_latch_take_subtick_for_game(&latch, ticks - t, game);
                     GameCommand cmd = input_latch_take_command(&latch, game->phase);
                     if (game->phase == RUN_PHASE_REWARD &&
                         (render->reward_anim_t < 0.98f || render->reward_reroll_t > 0.0f)) {
                         cmd = (GameCommand){.type = CMD_NONE, .arg = 0};
                     }
                     game_step(game, &in, &cmd);
+                    if (game->phase != prev_phase) {
+                        input_latch_clear_skills(&latch);
+                    }
                     consume_run_audio(audio, game);
                     render_consume_events(render, game);
                     render_update_vfx(render, game, INK_FIXED_DT);

@@ -301,14 +301,37 @@ void boss_ryu_step(GameState *g, EntityId id)
     const int32_t ph_step = (int32_t)floorf(22.0f * speed_mul * slow + 0.5f);
     en->phase = (en->phase + (ph_step > 0 ? ph_step : 1)) % 6283;
 
-    float tx;
-    float ty;
+    const float prev_x = tr->x;
+    const float prev_y = tr->y;
     if (g->internal.ryu_coil_t > 0.0f) {
-        tx = sx + cosf(ph * 3.0f) * 240.0f;
-        ty = sy + sinf(ph * 3.0f) * 240.0f;
+        static const float k_pi = 3.14159265f;
+        static const float k_two_pi = 6.2831853f;
+        const float cur_dx = tr->x - sx;
+        const float cur_dy = tr->y - sy;
+        const float cur_r = hypotf(cur_dx, cur_dy);
+        if (!g->internal.ryu_coil_active) {
+            g->internal.ryu_coil_angle = cur_r > 1e-4f ? atan2f(cur_dy, cur_dx) : -1.5707963f;
+            g->internal.ryu_coil_active = true;
+        }
+        g->internal.ryu_coil_angle -= 3.6f * slow * INK_FIXED_DT;
+        if (g->internal.ryu_coil_angle < -k_pi) {
+            g->internal.ryu_coil_angle += k_two_pi;
+        } else if (g->internal.ryu_coil_angle > k_pi) {
+            g->internal.ryu_coil_angle -= k_two_pi;
+        }
+        const float next_r = cur_r + (240.0f - cur_r) * 0.22f;
+        const float next_x = ink_clampf(sx + cosf(g->internal.ryu_coil_angle) * next_r, 110.0f,
+                                        (float)INK_SCREEN_W - 110.0f);
+        const float next_y = ink_clampf(sy + sinf(g->internal.ryu_coil_angle) * next_r, 96.0f,
+                                        (float)INK_SCREEN_H - 96.0f);
+        vel->vx = (next_x - tr->x) / INK_FIXED_DT;
+        vel->vy = (next_y - tr->y) / INK_FIXED_DT;
+        tr->x = next_x;
+        tr->y = next_y;
     } else {
-        tx = sx + sinf(ph * 0.70f) * 430.0f;
-        ty = 210.0f + sinf(ph * 1.40f) * 110.0f;
+        g->internal.ryu_coil_active = false;
+        float tx = sx + sinf(ph * 0.70f) * 430.0f;
+        float ty = 210.0f + sinf(ph * 1.40f) * 110.0f;
         const float rdx = tx - sx;
         const float rdy = ty - sy;
         const float rd = hypotf(rdx, rdy);
@@ -320,17 +343,13 @@ void boss_ryu_step(GameState *g, EntityId id)
                 ty = sy - 215.0f;
             }
         }
-    }
-    tx = ink_clampf(tx, 110.0f, (float)INK_SCREEN_W - 110.0f);
-    ty = ink_clampf(ty, 96.0f, 510.0f);
+        tx = ink_clampf(tx, 110.0f, (float)INK_SCREEN_W - 110.0f);
+        ty = ink_clampf(ty, 96.0f, 510.0f);
 
-    const float prev_x = tr->x;
-    const float prev_y = tr->y;
-    vel->vx = (vel->vx + (tx - tr->x) * 2.8f * speed_mul * INK_FIXED_DT * slow) * 0.90f;
-    vel->vy = (vel->vy + (ty - tr->y) * 2.8f * speed_mul * INK_FIXED_DT * slow) * 0.90f;
-    tr->x = ink_clampf(tr->x + vel->vx * INK_FIXED_DT, 110.0f, (float)INK_SCREEN_W - 110.0f);
-    tr->y = ink_clampf(tr->y + vel->vy * INK_FIXED_DT, 96.0f, 510.0f);
-    if (g->internal.ryu_coil_t <= 0.0f) {
+        vel->vx = (vel->vx + (tx - tr->x) * 2.8f * speed_mul * INK_FIXED_DT * slow) * 0.90f;
+        vel->vy = (vel->vy + (ty - tr->y) * 2.8f * speed_mul * INK_FIXED_DT * slow) * 0.90f;
+        tr->x = ink_clampf(tr->x + vel->vx * INK_FIXED_DT, 110.0f, (float)INK_SCREEN_W - 110.0f);
+        tr->y = ink_clampf(tr->y + vel->vy * INK_FIXED_DT, 96.0f, (float)INK_SCREEN_H - 96.0f);
         const float sdx = tr->x - sx;
         const float sdy = tr->y - sy;
         const float sd = hypotf(sdx, sdy);

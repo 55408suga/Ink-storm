@@ -369,7 +369,7 @@ static void draw_cell(RenderState *r, SpriteId id, bool halo, const SpriteXform 
         rlVertex2f(q.x[k], q.y[k]);
     }
     rlEnd();
-    rlSetTexture(rlGetTextureIdDefault());
+    rlSetTexture(0);
     r->metrics.prim_verts += 4;
 }
 

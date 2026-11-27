@@ -351,25 +351,28 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     const int32_t hover = ui != NULL ? ui->hover_choice : UI_HOVER_NONE;
 
     for (int32_t i = 0; i < layout.card_count; ++i) {
-        Rectangle card = layout.cards[i];
+        const Rectangle card = layout.cards[i];
         const bool is_hover = (hover == i) && anim >= 0.98f;
-        if (is_hover) {
-            card.y -= 8.0f;
-        }
         const float h_vis = card.height * ink_clampf(anim, 0.25f, 1.0f);
         const Rectangle vis = {card.x, card.y, card.width, h_vis};
         const float cx = vis.x + vis.width * 0.5f;
+        const float emblem_lift = is_hover ? -3.0f : 0.0f;
 
         if (rw->kind == REWARD_KIND_RELIC) {
             const RelicId rid = (RelicId)rw->choice_ids[i];
             const PaletteId border = is_hover ? PAL_SHU : PAL_KIN;
             ink_fill_panel(r, vis, PAL_GOFUN, 0.96f, border, 0.94f, 450u + (uint32_t)i);
+            if (is_hover && vis.height > 16.0f) {
+                const Rectangle hi = {vis.x + 5.0f, vis.y + 5.0f, vis.width - 10.0f,
+                                      vis.height - 10.0f};
+                ink_fill_panel(r, hi, PAL_PAPER_ACT1, 0.22f, PAL_SHU, 0.55f, 455u + (uint32_t)i);
+            }
             if (text_a <= 0.01f || vis.height < 2.0f) {
                 continue;
             }
             render_reset_blend(r);
             BeginScissorMode((int)vis.x, (int)vis.y, (int)vis.width, (int)vis.height);
-            draw_relic_emblem(r, (Vector2){cx, vis.y + 62.0f}, rid);
+            draw_relic_emblem(r, (Vector2){cx, vis.y + 62.0f + emblem_lift}, rid);
 
             char hdr[32];
             snprintf(hdr, sizeof hdr, "[%d]", i + 1);
@@ -411,6 +414,11 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
             const UpgradeAxis axis = game_upgrade_axis(uid);
             const PaletteId border = is_hover ? pal_axis_color(axis) : PAL_SUMI_DARK;
             ink_fill_panel(r, vis, PAL_GOFUN, 0.95f, border, 0.94f, 450u + (uint32_t)i);
+            if (is_hover && vis.height > 16.0f) {
+                const Rectangle hi = {vis.x + 5.0f, vis.y + 5.0f, vis.width - 10.0f,
+                                      vis.height - 10.0f};
+                ink_fill_panel(r, hi, PAL_PAPER_ACT1, 0.22f, border, 0.55f, 455u + (uint32_t)i);
+            }
 
             if (text_a <= 0.01f || vis.height < 2.0f) {
                 continue;
@@ -418,7 +426,7 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
             render_reset_blend(r);
             BeginScissorMode((int)vis.x, (int)vis.y, (int)vis.width, (int)vis.height);
 
-            draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f}, axis);
+            draw_axis_emblem(r, (Vector2){cx, vis.y + 42.0f + emblem_lift}, axis);
 
             char hdr[64];
             snprintf(hdr, sizeof hdr, "[%d] %s", i + 1, text_get(text_axis_name(axis), r->use_ja));
@@ -483,14 +491,17 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
         const bool can_rep = rw->repair_available;
         const bool hov = hover == UI_HOVER_REPAIR && can_rep;
         if (rw->kind == REWARD_KIND_FALLBACK && layout.has_crystal) {
-            Rectangle card = layout.repair_rect;
-            if (hov) {
-                card.y -= 8.0f;
-            }
+            const Rectangle card = layout.repair_rect;
             const float rcx = card.x + card.width * 0.5f;
             ink_fill_panel(r, card, can_rep ? PAL_GOFUN : PAL_SUMI_CLEAR, can_rep ? 0.96f : 0.45f,
                            hov ? PAL_SHU : (can_rep ? PAL_SUMI_DARK : PAL_SUMI_LIGHT), 0.94f, 481u);
-            draw_mini_shrine_icon(r, (Vector2){rcx, card.y + 62.0f}, can_rep);
+            if (hov) {
+                const Rectangle hi = {card.x + 5.0f, card.y + 5.0f, card.width - 10.0f,
+                                      card.height - 10.0f};
+                ink_fill_panel(r, hi, PAL_PAPER_ACT1, 0.22f, PAL_SHU, 0.55f, 483u);
+            }
+            draw_mini_shrine_icon(r, (Vector2){rcx, card.y + 62.0f + (hov ? -3.0f : 0.0f)},
+                                  can_rep);
             render_draw_text_centered(r, "[1] / [4]", (Vector2){rcx, card.y + 104.0f}, 18.0f,
                                       PAL_SUMI_HEAVY, 0.92f, false);
             const int32_t rep_amt = rw->repair_amount > 0 ? rw->repair_amount : 1;
@@ -528,14 +539,16 @@ void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui)
     }
 
     if (layout.has_crystal) {
-        Rectangle card = layout.crystal_rect;
+        const Rectangle card = layout.crystal_rect;
         const bool hov = (hover == UI_HOVER_CRYSTAL);
-        if (hov) {
-            card.y -= 8.0f;
-        }
         const float ccx = card.x + card.width * 0.5f;
         ink_fill_panel(r, card, PAL_GOFUN, 0.96f, hov ? PAL_SHU : PAL_KIN, 0.94f, 482u);
-        draw_crystal_emblem(r, (Vector2){ccx, card.y + 62.0f});
+        if (hov) {
+            const Rectangle hi = {card.x + 5.0f, card.y + 5.0f, card.width - 10.0f,
+                                  card.height - 10.0f};
+            ink_fill_panel(r, hi, PAL_PAPER_ACT1, 0.22f, PAL_SHU, 0.55f, 484u);
+        }
+        draw_crystal_emblem(r, (Vector2){ccx, card.y + 62.0f + (hov ? -3.0f : 0.0f)});
         render_draw_text_centered(r, "[2]", (Vector2){ccx, card.y + 104.0f}, 18.0f, PAL_KIN, 0.94f,
                                   false);
         render_draw_text_centered(r, text_get(TEXT_REWARD_CRYSTAL_TITLE, r->use_ja),

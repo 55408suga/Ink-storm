@@ -76,6 +76,13 @@ void render_draw_text_fit(const RenderState *r, const char *text, Vector2 center
 float render_draw_text_wrapped(const RenderState *r, const char *text, Rectangle box, float size,
                                float min_size, PaletteId color, float alpha, bool title_font,
                                bool center);
+void render_layout_text_fit(const RenderState *r, const char *text, Vector2 center, float max_w,
+                            float size, float min_size, bool title_font, RenderCachedText *out);
+void render_layout_text_wrapped(const RenderState *r, const char *text, Rectangle box, float size,
+                                float min_size, bool title_font, bool center,
+                                RenderCachedText *out);
+void render_draw_cached_text(const RenderState *r, const RenderCachedText *ct, PaletteId color,
+                             float alpha);
 
 /* Entities (draw_entities.c) */
 void render_draw_entities(RenderState *r, const GameState *g, int act_index);

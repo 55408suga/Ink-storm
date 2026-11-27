@@ -886,6 +886,124 @@ static void test_act3_boss_hitstop_and_aftermath_reach_victory(void)
     game_destroy(g);
 }
 
+static void test_aftermath_consumes_pending_radial_impulse_without_advancing_player_timers(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    g->phase = RUN_PHASE_WAVE_AFTERMATH;
+    g->phase_t = 0.0f;
+    g->player.gale_cd = 2.0f;
+    g->player.cyclone_cd = 1.5f;
+    g->pending_impulses[0] = (PendingImpulse){
+        .x = 640.0f,
+        .y = 360.0f,
+        .rad_cells = 8.0f,
+        .peak_speed = 60.0f,
+    };
+    g->pending_impulse_count = 1;
+
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_EQUAL_INT32(0, g->pending_impulse_count);
+    TEST_ASSERT_TRUE(g->fluid.u[45 * FLUID_W + 83] > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.0f, g->player.gale_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.5f, g->player.cyclone_cd);
+    game_destroy(g);
+}
+
+static void test_ecs_hash_covers_retired_slot_generations_above_high_water(void)
+{
+    GameState *a = arena(BRUSH_STYLE_HEAVY);
+    GameState *b = arena(BRUSH_STYLE_HEAVY);
+    TEST_ASSERT_EQUAL_UINT32(0u, a->ecs.high_water);
+    TEST_ASSERT_EQUAL_UINT32(0u, b->ecs.high_water);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(b), game_hash(a));
+
+    const EntityId id = game_debug_spawn_orb(a, 200.0f, 200.0f);
+    ecs_destroy(&a->ecs, id);
+    ecs_flush_destroy(&a->ecs);
+    TEST_ASSERT_EQUAL_UINT32(0u, a->ecs.high_water);
+
+    uint64_t sec_a[GAME_HASH_SECTION_COUNT];
+    uint64_t sec_b[GAME_HASH_SECTION_COUNT];
+    game_hash_sections(a, sec_a);
+    game_hash_sections(b, sec_b);
+    TEST_ASSERT_TRUE(sec_a[GAME_HASH_ECS] != sec_b[GAME_HASH_ECS]);
+    TEST_ASSERT_TRUE(game_hash(a) != game_hash(b));
+
+    game_destroy(b);
+    game_destroy(a);
+}
+
+static void test_oblique_gale_knockback_into_torii_corner_slams_instead_of_tunneling(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    /* Act 2 west torii pillar at [376, 392) x [320, 336). */
+    fluid_set_solid_rect(&g->fluid, 376.0f, 320.0f, 16.0f, 16.0f, true);
+    const EntityId e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 375.0f, 321.0f);
+    const int32_t hp0 = game_health(g, e)->hp;
+    game_velocity_mut(g, e)->vx = 600.245f;
+    game_velocity_mut(g, e)->vy = -360.147f;
+    game_status_mut(g, e)->knockback_t = 1.0f;
+    g->event_count = 0;
+
+    combat_physics_and_slams_step(g);
+    bool saw_slam = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_SLAM) {
+            saw_slam = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_slam);
+    TEST_ASSERT_TRUE(game_health(g, e)->hp < hp0);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, game_transform(g, e)->x, game_transform(g, e)->y));
+    game_destroy(g);
+}
+
+static void test_wind_return_ignores_inbound_near_miss_and_triggers_on_direct_threat(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_WIND_RETURN));
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+
+    /* Grazing projectile (inward dot > 0, but passes far outside shrine radius): no trigger. */
+    const EntityId graze =
+        game_debug_spawn_projectile(g, PROJ_ARROW, sx + 50.0f, sy, -10.0f, 200.0f);
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_FALSE(game_proj(g, graze)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.wind_return_cd);
+
+    /* Direct threat aimed through the shrine: triggers Wind Return and starts 12s CD. */
+    const EntityId direct =
+        game_debug_spawn_projectile(g, PROJ_ARROW, sx - 50.0f, sy, 200.0f, 0.0f);
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_TRUE(game_proj(g, direct)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->internal.wind_return_cd);
+    game_destroy(g);
+}
+
+static void test_pristine_lobby_sandbox_skips_fluid_solve_until_stroke(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_init_sandbox(g, NULL);
+    TEST_ASSERT_TRUE(fluid_is_pristine(&g->fluid));
+
+    for (int t = 0; t < 30; ++t) {
+        game_step_sandbox(g, NULL);
+    }
+    TEST_ASSERT_EQUAL_UINT64(0u, g->fluid.steps);
+    TEST_ASSERT_TRUE(fluid_is_pristine(&g->fluid));
+
+    const BrushInput stroke = {
+        .pmx = 400.0f, .pmy = 300.0f, .mx = 460.0f, .my = 300.0f, .paint = true};
+    game_step_sandbox(g, &stroke);
+    TEST_ASSERT_FALSE(fluid_is_pristine(&g->fluid));
+    TEST_ASSERT_EQUAL_UINT64(1u, g->fluid.steps);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -919,5 +1037,10 @@ int main(void)
     RUN_TEST(test_arrow_shallow_diagonal_corner_hits_torii_pillar);
     RUN_TEST(test_nue_dash_halts_at_solid_torii_pillar);
     RUN_TEST(test_act3_boss_hitstop_and_aftermath_reach_victory);
+    RUN_TEST(test_aftermath_consumes_pending_radial_impulse_without_advancing_player_timers);
+    RUN_TEST(test_ecs_hash_covers_retired_slot_generations_above_high_water);
+    RUN_TEST(test_oblique_gale_knockback_into_torii_corner_slams_instead_of_tunneling);
+    RUN_TEST(test_wind_return_ignores_inbound_near_miss_and_triggers_on_direct_threat);
+    RUN_TEST(test_pristine_lobby_sandbox_skips_fluid_solve_until_stroke);
     return UNITY_END();
 }

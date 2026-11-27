@@ -2076,6 +2076,51 @@ static void test_audio_procedural_bgm_rapid_mid_fade_switch_preserves_outgoing_g
     game_destroy(g);
 }
 
+static void test_audio_precomputed_brush_hp_coeffs_match_direct_svf(void)
+{
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(77));
+
+    static const float k_cutoffs[4] = {220.0f, 290.0f, 340.0f, 460.0f};
+    for (int idx = 0; idx < 4; ++idx) {
+        AudioSvf svf_direct = {0};
+        AudioSvf svf_cached = {0};
+        for (int n = 0; n < 256; ++n) {
+            const float x = audio_noise_next(a);
+            const AudioSvfOut ref = audio_svf_step(&svf_direct, x, k_cutoffs[idx], 0.71f);
+            const AudioSvfOut got = audio_svf_step_coeffs(&svf_cached, x, a->brush_hp_coeffs[idx]);
+            TEST_ASSERT_EQUAL_FLOAT(ref.hp, got.hp);
+            TEST_ASSERT_EQUAL_FLOAT(ref.bp, got.bp);
+            TEST_ASSERT_EQUAL_FLOAT(ref.lp, got.lp);
+        }
+    }
+    free(a);
+}
+
+static void test_audio_voice_high_water_tracks_lifetime(void)
+{
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(a);
+    audio_init(a, UINT64_C(88));
+    TEST_ASSERT_EQUAL_INT32(0, a->voice_high_water);
+
+    audio_voice_spawn(a, AUDIO_VOICE_KILL_TAIKO, 0, 140.0f, 0.0f);
+    audio_voice_spawn(a, AUDIO_VOICE_DEFLECT_BAMBOO, 0, 520.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(2, a->voice_high_water);
+
+    /* Render long enough for both short SE voices to finish and shrink high_water back to 0. */
+    render_silence(a, AUDIO_SAMPLE_RATE * 2u);
+    TEST_ASSERT_EQUAL_INT32(0, a->voice_high_water);
+
+    audio_voice_spawn(a, AUDIO_VOICE_WAVE_CLEAR, 0, 392.0f, 0.0f);
+    TEST_ASSERT_TRUE(a->voice_high_water >= 1);
+    audio_set_lobby_mode(a, true);
+    render_silence(a, AUDIO_SAMPLE_RATE / 4u);
+    TEST_ASSERT_EQUAL_INT32(0, a->voice_high_water);
+    free(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2122,5 +2167,7 @@ int main(void)
     RUN_TEST(test_audio_external_bgm_headroom_prevents_live_clipping);
     RUN_TEST(test_audio_mixed_procedural_to_external_crossfade_fades_out_smoothly);
     RUN_TEST(test_audio_procedural_bgm_rapid_mid_fade_switch_preserves_outgoing_gain);
+    RUN_TEST(test_audio_precomputed_brush_hp_coeffs_match_direct_svf);
+    RUN_TEST(test_audio_voice_high_water_tracks_lifetime);
     return UNITY_END();
 }

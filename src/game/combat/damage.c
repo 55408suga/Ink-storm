@@ -372,6 +372,13 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                        hp->hp * 2 <= hp->max_hp) {
                 boss->phase_idx = 1;
                 hp->invuln_t = 1.5f;
+                EnemyComp *en_mut = game_enemy_mut(g, target);
+                if (en_mut != NULL && en_mut->ai_state == 1 && en_mut->windup > 0.0f) {
+                    en_mut->windup = 0.65f;
+                    if (en_mut->fire_cd < en_mut->windup + 0.10f) {
+                        en_mut->fire_cd = en_mut->windup + 0.10f;
+                    }
+                }
                 boss->telegraph = 0.0f;
                 boss->telegraph_pattern = 0;
                 static const float k_nue_dye[FLUID_MAX_CHANNELS] = {0.8f, 0.0f, 0.8f, 0.0f};
@@ -511,35 +518,13 @@ void combat_physics_and_slams_step(GameState *g)
         const float step_dy = vel->vy * INK_FIXED_DT;
         const float end_x = prev_x + step_dx;
         const float end_y = prev_y + step_dy;
-        const float step_dist = hypotf(step_dx, step_dy);
 
-        int steps = 1;
-        if (step_dist > 6.0f) {
-            steps = (int)ceilf(step_dist / 6.0f);
-            if (steps > 16) {
-                steps = 16;
-            }
-        }
-        bool hit_solid = false;
-        float hit_x = end_x;
-        float hit_y = end_y;
-        float safe_x = prev_x;
-        float safe_y = prev_y;
-        for (int s = 1; s <= steps; ++s) {
-            const float frac = (float)s / (float)steps;
-            const float probe_x = prev_x + step_dx * frac;
-            const float probe_y = prev_y + step_dy * frac;
-            if (fluid_is_solid(&g->fluid, probe_x, probe_y)) {
-                hit_solid = true;
-                hit_x = probe_x;
-                hit_y = probe_y;
-                break;
-            }
-            safe_x = probe_x;
-            safe_y = probe_y;
-        }
-        tr->x = hit_solid ? hit_x : end_x;
-        tr->y = hit_solid ? hit_y : end_y;
+        const FluidRayHit ray = fluid_trace_solid_segment(&g->fluid, prev_x, prev_y, end_x, end_y);
+        const bool hit_solid = ray.hit;
+        const float safe_x = hit_solid ? ray.hit_x : prev_x;
+        const float safe_y = hit_solid ? ray.hit_y : prev_y;
+        tr->x = hit_solid ? ray.hit_x : end_x;
+        tr->y = hit_solid ? ray.hit_y : end_y;
 
         const float esp = hypotf(vel->vx, vel->vy);
         const bool hit_border = tr->x < 46.0f || tr->x > (float)INK_SCREEN_W - 46.0f ||
@@ -563,7 +548,11 @@ void combat_physics_and_slams_step(GameState *g)
                 tr->x = ink_clampf(tr->x, 46.0f, (float)INK_SCREEN_W - 46.0f);
                 tr->y = ink_clampf(tr->y, 76.0f, (float)INK_SCREEN_H - 52.0f);
             } else {
-                (void)fluid_solid_normal(&g->fluid, tr->x, tr->y, &nx, &ny);
+                nx = ray.nx;
+                ny = ray.ny;
+                if (nx == 0.0f && ny == 0.0f) {
+                    (void)fluid_solid_normal(&g->fluid, tr->x, tr->y, &nx, &ny);
+                }
                 tr->x = safe_x;
                 tr->y = safe_y;
             }

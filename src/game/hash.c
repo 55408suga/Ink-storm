@@ -35,9 +35,11 @@ static uint64_t hash_core(const GameState *g)
 static uint64_t hash_ecs(const EcsWorld *w)
 {
     uint64_t h = INK_HASH_INIT;
+    for (uint32_t i = 0; i < ECS_MAX_ENTITIES; ++i) {
+        h = ink_hash_u32(h, w->gen[i]);
+    }
     const uint32_t hw = w->high_water <= ECS_MAX_ENTITIES ? w->high_water : ECS_MAX_ENTITIES;
     for (uint32_t i = 0; i < hw; ++i) {
-        h = ink_hash_u32(h, w->gen[i]);
         h = ink_hash_u64(h, w->comp_mask[i]);
         h = hash_u8(h, w->alive[i]);
         h = hash_u8(h, w->pending_destroy[i]);
@@ -437,6 +439,8 @@ static uint64_t hash_internal(const GameInternal *in)
         h = ink_hash_f32(h, in->nue_trail_t[i]);
     }
     h = ink_hash_f32(h, in->ryu_coil_t);
+    h = ink_hash_f32(h, in->ryu_coil_angle);
+    h = hash_bool(h, in->ryu_coil_active);
     h = ink_hash_f32(h, in->thunderfire_gem_cd);
     h = hash_bool(h, in->sandbox_infinite_ink);
     return h;

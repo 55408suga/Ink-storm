@@ -1,14 +1,19 @@
 #include "save.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum { SAVE_MAX_BYTES = 8192 };
+enum { SAVE_MAX_BYTES = 8192, SAVE_TMP_CREATE_ATTEMPTS = 128 };
+
+static atomic_uint_fast32_t g_save_tmp_seq = 0;
 
 static bool copy_checked(char *out, size_t size, const char *fmt, const char *arg)
 {
@@ -52,25 +57,31 @@ SaveLoadResult save_load(const char *path, MetaState *meta)
         return SAVE_LOAD_MISSING;
     }
 
-    struct stat st;
-    if (stat(path, &st) != 0) {
+    const int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
         if (errno == ENOENT || errno == ENOTDIR) {
             return SAVE_LOAD_MISSING;
         }
         return SAVE_LOAD_IO_ERROR;
     }
-    if (S_ISDIR(st.st_mode)) {
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        (void)close(fd);
+        return SAVE_LOAD_IO_ERROR;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_size < 0) {
+        (void)close(fd);
         return SAVE_LOAD_IO_ERROR;
     }
     if (st.st_size > (off_t)SAVE_MAX_BYTES) {
+        (void)close(fd);
         return SAVE_LOAD_CORRUPT;
     }
 
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = fdopen(fd, "rb");
     if (fp == NULL) {
-        if (errno == ENOENT || errno == ENOTDIR) {
-            return SAVE_LOAD_MISSING;
-        }
+        (void)close(fd);
         return SAVE_LOAD_IO_ERROR;
     }
 
@@ -126,15 +137,62 @@ static bool mkdir_parents(const char *file_path, int (*mkdir_fn)(const char *, m
     return true;
 }
 
-static bool save_write_with_ops(const char *path, const MetaState *meta, const SaveIoOps *io)
+static bool format_unique_tmp_path(const char *path, char *tmp_path, size_t cap)
 {
-    if (!mkdir_parents(path, io->mkdir)) {
-        return false;
+    const uint32_t seq = (uint32_t)atomic_fetch_add(&g_save_tmp_seq, 1u);
+    const unsigned long pid = (unsigned long)getpid();
+    const char *slash = strrchr(path, '/');
+    int n = -1;
+    if (slash == NULL) {
+        n = snprintf(tmp_path, cap, ".inktmp.%lu.%u", pid, (unsigned)seq);
+    } else if (slash == path) {
+        n = snprintf(tmp_path, cap, "/.inktmp.%lu.%u", pid, (unsigned)seq);
+    } else {
+        const size_t dir_len = (size_t)(slash - path);
+        if (dir_len > (size_t)INT_MAX) {
+            return false;
+        }
+        n = snprintf(tmp_path, cap, "%.*s/.inktmp.%lu.%u", (int)dir_len, path, pid, (unsigned)seq);
+    }
+    return n > 0 && (size_t)n < cap;
+}
+
+static FILE *open_unique_temp_stream(const char *path, const SaveIoOps *io, bool use_custom_fopen,
+                                     char *tmp_path, size_t cap)
+{
+    if (use_custom_fopen) {
+        if (!format_unique_tmp_path(path, tmp_path, cap)) {
+            return NULL;
+        }
+        return io->fopen(tmp_path, "wb");
     }
 
-    char tmp_path[PATH_MAX];
-    const int tmp_len = snprintf(tmp_path, sizeof tmp_path, "%s.tmp", path);
-    if (tmp_len < 0 || (size_t)tmp_len >= sizeof tmp_path) {
+    for (int attempt = 0; attempt < SAVE_TMP_CREATE_ATTEMPTS; ++attempt) {
+        if (!format_unique_tmp_path(path, tmp_path, cap)) {
+            return NULL;
+        }
+        const int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd < 0) {
+            if (errno == EEXIST) {
+                continue;
+            }
+            return NULL;
+        }
+        FILE *fp = fdopen(fd, "wb");
+        if (fp == NULL) {
+            (void)close(fd);
+            (void)io->remove(tmp_path);
+            return NULL;
+        }
+        return fp;
+    }
+    return NULL;
+}
+
+static bool save_write_with_ops(const char *path, const MetaState *meta, const SaveIoOps *io,
+                                bool use_custom_fopen)
+{
+    if (!mkdir_parents(path, io->mkdir)) {
         return false;
     }
 
@@ -144,7 +202,8 @@ static bool save_write_with_ops(const char *path, const MetaState *meta, const S
         return false;
     }
 
-    FILE *fp = io->fopen(tmp_path, "wb");
+    char tmp_path[PATH_MAX];
+    FILE *fp = open_unique_temp_stream(path, io, use_custom_fopen, tmp_path, sizeof tmp_path);
     if (fp == NULL) {
         return false;
     }
@@ -171,16 +230,17 @@ bool save_write(const char *path, const MetaState *meta, const SaveIoOps *ops)
         return false;
     }
 
+    const bool use_custom_fopen = ops != NULL && ops->fopen != NULL;
     const SaveIoOps io = {
         .mkdir = (ops != NULL && ops->mkdir != NULL) ? ops->mkdir : mkdir,
-        .fopen = (ops != NULL && ops->fopen != NULL) ? ops->fopen : fopen,
+        .fopen = use_custom_fopen ? ops->fopen : fopen,
         .fwrite = (ops != NULL && ops->fwrite != NULL) ? ops->fwrite : fwrite,
         .fflush = (ops != NULL && ops->fflush != NULL) ? ops->fflush : fflush,
         .fclose = (ops != NULL && ops->fclose != NULL) ? ops->fclose : fclose,
         .rename = (ops != NULL && ops->rename != NULL) ? ops->rename : rename,
         .remove = (ops != NULL && ops->remove != NULL) ? ops->remove : remove,
     };
-    return save_write_with_ops(path, meta, &io);
+    return save_write_with_ops(path, meta, &io, use_custom_fopen);
 }
 
 bool save_persist_meta(const char *path, bool enabled, const MetaState *meta, bool *dirty,
@@ -213,6 +273,40 @@ bool save_retry_if_dirty(const char *path, bool enabled, const MetaState *meta, 
     return save_persist_meta(path, enabled, meta, dirty, ops);
 }
 
+bool save_resolve_and_settle_run(MetaState *meta, GameState *game,
+                                 MetaSettleBreakdown *out_breakdown)
+{
+    if (out_breakdown != NULL) {
+        memset(out_breakdown, 0, sizeof *out_breakdown);
+    }
+    if (meta == NULL || game == NULL) {
+        return false;
+    }
+
+    /* Drain final-kill hitstop and Act-3 boss victory aftermath so leaving or exiting right after
+     * the final boss dies still settles as a campaign clear instead of an aborted run. */
+    for (int t = 0; t < 30 && game->phase == RUN_PHASE_PLAYING && game_wave_goal_met(game); ++t) {
+        game_step(game, NULL, NULL);
+    }
+    for (int t = 0; t < 90 && game_aftermath_reaches_victory(game); ++t) {
+        game_step(game, NULL, NULL);
+    }
+    if (game->phase == RUN_PHASE_VICTORY && !game->run.run_settled) {
+        return meta_settle_run(meta, game, out_breakdown);
+    }
+    if (game->phase != RUN_PHASE_VICTORY && game->phase != RUN_PHASE_GAME_OVER &&
+        !(game->run.act_index == 0 && game->phase == RUN_PHASE_ACT_TRANSITION)) {
+        const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
+        game_step(game, NULL, &abort_cmd);
+        if ((game->phase == RUN_PHASE_GAME_OVER ||
+             (game->phase == RUN_PHASE_VICTORY && game->run.endless_loop > 0)) &&
+            !game->run.run_settled) {
+            return meta_settle_run(meta, game, out_breakdown);
+        }
+    }
+    return false;
+}
+
 bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bool *dirty,
                              GameState *game, bool active_run, MetaSettleBreakdown *out_breakdown,
                              const SaveIoOps *ops)
@@ -226,27 +320,7 @@ bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bo
 
     bool settled_now = false;
     if (active_run && game != NULL) {
-        /* Drain final-kill hitstop and Act-3 boss victory aftermath so exiting right after the
-         * final boss dies still settles as a campaign clear instead of an aborted run. */
-        for (int t = 0; t < 12 && game->phase == RUN_PHASE_PLAYING && game_wave_goal_met(game);
-             ++t) {
-            game_step(game, NULL, NULL);
-        }
-        for (int t = 0; t < 90 && game_aftermath_reaches_victory(game); ++t) {
-            game_step(game, NULL, NULL);
-        }
-        if (game->phase == RUN_PHASE_VICTORY && !game->run.run_settled) {
-            settled_now = meta_settle_run(meta, game, out_breakdown);
-        } else if (game->phase != RUN_PHASE_VICTORY && game->phase != RUN_PHASE_GAME_OVER &&
-                   !(game->run.act_index == 0 && game->phase == RUN_PHASE_ACT_TRANSITION)) {
-            const GameCommand abort_cmd = {.type = CMD_ABORT_RUN, .arg = 0};
-            game_step(game, NULL, &abort_cmd);
-            if ((game->phase == RUN_PHASE_GAME_OVER ||
-                 (game->phase == RUN_PHASE_VICTORY && game->run.endless_loop > 0)) &&
-                !game->run.run_settled) {
-                settled_now = meta_settle_run(meta, game, out_breakdown);
-            }
-        }
+        settled_now = save_resolve_and_settle_run(meta, game, out_breakdown);
     }
 
     bool local_dirty = false;
@@ -257,13 +331,41 @@ bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bo
     return save_retry_if_dirty(path, enabled, meta, dirty_flag, ops);
 }
 
+static FILE *open_regular_bounded_ro(const char *path, size_t max_bytes, bool nofollow)
+{
+    int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_NOFOLLOW
+    if (nofollow) {
+        flags |= O_NOFOLLOW;
+    }
+#else
+    (void)nofollow;
+#endif
+    const int fd = open(path, flags);
+    if (fd < 0) {
+        return NULL;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uintmax_t)st.st_size > (uintmax_t)max_bytes) {
+        (void)close(fd);
+        return NULL;
+    }
+    FILE *fp = fdopen(fd, "rb");
+    if (fp == NULL) {
+        (void)close(fd);
+        return NULL;
+    }
+    return fp;
+}
+
 static bool files_identical(const char *a, const char *b)
 {
-    FILE *fa = fopen(a, "rb");
+    FILE *fa = open_regular_bounded_ro(a, SAVE_MAX_BACKUP_BYTES, false);
     if (fa == NULL) {
         return false;
     }
-    FILE *fb = fopen(b, "rb");
+    FILE *fb = open_regular_bounded_ro(b, SAVE_MAX_BACKUP_BYTES, true);
     if (fb == NULL) {
         (void)fclose(fa);
         return false;
@@ -271,10 +373,16 @@ static bool files_identical(const char *a, const char *b)
     char ba[4096];
     char bb[4096];
     bool same = true;
+    size_t total = 0;
     for (;;) {
         const size_t na = fread(ba, 1, sizeof ba, fa);
         const size_t nb = fread(bb, 1, sizeof bb, fb);
         if (na != nb || memcmp(ba, bb, na) != 0) {
+            same = false;
+            break;
+        }
+        total += na;
+        if (total > (size_t)SAVE_MAX_BACKUP_BYTES) {
             same = false;
             break;
         }
@@ -288,11 +396,16 @@ static bool files_identical(const char *a, const char *b)
     return same && closed_a && closed_b;
 }
 
-static bool copy_into(FILE *src, FILE *dst)
+static bool copy_into(FILE *src, FILE *dst, size_t max_bytes)
 {
     char buf[4096];
+    size_t total = 0;
     for (;;) {
         const size_t n = fread(buf, 1, sizeof buf, src);
+        total += n;
+        if (total > max_bytes) {
+            return false;
+        }
         if (n > 0 && fwrite(buf, 1, n, dst) != n) {
             return false;
         }
@@ -317,7 +430,7 @@ static bool copy_to_temp(const SaveBackupOps *ops, const char *path, char *tmp_p
     if (n < 0 || (size_t)n >= cap) {
         return false;
     }
-    FILE *src = fopen(path, "rb");
+    FILE *src = open_regular_bounded_ro(path, SAVE_MAX_BACKUP_BYTES, false);
     if (src == NULL) {
         return false;
     }
@@ -333,7 +446,7 @@ static bool copy_to_temp(const SaveBackupOps *ops, const char *path, char *tmp_p
         (void)fclose(src);
         return false;
     }
-    bool ok = copy_into(src, dst);
+    bool ok = copy_into(src, dst, SAVE_MAX_BACKUP_BYTES);
     ok = (fclose(src) == 0) && ok;
     ok = (fflush(dst) == 0) && ok;
     ok = (fclose(dst) == 0) && ok;
@@ -358,6 +471,12 @@ SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, s
     if (path == NULL || path[0] == '\0') {
         return SAVE_BACKUP_FAILED;
     }
+    FILE *src_probe = open_regular_bounded_ro(path, SAVE_MAX_BACKUP_BYTES, false);
+    if (src_probe == NULL) {
+        return SAVE_BACKUP_FAILED;
+    }
+    (void)fclose(src_probe);
+
     const SaveBackupOps io = {
         .link = (ops != NULL && ops->link != NULL) ? ops->link : link,
         .unlink = (ops != NULL && ops->unlink != NULL) ? ops->unlink : unlink,
@@ -376,7 +495,9 @@ SaveBackupResult save_backup_unreadable_with(const char *path, char *out_path, s
         /* lstat() so a symlinked slot is never taken as a kept copy: its target can be the save
          * itself, which the next save_write() replaces. */
         if (lstat(candidate, &st) == 0) {
-            if (S_ISREG(st.st_mode) && files_identical(path, candidate)) {
+            if (S_ISREG(st.st_mode) && st.st_size >= 0 &&
+                (uintmax_t)st.st_size <= (uintmax_t)SAVE_MAX_BACKUP_BYTES &&
+                files_identical(path, candidate)) {
                 result = SAVE_BACKUP_ALREADY_KEPT;
                 if (out_path != NULL) {
                     (void)copy_checked(out_path, out_cap, "%s", candidate);

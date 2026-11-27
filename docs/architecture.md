@@ -83,7 +83,7 @@
 - `game_hash_sections(const GameState *g, uint64_t out[GAME_HASH_SECTION_COUNT])` は次の 7 セクションを個別に算出し、`game_hash(const GameState *g)` はこれらを番号順に `ink_hash_u64` で畳み込む：
   1. `GAME_HASH_CORE`: `ticks`, `rng`, `phase`, `phase_t`, `hitstop_t`, `config`
   2. `GAME_HASH_FLUID`: `fluid_hash(&g->fluid)`
-  3. `GAME_HASH_ECS`: `gen` / `comp_mask` / `alive` / `pending_destroy` の `0..high_water-1`、`free_list[0..free_count)`、各カウンタ
+  3. `GAME_HASH_ECS`: 全スロット `0..ECS_MAX_ENTITIES-1` の `gen`、`comp_mask` / `alive` / `pending_destroy` の `0..high_water-1`、`free_list[0..free_count)`、各カウンタ
   4. `GAME_HASH_COMPONENTS`: 生存エンティティの、マスクを持つ Component のみ（index 昇順・宣言順）
   5. `GAME_HASH_RUN`: `player`, `shrines`, `shrine_count`, `run`, `ryu_body`
   6. `GAME_HASH_EVENTS`: `event_count`, `events[0..event_count)`, `dropped_events`, `pending_impulse_count`, `pending_impulses[0..pending_impulse_count)`
@@ -273,7 +273,7 @@ bool fluid_validate_finite(const FluidState *f);
   - `solid[i] != 0` のセルでは `u[i] = v[i] = 0` および全 `dye[ch][i] = 0` を強制する。
   - 圧力投影の Gauss-Seidel 反復では、隣接セルが `solid` の場合に自セルの圧力 `p[i]` を代用（`dp/dn = 0`）し、流れの反射・回り込み・渦剥離を再現する。
 - **薄い障害物の壁横断（トンネリング）防止**:
-  - Semi-Lagrangian 移流のバックトレースは終点 1 点のみを `solid` 判定せず、**始点から終点までステップ長 `<= 0.5` セルの短いレイマーチ** を行い、途中で `solid` セルへ入った場合は直前の非 `solid` 座標で停止してサンプリングする（2 セル幅の鳥居柱の反対側から染料や速度が漏れるのを防ぐ）。
+  - Semi-Lagrangian 移流のバックトレースは終点 1 点のみを `solid` 判定せず、壁近傍では **2D グリッド DDA による厳密なセル横断検査（コーナー同着時は保守的ブロック）** を行い、途中で `solid` セルへ入った場合は直前の非 `solid` 座標で停止してサンプリングする（2 セル幅の鳥居柱や斜め角越しに染料や速度が漏れるのを防ぐ）。
 - **作業領域**: 圧力投影（Red-Black Gauss-Seidel）の作業配列は `FluidState` 内の `rb_div` / `rb_p`（決定性ハッシュ対象外）に置き、112.5 KiB をスタックに確保しない。非アクティブなチャンネルはソルバ・注入・可変アクセサのいずれからも書けないため、`fluid_sanitize_channels` はアクティブなチャンネルだけを走査する。
 - **性能予算（Release ビルド・160×90・既定 12 反復・実戦闘負荷）**:
   - `fluid_step`: **< 2.0 ms / tick**

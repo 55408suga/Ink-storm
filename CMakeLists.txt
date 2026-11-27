@@ -40,6 +40,11 @@ endforeach()
 
 target_link_libraries(ink_core PRIVATE m)
 target_link_libraries(ink_fluid PUBLIC ink_core)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/fluid/solver.c PROPERTIES
+        COMPILE_OPTIONS "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-fvect-cost-model=cheap>"
+    )
+endif()
 target_link_libraries(ink_ecs PRIVATE ink_core)
 target_link_libraries(ink_game PUBLIC ink_fluid ink_ecs PRIVATE ink_core)
 target_link_libraries(ink_audio PRIVATE ink_core ink_game)

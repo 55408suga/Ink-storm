@@ -47,6 +47,7 @@ void audio_init(AudioState *audio, uint64_t seed)
     audio->bgm_prev_start_gain = 0.0f;
     audio->bgm_duck = 1.0f;
     audio->brush_rng = seed ^ UINT64_C(0x8f1bbcdcca62c1d6);
+    audio_brush_init_coeffs(audio);
     audio_brush_reset_dsp(audio);
 }
 
@@ -68,17 +69,24 @@ static void reset_session_audio(AudioState *audio)
     audio->thunderburst_chain_until = 0;
     audio->thunderburst_chain = 0;
     audio->storm_zap_next_sample = 0;
+    int32_t last_active = -1;
     for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
         AudioVoice *v = &audio->voices[i];
-        if (!v->active || v->ui) {
+        if (!v->active) {
+            continue;
+        }
+        if (v->ui) {
+            last_active = i;
             continue;
         }
         if (v->age == 0u) {
             v->active = false;
         } else {
             v->releasing = true;
+            last_active = i;
         }
     }
+    audio->voice_high_water = last_active + 1;
 }
 
 void audio_set_volumes(AudioState *audio, uint8_t master, uint8_t bgm, uint8_t se)

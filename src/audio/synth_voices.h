@@ -16,6 +16,7 @@ float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz);
 float audio_bgm_step(AudioState *audio, float nz);
 void audio_bgm_apply_track(AudioState *audio, BgmTrack next);
 float audio_brush_step(AudioState *audio);
+void audio_brush_init_coeffs(AudioState *audio);
 void audio_brush_reset_dsp(AudioState *audio);
 bool audio_brush_validate_finite(const AudioState *audio);
 

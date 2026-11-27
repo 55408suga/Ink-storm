@@ -9,7 +9,7 @@
 static const float k_dsp_pi = 3.14159265359f;
 static const float k_dsp_two_pi = 6.28318530718f;
 
-AudioSvfOut audio_svf_step(AudioSvf *f, float in, float cutoff_hz, float q)
+AudioSvfCoeffs audio_svf_make_coeffs(float cutoff_hz, float q)
 {
     const float fc = ink_clampf(cutoff_hz, 20.0f, 18000.0f);
     const float g = tanf(k_dsp_pi * fc / (float)AUDIO_SAMPLE_RATE);
@@ -17,12 +17,22 @@ AudioSvfOut audio_svf_step(AudioSvf *f, float in, float cutoff_hz, float q)
     const float a1 = 1.0f / (1.0f + g * (g + k));
     const float a2 = g * a1;
     const float a3 = g * a2;
+    return (AudioSvfCoeffs){.k = k, .a1 = a1, .a2 = a2, .a3 = a3};
+}
+
+AudioSvfOut audio_svf_step_coeffs(AudioSvf *f, float in, AudioSvfCoeffs c)
+{
     const float v3 = in - f->ic2eq;
-    const float v1 = a1 * f->ic1eq + a2 * v3;
-    const float v2 = f->ic2eq + a2 * f->ic1eq + a3 * v3;
+    const float v1 = c.a1 * f->ic1eq + c.a2 * v3;
+    const float v2 = f->ic2eq + c.a2 * f->ic1eq + c.a3 * v3;
     f->ic1eq = 2.0f * v1 - f->ic1eq;
     f->ic2eq = 2.0f * v2 - f->ic2eq;
-    return (AudioSvfOut){.lp = v2, .bp = v1, .hp = in - k * v1 - v2};
+    return (AudioSvfOut){.lp = v2, .bp = v1, .hp = in - c.k * v1 - v2};
+}
+
+AudioSvfOut audio_svf_step(AudioSvf *f, float in, float cutoff_hz, float q)
+{
+    return audio_svf_step_coeffs(f, in, audio_svf_make_coeffs(cutoff_hz, q));
 }
 
 float audio_pink_step(AudioPink *p, float white)

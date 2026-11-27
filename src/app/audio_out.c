@@ -186,15 +186,20 @@ static void pump_external_bgm(AudioOut *out, AudioState *audio)
     }
 
     const float dt = ink_clampf(GetFrameTime(), 0.0f, 0.1f);
-    const BgmTrack finished = bgm_fade_step(&out->fade, dt);
+    const BgmFadeFinished finished = bgm_fade_step_all(&out->fade, dt);
     const float pause_duck = bgm_fade_step_duck(&out->fade, paused, dt);
     const float base_vol = raw_vol * pause_duck;
-    if (track_loaded(out, finished)) {
-        StopMusicStream(out->bgm[finished]);
+    for (int i = 0; i < finished.count; ++i) {
+        if (track_loaded(out, finished.stop[i])) {
+            StopMusicStream(out->bgm[finished.stop[i]]);
+        }
     }
 
-    const bool ext_playing = track_loaded(out, out->fade.cur) ||
-                             (out->fade.prev != out->fade.cur && track_loaded(out, out->fade.prev));
+    const bool ext_playing =
+        track_loaded(out, out->fade.cur) ||
+        (out->fade.prev != out->fade.cur && track_loaded(out, out->fade.prev)) ||
+        (out->fade.prev2 != out->fade.cur && out->fade.prev2 != out->fade.prev &&
+         track_loaded(out, out->fade.prev2));
     audio_out_lock();
     audio_set_external_bgm(audio, ext_playing);
     audio_out_unlock();
@@ -206,6 +211,11 @@ static void pump_external_bgm(AudioOut *out, AudioState *audio)
     if (out->fade.prev != out->fade.cur && track_loaded(out, out->fade.prev)) {
         UpdateMusicStream(out->bgm[out->fade.prev]);
         SetMusicVolume(out->bgm[out->fade.prev], base_vol * out->fade.gain_prev);
+    }
+    if (out->fade.prev2 != out->fade.cur && out->fade.prev2 != out->fade.prev &&
+        track_loaded(out, out->fade.prev2)) {
+        UpdateMusicStream(out->bgm[out->fade.prev2]);
+        SetMusicVolume(out->bgm[out->fade.prev2], base_vol * out->fade.gain_prev2);
     }
 }
 

@@ -93,12 +93,101 @@ static void draw_rect_solid(RenderState *r, Rectangle rc, Color c)
     ink_fill_poly(r, pts, 4, c);
 }
 
+static void guide_cache_begin(RenderState *r, int32_t page, Rectangle panel_rect)
+{
+    GuideTextCache *c = &r->guide_cache;
+    const bool same = c->valid && c->page == page && c->use_ja == r->use_ja &&
+                      c->body_font_id == r->font_body.texture.id &&
+                      c->title_font_id == r->font_title.texture.id &&
+                      c->panel_rect.x == panel_rect.x && c->panel_rect.y == panel_rect.y &&
+                      c->panel_rect.width == panel_rect.width &&
+                      c->panel_rect.height == panel_rect.height;
+    if (!same) {
+        memset(c, 0, sizeof *c);
+        c->valid = true;
+        c->page = page;
+        c->use_ja = r->use_ja;
+        c->body_font_id = r->font_body.texture.id;
+        c->title_font_id = r->font_title.texture.id;
+        c->panel_rect = panel_rect;
+    }
+    c->cursor = 0;
+}
+
+static void guide_draw_text_fit(RenderState *r, const char *text, Vector2 center, float max_w,
+                                float size, float min_size, PaletteId color, float alpha,
+                                bool title_font)
+{
+    if (r == NULL || text == NULL || text[0] == '\0') {
+        return;
+    }
+    GuideTextCache *c = &r->guide_cache;
+    if (!c->valid || c->cursor < 0 || c->cursor >= RENDER_GUIDE_CACHE_SLOTS) {
+        render_draw_text_fit(r, text, center, max_w, size, min_size, color, alpha, title_font);
+        return;
+    }
+    RenderCachedText *slot = &c->slots[c->cursor];
+    const bool hit = c->cursor < c->count && !slot->is_wrapped && slot->box.width == max_w &&
+                     slot->req_size == size && slot->min_size == min_size &&
+                     slot->title_font == title_font && strcmp(slot->src, text) == 0;
+    if (hit) {
+        if (slot->box.x != center.x || slot->box.y != center.y) {
+            slot->x[0] += center.x - slot->box.x;
+            slot->y[0] += center.y - slot->box.y;
+            slot->box.x = center.x;
+            slot->box.y = center.y;
+        }
+    } else {
+        render_layout_text_fit(r, text, center, max_w, size, min_size, title_font, slot);
+        if (c->cursor >= c->count) {
+            c->count = c->cursor + 1;
+        }
+    }
+    c->cursor++;
+    render_draw_cached_text(r, slot, color, alpha);
+}
+
+static void guide_draw_text_centered(RenderState *r, const char *text, Vector2 center, float size,
+                                     PaletteId color, float alpha, bool title_font)
+{
+    guide_draw_text_fit(r, text, center, 1.0e6f, size, size, color, alpha, title_font);
+}
+
+static void guide_draw_text_wrapped(RenderState *r, const char *text, Rectangle box, float size,
+                                    float min_size, PaletteId color, float alpha, bool title_font,
+                                    bool center)
+{
+    if (r == NULL || text == NULL || text[0] == '\0' || box.width <= 1.0f) {
+        return;
+    }
+    GuideTextCache *c = &r->guide_cache;
+    if (!c->valid || c->cursor < 0 || c->cursor >= RENDER_GUIDE_CACHE_SLOTS) {
+        (void)render_draw_text_wrapped(r, text, box, size, min_size, color, alpha, title_font,
+                                       center);
+        return;
+    }
+    RenderCachedText *slot = &c->slots[c->cursor];
+    const bool hit = c->cursor < c->count && slot->is_wrapped && slot->box.x == box.x &&
+                     slot->box.y == box.y && slot->box.width == box.width &&
+                     slot->box.height == box.height && slot->req_size == size &&
+                     slot->min_size == min_size && slot->title_font == title_font &&
+                     slot->center == center && strcmp(slot->src, text) == 0;
+    if (!hit) {
+        render_layout_text_wrapped(r, text, box, size, min_size, title_font, center, slot);
+        if (c->cursor >= c->count) {
+            c->count = c->cursor + 1;
+        }
+    }
+    c->cursor++;
+    render_draw_cached_text(r, slot, color, alpha);
+}
+
 static void draw_keycap(RenderState *r, Rectangle rc, const char *label, PaletteId border,
                         uint32_t seed)
 {
     ink_fill_panel(r, rc, PAL_SUMI_SCORCH, 0.95f, border, 0.94f, seed);
-    render_draw_text_fit(r, label, (Vector2){rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f},
-                         rc.width - 12.0f, 14.0f, 10.0f, PAL_GOFUN, 0.98f, false);
+    guide_draw_text_fit(r, label, (Vector2){rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f},
+                        rc.width - 12.0f, 14.0f, 10.0f, PAL_GOFUN, 0.98f, false);
 }
 
 static void draw_arrow_head(RenderState *r, Vector2 tip, Vector2 dir, float len, float wid, Color c)
@@ -200,8 +289,8 @@ static void draw_slide0_diagram(RenderState *r, Rectangle pic, float t)
     } else {
         snprintf(qtxt, sizeof qtxt, "6 %s", text_get(TEXT_HUD_REMAINING_UNIT, false));
     }
-    render_draw_text_fit(r, qtxt, (Vector2){mini_obj.x + 88.0f, mini_obj.y + 23.0f}, 150.0f, 21.0f,
-                         15.0f, PAL_GOFUN, 0.98f, false);
+    guide_draw_text_fit(r, qtxt, (Vector2){mini_obj.x + 88.0f, mini_obj.y + 23.0f}, 150.0f, 21.0f,
+                        15.0f, PAL_GOFUN, 0.98f, false);
     render_draw_number_fixed(r, "6/12",
                              (Vector2){mini_obj.x + mini_obj.width - 52.0f, mini_obj.y + 15.0f},
                              16.0f, PAL_SUMI_CLEAR, 0.95f);
@@ -213,9 +302,9 @@ static void draw_slide0_diagram(RenderState *r, Rectangle pic, float t)
         (Rectangle){mini_obj.x + 18.0f, mini_obj.y + 46.0f, (mini_obj.width - 36.0f) * 0.5f, 5.0f},
         pal_color_alpha(PAL_SHU, 0.98f));
 
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D0_TARGET, r->use_ja),
-                         (Vector2){pic.x + pic.width * 0.5f, pic.y + 98.0f}, pic.width - 40.0f,
-                         14.0f, 11.0f, PAL_BENGARA, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D0_TARGET, r->use_ja),
+                        (Vector2){pic.x + pic.width * 0.5f, pic.y + 98.0f}, pic.width - 40.0f,
+                        14.0f, 11.0f, PAL_BENGARA, 0.96f, false);
 
     /* Arena middle stage */
     const Rectangle arena = {pic.x + 22.0f, pic.y + 116.0f, pic.width - 44.0f, 206.0f};
@@ -255,9 +344,9 @@ static void draw_slide0_diagram(RenderState *r, Rectangle pic, float t)
                       (InkTone){.color = PAL_BENGARA, .alpha = 0.80f}, 1305u);
     draw_arrow_head(r, (Vector2){shrine_pos.x + 60.0f, shrine_pos.y + 3.0f},
                     (Vector2){-1.0f, -0.05f}, 11.0f, 6.0f, pal_color_alpha(PAL_BENGARA, 0.90f));
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D0_THREAT, r->use_ja),
-                         (Vector2){arena.x + arena.width * 0.5f, arena.y + 189.0f}, 200.0f, 14.0f,
-                         11.0f, PAL_SUMI_HEAVY, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D0_THREAT, r->use_ja),
+                        (Vector2){arena.x + arena.width * 0.5f, arena.y + 189.0f}, 200.0f, 14.0f,
+                        11.0f, PAL_SUMI_HEAVY, 0.95f, false);
 
     /* Bottom: 3-step progression banner (Wave 1-3 -> Boss -> Blessing/Relic) */
     const float by = pic.y + 340.0f;
@@ -273,7 +362,7 @@ static void draw_slide0_diagram(RenderState *r, Rectangle pic, float t)
         const bool dark = (i == 2);
         ink_fill_panel(r, sb, dark ? PAL_SUMI_SCORCH : PAL_GOFUN, 0.96f, k_borders[i], 0.94f,
                        1310u + (uint32_t)i);
-        render_draw_text_fit(
+        guide_draw_text_fit(
             r, text_get(k_steps[i], r->use_ja),
             (Vector2){sb.x + sb.width * 0.5f, sb.y + sb.height * 0.5f}, sb.width - 16.0f, 17.0f,
             12.0f, dark ? PAL_KIN_HOT : (i == 1 ? PAL_BENGARA : PAL_SUMI_SCORCH), 0.98f, false);
@@ -321,9 +410,9 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
                  pal_color_alpha(PAL_SHU, 0.92f));
     draw_keycap(r, (Rectangle){c0.x + 14.0f, c0.y + 120.0f, 106.0f, 26.0f},
                 text_get(TEXT_GUIDE_D1_KEY_DRAG, r->use_ja), PAL_SUMI_LIGHT, 1322u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_DRAG, r->use_ja),
-                         (Vector2){c0.x + cw * 0.5f, c0.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
-                         PAL_SUMI_SCORCH, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_DRAG, r->use_ja),
+                        (Vector2){c0.x + cw * 0.5f, c0.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
+                        PAL_SUMI_SCORCH, 0.96f, false);
 
     /* Cell 1 (Top-Right): Cursor Ink Ring + Dry tick + Ink Orbs drifting in */
     const Rectangle c1 = {x0 + cw + gx, y0, cw, ch};
@@ -361,9 +450,9 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
                               .dry = 0.0f,
                               .seed = 1326u},
                (InkTone){.color = PAL_SHU, .alpha = 0.96f}, 1.0f);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D1_DRY, r->use_ja),
-                         (Vector2){ring_c.x + 56.0f, ring_c.y - 26.0f}, 68.0f, 13.0f, 10.0f,
-                         PAL_SHU, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_DRY, r->use_ja),
+                        (Vector2){ring_c.x + 56.0f, ring_c.y - 26.0f}, 68.0f, 13.0f, 10.0f, PAL_SHU,
+                        0.96f, false);
     for (int k = 0; k < 3; ++k) {
         const float ph = fmodf(t * 0.6f + (float)k * 0.33f, 1.0f);
         const float dist = (1.0f - ph) * 62.0f + 10.0f;
@@ -376,9 +465,9 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
     }
     draw_keycap(r, (Rectangle){c1.x + 14.0f, c1.y + 120.0f, 106.0f, 26.0f},
                 text_get(TEXT_GUIDE_D1_KEY_INK, r->use_ja), PAL_KIN, 1327u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_INK, r->use_ja),
-                         (Vector2){c1.x + cw * 0.5f, c1.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
-                         PAL_SUMI_SCORCH, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_INK, r->use_ja),
+                        (Vector2){c1.x + cw * 0.5f, c1.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
+                        PAL_SUMI_SCORCH, 0.96f, false);
 
     /* Cell 2 (Bottom-Left): Cyclone Swirl */
     const Rectangle c2 = {x0, y0 + ch + gy, cw, ch};
@@ -399,9 +488,9 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
     }
     draw_keycap(r, (Rectangle){c2.x + 14.0f, c2.y + 120.0f, 126.0f, 26.0f},
                 text_get(TEXT_GUIDE_D1_KEY_CYC, r->use_ja), PAL_AO, 1334u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_CYC, r->use_ja),
-                         (Vector2){c2.x + cw * 0.5f, c2.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
-                         PAL_SUMI_SCORCH, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_CYC, r->use_ja),
+                        (Vector2){c2.x + cw * 0.5f, c2.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
+                        PAL_SUMI_SCORCH, 0.96f, false);
 
     /* Cell 3 (Bottom-Right): Gale Burst Crescent Slash */
     const Rectangle c3 = {x0 + cw + gx, y0 + ch + gy, cw, ch};
@@ -440,9 +529,9 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
     }
     draw_keycap(r, (Rectangle){c3.x + 14.0f, c3.y + 120.0f, 88.0f, 26.0f},
                 text_get(TEXT_GUIDE_D1_KEY_GALE, r->use_ja), PAL_BENGARA, 1341u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_GALE, r->use_ja),
-                         (Vector2){c3.x + cw * 0.5f, c3.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
-                         PAL_SUMI_SCORCH, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_GALE, r->use_ja),
+                        (Vector2){c3.x + cw * 0.5f, c3.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
+                        PAL_SUMI_SCORCH, 0.96f, false);
 }
 
 /* Slide 2 (3/5): How Damage Works — Strip 1 Deflect, Strip 2 Slam & Ink Mark x2 */
@@ -507,9 +596,9 @@ static void draw_slide2_diagram(RenderState *r, Rectangle pic, float t)
                     pal_color_alpha(PAL_KIN_HOT, 0.80f), pal_color_alpha(PAL_KIN_HOT, 0.0f));
     ink_fill_panel(r, (Rectangle){top.x + 162.0f, top.y + 14.0f, 122.0f, 28.0f}, PAL_SUMI_SCORCH,
                    0.94f, PAL_KIN, 0.95f, 1355u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D2_DEFLECT, r->use_ja),
-                         (Vector2){top.x + 223.0f, top.y + 28.0f}, 108.0f, 16.0f, 12.0f,
-                         PAL_KIN_HOT, 0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D2_DEFLECT, r->use_ja),
+                        (Vector2){top.x + 223.0f, top.y + 28.0f}, 108.0f, 16.0f, 12.0f, PAL_KIN_HOT,
+                        0.98f, false);
 
     /* Bottom Strip: 2. Slam & Ink Mark x2 */
     const Rectangle bot = {sx, pic.y + 216.0f, sw, sh};
@@ -555,9 +644,9 @@ static void draw_slide2_diagram(RenderState *r, Rectangle pic, float t)
                    (InkTone){.color = PAL_SHU, .alpha = 0.92f});
     ink_fill_panel(r, (Rectangle){bot.x + 332.0f, bot.y + 12.0f, 164.0f, 28.0f}, PAL_SUMI_SCORCH,
                    0.94f, PAL_SHU, 0.95f, 1363u);
-    render_draw_text_fit(r, text_get(TEXT_CALLOUT_SLAM, r->use_ja),
-                         (Vector2){bot.x + 414.0f, bot.y + 26.0f}, 148.0f, 16.0f, 12.0f, PAL_GOFUN,
-                         0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_CALLOUT_SLAM, r->use_ja),
+                        (Vector2){bot.x + 414.0f, bot.y + 26.0f}, 148.0f, 16.0f, 12.0f, PAL_GOFUN,
+                        0.98f, false);
 }
 
 /* Slide 3 (4/5): Elemental Reactions — 2x2 Illustrated Reaction Encyclopedia */
@@ -591,12 +680,12 @@ static void draw_slide3_diagram(RenderState *r, Rectangle pic, float t)
     }
     draw_keycap(r, (Rectangle){c0.x + 12.0f, c0.y + 10.0f, 96.0f, 24.0f},
                 text_get(TEXT_GUIDE_D3_EQ_BLAZE, r->use_ja), PAL_SHU, 1372u);
-    render_draw_text_fit(r, text_get(TEXT_RESULT_BLAZING_LABEL, r->use_ja),
-                         (Vector2){c0.x + cw * 0.5f, c0.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
-                         PAL_BENGARA, 0.98f, false);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_BLAZE, r->use_ja),
-                         (Vector2){c0.x + cw * 0.5f, c0.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
-                         PAL_SUMI_HEAVY, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_RESULT_BLAZING_LABEL, r->use_ja),
+                        (Vector2){c0.x + cw * 0.5f, c0.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
+                        PAL_BENGARA, 0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_BLAZE, r->use_ja),
+                        (Vector2){c0.x + cw * 0.5f, c0.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
+                        PAL_SUMI_HEAVY, 0.95f, false);
 
     /* Card 1: Ink + Storm -> Tempest Lightning */
     const Rectangle c1 = {x0 + cw + gx, y0, cw, ch};
@@ -631,12 +720,12 @@ static void draw_slide3_diagram(RenderState *r, Rectangle pic, float t)
                (InkTone){.color = PAL_AO_HOT, .alpha = 0.98f}, 1.0f);
     draw_keycap(r, (Rectangle){c1.x + 12.0f, c1.y + 10.0f, 96.0f, 24.0f},
                 text_get(TEXT_GUIDE_D3_EQ_STORM, r->use_ja), PAL_AO, 1377u);
-    render_draw_text_fit(r, text_get(TEXT_RESULT_TEMPEST_LABEL, r->use_ja),
-                         (Vector2){c1.x + cw * 0.5f, c1.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
-                         PAL_AO, 0.98f, false);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_STORM, r->use_ja),
-                         (Vector2){c1.x + cw * 0.5f, c1.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
-                         PAL_SUMI_HEAVY, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_RESULT_TEMPEST_LABEL, r->use_ja),
+                        (Vector2){c1.x + cw * 0.5f, c1.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
+                        PAL_AO, 0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_STORM, r->use_ja),
+                        (Vector2){c1.x + cw * 0.5f, c1.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
+                        PAL_SUMI_HEAVY, 0.95f, false);
 
     /* Card 2: Fire + Storm -> Thunderburst */
     const Rectangle c2 = {x0, y0 + ch + gy, cw, ch};
@@ -668,12 +757,12 @@ static void draw_slide3_diagram(RenderState *r, Rectangle pic, float t)
     }
     draw_keycap(r, (Rectangle){c2.x + 12.0f, c2.y + 10.0f, 96.0f, 24.0f},
                 text_get(TEXT_GUIDE_D3_EQ_BURST, r->use_ja), PAL_SHU, 1381u);
-    render_draw_text_fit(r, text_get(TEXT_RESULT_THUNDERBURST_LABEL, r->use_ja),
-                         (Vector2){c2.x + cw * 0.5f, c2.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
-                         PAL_SHU, 0.98f, false);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_BURST, r->use_ja),
-                         (Vector2){c2.x + cw * 0.5f, c2.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
-                         PAL_SUMI_HEAVY, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_RESULT_THUNDERBURST_LABEL, r->use_ja),
+                        (Vector2){c2.x + cw * 0.5f, c2.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
+                        PAL_SHU, 0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_BURST, r->use_ja),
+                        (Vector2){c2.x + cw * 0.5f, c2.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
+                        PAL_SUMI_HEAVY, 0.95f, false);
 
     /* Card 3: Ink + Fire + Storm -> Cataclysm (Dark Lacquer Hero Card) */
     const Rectangle c3 = {x0 + cw + gx, y0 + ch + gy, cw, ch};
@@ -692,12 +781,12 @@ static void draw_slide3_diagram(RenderState *r, Rectangle pic, float t)
     seal_stamp(r, TEXT_SEAL_SANGEN, cc, 40.0f, SEAL_SHUBUN, 0.85f);
     draw_keycap(r, (Rectangle){c3.x + 12.0f, c3.y + 10.0f, 128.0f, 24.0f},
                 text_get(TEXT_GUIDE_D3_EQ_CATA, r->use_ja), PAL_KIN, 1384u);
-    render_draw_text_fit(r, text_get(TEXT_RESULT_CATACLYSM_LABEL, r->use_ja),
-                         (Vector2){c3.x + cw * 0.5f, c3.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
-                         PAL_KIN_HOT, 0.98f, false);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_CATA, r->use_ja),
-                         (Vector2){c3.x + cw * 0.5f, c3.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
-                         PAL_GOFUN, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_RESULT_CATACLYSM_LABEL, r->use_ja),
+                        (Vector2){c3.x + cw * 0.5f, c3.y + 140.0f}, cw - 20.0f, 19.0f, 14.0f,
+                        PAL_KIN_HOT, 0.98f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D3_SUB_CATA, r->use_ja),
+                        (Vector2){c3.x + cw * 0.5f, c3.y + 166.0f}, cw - 20.0f, 14.0f, 11.0f,
+                        PAL_GOFUN, 0.95f, false);
 }
 
 /* Slide 4 (5/5): Chains, Blessings & Bokuan Mastery */
@@ -716,9 +805,9 @@ static void draw_slide4_diagram(RenderState *r, Rectangle pic, float t)
              r->use_ja ? "2\xE3\x80\x9C" : "2+");
     const Rectangle ch_box = {top.x + 22.0f, top.y + 22.0f, 186.0f, 48.0f};
     ink_fill_panel(r, ch_box, PAL_SUMI_DARK, 0.95f, PAL_SHU, 0.94f, 1391u);
-    render_draw_text_fit(r, chain_txt,
-                         (Vector2){ch_box.x + ch_box.width * 0.5f, ch_box.y + ch_box.height * 0.5f},
-                         ch_box.width - 18.0f, 22.0f, 15.0f, PAL_GOFUN, 0.98f, false);
+    guide_draw_text_fit(r, chain_txt,
+                        (Vector2){ch_box.x + ch_box.width * 0.5f, ch_box.y + ch_box.height * 0.5f},
+                        ch_box.width - 18.0f, 22.0f, 15.0f, PAL_GOFUN, 0.98f, false);
 
     draw_rect_solid(r, (Rectangle){ch_box.x + ch_box.width + 12.0f, top.y + 44.0f, 28.0f, 4.0f},
                     pal_color_alpha(PAL_KIN_HOT, 0.95f));
@@ -731,7 +820,7 @@ static void draw_slide4_diagram(RenderState *r, Rectangle pic, float t)
         118.0f, 32.0f, pal_color_alpha(PAL_KIN_HOT, 0.24f + 0.14f * pulse),
         pal_color_alpha(PAL_KIN, 0.0f));
     ink_fill_panel(r, surge_box, PAL_SUMI_DARK, 0.96f, PAL_KIN_HOT, 0.96f, 1392u);
-    render_draw_text_fit(
+    guide_draw_text_fit(
         r, text_get(TEXT_CALLOUT_SURGE, r->use_ja),
         (Vector2){surge_box.x + surge_box.width * 0.5f, surge_box.y + surge_box.height * 0.5f},
         surge_box.width - 18.0f, 22.0f, 15.0f, PAL_KIN_HOT, 0.99f, false);
@@ -743,16 +832,16 @@ static void draw_slide4_diagram(RenderState *r, Rectangle pic, float t)
     draw_rect_solid(r,
                     (Rectangle){top.x + 26.0f, top.y + 86.0f, (inner_w - 52.0f) * fill_ratio, 6.0f},
                     pal_color_alpha(PAL_KIN_HOT, 0.98f));
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D4_SURGE_SUB, r->use_ja),
-                         (Vector2){top.x + inner_w * 0.5f, top.y + 114.0f}, inner_w - 32.0f, 15.0f,
-                         11.0f, PAL_GOFUN, 0.95f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D4_SURGE_SUB, r->use_ja),
+                        (Vector2){top.x + inner_w * 0.5f, top.y + 114.0f}, inner_w - 32.0f, 15.0f,
+                        11.0f, PAL_GOFUN, 0.95f, false);
 
     /* Bottom-Left: 3 Mini Axis Blessing Cards */
     const Rectangle bl = {x0, pic.y + 166.0f, 274.0f, 236.0f};
     ink_fill_panel(r, bl, PAL_GOFUN, 0.96f, PAL_SUMI_DARK, 0.86f, 1393u);
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_D4_BLESS_HDR, r->use_ja),
-                         (Vector2){bl.x + bl.width * 0.5f, bl.y + 22.0f}, bl.width - 20.0f, 16.0f,
-                         12.0f, PAL_SUMI_SCORCH, 0.96f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D4_BLESS_HDR, r->use_ja),
+                        (Vector2){bl.x + bl.width * 0.5f, bl.y + 22.0f}, bl.width - 20.0f, 16.0f,
+                        12.0f, PAL_SUMI_SCORCH, 0.96f, false);
 
     static const TextId k_axes[3] = {TEXT_AXIS_BLAZE, TEXT_AXIS_THUNDER, TEXT_GUIDE_D4_BLESS_AXIS3};
     static const PaletteId k_ax_pal[3] = {PAL_SHU, PAL_AO, PAL_SUMI_DARK};
@@ -763,16 +852,16 @@ static void draw_slide4_diagram(RenderState *r, Rectangle pic, float t)
         ink_fill_panel(r, mc, PAL_PAPER_ACT1, 0.96f, k_ax_pal[i], 0.92f, 1394u + (uint32_t)i);
         draw_rect_solid(r, (Rectangle){mc.x + 2.0f, mc.y + 2.0f, mc.width - 4.0f, 26.0f},
                         pal_color_alpha(k_ax_pal[i], 0.92f));
-        render_draw_text_fit(r, text_get(k_axes[i], r->use_ja),
-                             (Vector2){mc.x + mc.width * 0.5f, mc.y + 15.0f}, mc.width - 8.0f,
-                             13.0f, 9.0f, PAL_GOFUN, 0.98f, false);
+        guide_draw_text_fit(r, text_get(k_axes[i], r->use_ja),
+                            (Vector2){mc.x + mc.width * 0.5f, mc.y + 15.0f}, mc.width - 8.0f, 13.0f,
+                            9.0f, PAL_GOFUN, 0.98f, false);
         ink_teardrop(r, (Vector2){mc.x + mc.width * 0.5f, mc.y + 66.0f}, (Vector2){0.0f, -1.0f},
                      14.0f, 10.0f, pal_color_alpha(k_ax_pal[i], 0.92f));
-        render_draw_text_wrapped(r, text_get(k_sample[i], r->use_ja),
-                                 (Rectangle){mc.x + 6.0f, mc.y + 94.0f, mc.width - 12.0f, 44.0f},
-                                 13.0f, 10.0f, PAL_SUMI_SCORCH, 0.96f, false, true);
-        render_draw_text_fit(r, "Lv 1->3", (Vector2){mc.x + mc.width * 0.5f, mc.y + 154.0f},
-                             mc.width - 10.0f, 12.0f, 10.0f, PAL_BENGARA, 0.95f, false);
+        guide_draw_text_wrapped(r, text_get(k_sample[i], r->use_ja),
+                                (Rectangle){mc.x + 6.0f, mc.y + 94.0f, mc.width - 12.0f, 44.0f},
+                                13.0f, 10.0f, PAL_SUMI_SCORCH, 0.96f, false, true);
+        guide_draw_text_fit(r, "Lv 1->3", (Vector2){mc.x + mc.width * 0.5f, mc.y + 154.0f},
+                            mc.width - 10.0f, 12.0f, 10.0f, PAL_BENGARA, 0.95f, false);
     }
 
     /* Bottom-Right: Ink Crystal + Bokuan Permanent Upgrade block */
@@ -794,14 +883,14 @@ static void draw_slide4_diagram(RenderState *r, Rectangle pic, float t)
 
     const Rectangle bk_badge = {br.x + 42.0f, br.y + 132.0f, br.width - 84.0f, 34.0f};
     ink_fill_panel(r, bk_badge, PAL_SUMI_SCORCH, 0.96f, PAL_KIN, 0.95f, 1400u);
-    render_draw_text_fit(
+    guide_draw_text_fit(
         r, text_get(TEXT_BOKUAN_TITLE, r->use_ja),
         (Vector2){bk_badge.x + bk_badge.width * 0.5f, bk_badge.y + bk_badge.height * 0.5f},
         bk_badge.width - 16.0f, 18.0f, 13.0f, PAL_KIN_HOT, 0.98f, false);
 
-    render_draw_text_wrapped(r, text_get(TEXT_GUIDE_D4_BOKUAN_SUB, r->use_ja),
-                             (Rectangle){br.x + 14.0f, br.y + 174.0f, br.width - 28.0f, 48.0f},
-                             15.0f, 11.0f, PAL_SUMI_DARK, 0.96f, false, true);
+    guide_draw_text_wrapped(r, text_get(TEXT_GUIDE_D4_BOKUAN_SUB, r->use_ja),
+                            (Rectangle){br.x + 14.0f, br.y + 174.0f, br.width - 28.0f, 48.0f},
+                            15.0f, 11.0f, PAL_SUMI_DARK, 0.96f, false, true);
 }
 
 static void draw_nav_button(RenderState *r, Rectangle rc, const char *label, bool focused,
@@ -811,8 +900,8 @@ static void draw_nav_button(RenderState *r, Rectangle rc, const char *label, boo
     const PaletteId border = disabled ? PAL_SUMI_CLEAR : (focused ? PAL_SHU : PAL_SUMI_DARK);
     const PaletteId text_pal = disabled ? PAL_SUMI_LIGHT : (focused ? PAL_SHU : PAL_SUMI_SCORCH);
     ink_fill_panel(r, rc, fill, disabled ? 0.78f : 0.96f, border, disabled ? 0.70f : 0.94f, seed);
-    render_draw_text_fit(r, label, (Vector2){rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f},
-                         rc.width - 24.0f, 19.0f, 13.0f, text_pal, disabled ? 0.72f : 0.98f, false);
+    guide_draw_text_fit(r, label, (Vector2){rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f},
+                        rc.width - 24.0f, 19.0f, 13.0f, text_pal, disabled ? 0.72f : 0.98f, false);
 }
 
 void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
@@ -837,6 +926,7 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
 
     GuideLayout layout;
     render_guide_layout(&layout);
+    guide_cache_begin(r, page, layout.panel_rect);
     const Rectangle scroll = layout.panel_rect;
     ink_fill_panel(r, scroll, PAL_GOFUN, 0.97f, PAL_SUMI_DARK, 0.94f, 1280u);
 
@@ -852,12 +942,12 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
     ink_fill_panel(r, pg_pill, PAL_SUMI_SCORCH, 0.96f, PAL_KIN, 0.95f, 1283u);
     char pg_buf[32];
     snprintf(pg_buf, sizeof pg_buf, "%d / %d", page + 1, GUIDE_SLIDE_COUNT);
-    render_draw_text_centered(
+    guide_draw_text_centered(
         r, pg_buf, (Vector2){pg_pill.x + pg_pill.width * 0.5f, pg_pill.y + pg_pill.height * 0.5f},
         18.0f, PAL_KIN_HOT, 0.98f, false);
 
-    render_draw_text_fit(r, text_get(slide->title, r->use_ja), (Vector2){618.0f, 87.0f}, 804.0f,
-                         32.0f, 20.0f, PAL_SUMI_SCORCH, 0.98f, true);
+    guide_draw_text_fit(r, text_get(slide->title, r->use_ja), (Vector2){618.0f, 87.0f}, 804.0f,
+                        32.0f, 20.0f, PAL_SUMI_SCORCH, 0.98f, true);
 
     const bool close_hov = (ui->hover_choice == GUIDE_HOVER_CLOSE);
     draw_nav_button(r, layout.close_rect, text_get(TEXT_GUIDE_CLOSE, r->use_ja), close_hov, false,
@@ -901,17 +991,17 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
         ink_fill_panel(r, num_badge, PAL_SUMI_SCORCH, 0.96f, PAL_KIN, 0.94f, 1294u + (uint32_t)i);
         char num_s[16];
         snprintf(num_s, sizeof num_s, "%d", i + 1);
-        render_draw_text_centered(
+        guide_draw_text_centered(
             r, num_s,
             (Vector2){num_badge.x + num_badge.width * 0.5f, num_badge.y + num_badge.height * 0.5f},
             16.0f, PAL_KIN_HOT, 0.98f, false);
 
-        render_draw_text_wrapped(r, text_get(slide->head[i], r->use_ja),
-                                 (Rectangle){card.x + 52.0f, card.y + 12.0f, rw - 66.0f, 32.0f},
-                                 18.0f, 13.0f, slide->accent[i], 0.98f, false, false);
-        render_draw_text_wrapped(r, text_get(slide->body[i], r->use_ja),
-                                 (Rectangle){card.x + 16.0f, card.y + 46.0f, rw - 32.0f, 50.0f},
-                                 15.0f, 12.0f, PAL_SUMI_DARK, 0.95f, false, false);
+        guide_draw_text_wrapped(r, text_get(slide->head[i], r->use_ja),
+                                (Rectangle){card.x + 52.0f, card.y + 12.0f, rw - 66.0f, 32.0f},
+                                18.0f, 13.0f, slide->accent[i], 0.98f, false, false);
+        guide_draw_text_wrapped(r, text_get(slide->body[i], r->use_ja),
+                                (Rectangle){card.x + 16.0f, card.y + 46.0f, rw - 32.0f, 50.0f},
+                                15.0f, 12.0f, PAL_SUMI_DARK, 0.95f, false, false);
     }
 
     /* Bottom TIP accent strip */
@@ -919,13 +1009,13 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
     ink_fill_panel(r, tip_box, PAL_PAPER_ACT2, 0.96f, PAL_BENGARA, 0.92f, 1298u);
     const Rectangle tip_tag = {tip_box.x + 12.0f, tip_box.y + 19.0f, 54.0f, 32.0f};
     ink_fill_panel(r, tip_tag, PAL_BENGARA, 0.96f, PAL_SUMI_SCORCH, 0.85f, 1299u);
-    render_draw_text_fit(
+    guide_draw_text_fit(
         r, text_get(TEXT_GUIDE_TIP_TAG, r->use_ja),
         (Vector2){tip_tag.x + tip_tag.width * 0.5f, tip_tag.y + tip_tag.height * 0.5f},
         tip_tag.width - 8.0f, 15.0f, 11.0f, PAL_GOFUN, 0.98f, false);
-    render_draw_text_wrapped(r, text_get(slide->tip, r->use_ja),
-                             (Rectangle){tip_box.x + 76.0f, tip_box.y + 8.0f, rw - 90.0f, 54.0f},
-                             15.0f, 11.0f, PAL_SUMI_SCORCH, 0.97f, false, false);
+    guide_draw_text_wrapped(r, text_get(slide->tip, r->use_ja),
+                            (Rectangle){tip_box.x + 76.0f, tip_box.y + 8.0f, rw - 90.0f, 54.0f},
+                            15.0f, 11.0f, PAL_SUMI_SCORCH, 0.97f, false, false);
 
     /* Bottom Navigation Bar */
     const bool prev_disabled = (page <= 0);
@@ -947,12 +1037,12 @@ void render_draw_guide_ui(RenderState *r, const GameState *g, const UiView *ui)
                        1412u + (uint32_t)i);
         char d_s[16];
         snprintf(d_s, sizeof d_s, "%d", i + 1);
-        render_draw_text_centered(
+        guide_draw_text_centered(
             r, d_s, (Vector2){dot.x + dot.width * 0.5f, dot.y + dot.height * 0.5f}, 18.0f,
             active ? PAL_KIN_HOT : (hov ? PAL_SHU : PAL_SUMI_SCORCH), 0.98f, false);
     }
 
-    render_draw_text_fit(r, text_get(TEXT_GUIDE_NAV_HINT, r->use_ja),
-                         (Vector2){(float)INK_SCREEN_W * 0.5f, 646.0f}, 960.0f, 14.0f, 11.0f,
-                         PAL_SUMI_HEAVY, 0.92f, false);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_NAV_HINT, r->use_ja),
+                        (Vector2){(float)INK_SCREEN_W * 0.5f, 646.0f}, 960.0f, 14.0f, 11.0f,
+                        PAL_SUMI_HEAVY, 0.92f, false);
 }

@@ -52,7 +52,24 @@ typedef struct {
     /* 圧力投影の Red-Black 作業領域（決定性ハッシュ対象外）。112.5 KiB をスタックに置かない */
     float rb_div[2][FLUID_N / 2];
     float rb_p[2][FLUID_N / 2];
+    /* 描画キャッシュ用メタデータ（決定性ハッシュ対象外） */
+    uint64_t instance_id;
+    uint64_t mutation_rev;
+    uint8_t mut_borrow_dirty;
+    /* 未描画ロビー最適化用フラグ（game_step_sandbox の分岐を左右するため決定性ハッシュ対象） */
+    uint8_t pristine;
 } FluidState;
+
+typedef struct {
+    bool hit;
+    float t;
+    float hit_x;
+    float hit_y;
+    float nx;
+    float ny;
+    int cell_x;
+    int cell_y;
+} FluidRayHit;
 
 FluidConfig fluid_config_default(void);
 void fluid_init(FluidState *f, const FluidConfig *cfg);
@@ -65,6 +82,10 @@ void fluid_set_solid_circle(FluidState *f, float px, float py, float radius_px, 
 bool fluid_is_solid(const FluidState *f, float px, float py);
 int fluid_cell_reach(float radius_px); /* 半径 radius_px を覆うセル数 ceil(r / FLUID_CELL_PX) */
 bool fluid_solid_normal(const FluidState *f, float px, float py, float *nx, float *ny);
+FluidRayHit fluid_trace_solid_segment(const FluidState *f, float x0_px, float y0_px, float x1_px,
+                                      float y1_px);
+bool fluid_is_pristine(const FluidState *f);
+bool fluid_has_open_mut_borrow(const FluidState *f);
 
 /* 数値ステップ・注入・サンプリング */
 void fluid_step(FluidState *f, float dt);
