@@ -101,7 +101,8 @@ void fluid_sample(const FluidState *f, float px, float py, float *out_u, float *
  * fluid_reset / fluid_init まで） */
 const float *fluid_channel_const(const FluidState *f, int ch);
 float *fluid_channel_mut(FluidState *f, int ch); /* 非アクティブなチャンネルは NULL */
-void fluid_end_mut_borrow(FluidState *f);        /* スコープ付き内部書き込みの借用を終了 */
+/* スコープ付き内部書き込みの借用を終了 */
+void fluid_end_mut_borrow(FluidState *f);
 const float *fluid_u_const(const FluidState *f); /* 速度 x 成分 [セル/秒] */
 const float *fluid_v_const(const FluidState *f); /* 速度 y 成分 [セル/秒] */
 const uint8_t *fluid_solid_const(const FluidState *f);
