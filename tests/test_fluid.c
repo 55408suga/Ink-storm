@@ -857,6 +857,17 @@ static void test_pristine_flag_tracks_mutations_and_resets(void)
     TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
     TEST_ASSERT_NOT_EQUAL_UINT64(hash_pristine, fluid_hash(f));
 
+    const uint64_t rev_open = f->mutation_rev;
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_TRUE(f->mutation_rev > rev_open);
+
+    const uint64_t solid_rev0 = f->solid_rev;
+    fluid_set_solid_rect(f, 320.0f, 240.0f, 24.0f, 24.0f, true);
+    TEST_ASSERT_TRUE(f->solid_rev > solid_rev0);
+
+    (void)fluid_channel_mut(f, 0);
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
     fluid_step(f, k_dt);
     TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
 }

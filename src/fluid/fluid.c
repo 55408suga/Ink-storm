@@ -2,10 +2,7 @@
 
 #include <float.h>
 #include <math.h>
-#include <stdatomic.h>
 #include <string.h>
-
-static atomic_uint_fast64_t g_fluid_instance_seq = 1;
 
 static float clamp(float value, float lo, float hi)
 {
@@ -64,10 +61,10 @@ void fluid_init(FluidState *f, const FluidConfig *cfg)
     }
     memset(f, 0, sizeof *f);
     f->cfg = c;
-    f->instance_id = (uint64_t)atomic_fetch_add(&g_fluid_instance_seq, 1u);
-    f->mutation_rev = 1;
     f->pristine = 1;
     fluid_clear_solids(f);
+    f->mutation_rev = 1;
+    f->solid_rev = 1;
 }
 
 void fluid_reset(FluidState *f)
@@ -89,6 +86,9 @@ void fluid_reset(FluidState *f)
     f->pristine = 1;
     f->mut_borrow_dirty = 0;
     ++f->mutation_rev;
+    if (f->mutation_rev == 0) {
+        f->mutation_rev = 1;
+    }
 }
 
 static void set_solid(FluidState *f, int i, bool solid)
@@ -97,6 +97,7 @@ static void set_solid(FluidState *f, int i, bool solid)
     if (f->solid[i] != next) {
         f->solid[i] = next;
         f->geometry_valid = 0;
+        ++f->solid_rev;
         ++f->mutation_rev;
     }
     if (solid) {
@@ -548,6 +549,15 @@ float *fluid_channel_mut(FluidState *f, int ch)
         return f->dye[ch];
     }
     return NULL;
+}
+
+void fluid_end_mut_borrow(FluidState *f)
+{
+    if (!f) {
+        return;
+    }
+    f->mut_borrow_dirty = 0;
+    ++f->mutation_rev;
 }
 
 const float *fluid_u_const(const FluidState *f) { return f ? f->u : NULL; }

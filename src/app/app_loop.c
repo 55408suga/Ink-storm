@@ -113,6 +113,7 @@ static void start_new_run(AppRunContext *ctx, GameState *game, RenderState *rend
     const RunConfig cfg = meta_build_run_config(&ctx->meta, brush, seed);
     game_init(game, &cfg);
     render_reset_vfx(render, cfg.seed);
+    render_invalidate_fluid_cache(render);
     ctx->ui.scene = UI_SCENE_RUN;
     ctx->ui.selected_brush = cfg.brush_style;
     ctx->ui.paused = false;
@@ -146,6 +147,7 @@ static void enter_lobby_scene(AppRunContext *ctx, GameState *game, RenderState *
         meta_build_run_config(&ctx->meta, ctx->ui.selected_brush, UINT64_C(1));
     game_init_sandbox(game, &sandbox_cfg);
     render_reset_vfx(render, UINT64_C(1));
+    render_invalidate_fluid_cache(render);
     sync_meta_view(ctx);
     if (audio != NULL) {
         audio_out_lock();

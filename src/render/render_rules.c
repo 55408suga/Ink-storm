@@ -229,7 +229,8 @@ bool render_fluid_cache_matches(const FluidUploadCache *cache, const FluidState 
     if (cache == NULL || f == NULL || !cache->valid || fluid_has_open_mut_borrow(f)) {
         return false;
     }
-    return cache->field_ptr == f && cache->instance_id == f->instance_id &&
-           cache->steps == f->steps && cache->mutation_rev == f->mutation_rev &&
+    return cache->field_ptr == f && cache->steps == f->steps &&
+           cache->mutation_rev == f->mutation_rev && cache->solid_rev == f->solid_rev &&
+           cache->pristine == fluid_is_pristine(f) && cache->dims_key == RENDER_FLUID_DIMS_KEY &&
            cache->max_dye == f->cfg.max_dye && cache->gpu_path == gpu_path;
 }

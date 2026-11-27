@@ -53,8 +53,8 @@ typedef struct {
     float rb_div[2][FLUID_N / 2];
     float rb_p[2][FLUID_N / 2];
     /* 描画キャッシュ用メタデータ（決定性ハッシュ対象外） */
-    uint64_t instance_id;
     uint64_t mutation_rev;
+    uint64_t solid_rev;
     uint8_t mut_borrow_dirty;
     /* 未描画ロビー最適化用フラグ（game_step_sandbox の分岐を左右するため決定性ハッシュ対象） */
     uint8_t pristine;
@@ -101,6 +101,7 @@ void fluid_sample(const FluidState *f, float px, float py, float *out_u, float *
  * fluid_reset / fluid_init まで） */
 const float *fluid_channel_const(const FluidState *f, int ch);
 float *fluid_channel_mut(FluidState *f, int ch); /* 非アクティブなチャンネルは NULL */
+void fluid_end_mut_borrow(FluidState *f);        /* スコープ付き内部書き込みの借用を終了 */
 const float *fluid_u_const(const FluidState *f); /* 速度 x 成分 [セル/秒] */
 const float *fluid_v_const(const FluidState *f); /* 速度 y 成分 [セル/秒] */
 const uint8_t *fluid_solid_const(const FluidState *f);

@@ -114,6 +114,7 @@ void ink_leech_step(GameState *g, EntityId id)
                 }
             }
         }
+        fluid_end_mut_borrow(&g->fluid);
 
         if (cells > 0 && sum_taken > 0.0f) {
             const float gain = (sum_taken / (float)cells) * 4.0f;

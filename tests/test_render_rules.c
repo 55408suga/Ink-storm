@@ -309,18 +309,33 @@ static void test_fluid_upload_cache_matches_and_invalidates(void)
     cache = (FluidUploadCache){
         .valid = true,
         .field_ptr = f,
-        .instance_id = f->instance_id,
         .steps = f->steps,
         .mutation_rev = f->mutation_rev,
+        .solid_rev = f->solid_rev,
+        .pristine = fluid_is_pristine(f),
+        .dims_key = RENDER_FLUID_DIMS_KEY,
         .max_dye = f->cfg.max_dye,
         .gpu_path = true,
     };
     TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, false));
 
+    cache.dims_key ^= 1u;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.dims_key = RENDER_FLUID_DIMS_KEY;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
     f->steps += 1u;
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
     f->steps -= 1u;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    const uint64_t solid_rev_before = f->solid_rev;
+    fluid_set_solid_rect(f, 320.0f, 240.0f, 32.0f, 32.0f, true);
+    TEST_ASSERT_TRUE(f->solid_rev > solid_rev_before);
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.solid_rev = f->solid_rev;
     TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
 
     const float dye[FLUID_MAX_CHANNELS] = {0.5f, 0.0f, 0.0f, 0.0f};
@@ -328,18 +343,33 @@ static void test_fluid_upload_cache_matches_and_invalidates(void)
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
 
     cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.pristine = fluid_is_pristine(f);
     TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
 
     /* An open fluid_channel_mut() borrow must bypass upload caching even after syncing
      * mutation_rev, so later writes through the retained pointer can never serve stale textures. */
     float *ink_mut = fluid_channel_mut(f, 0);
     TEST_ASSERT_NOT_NULL(ink_mut);
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
     cache.mutation_rev = f->mutation_rev;
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
     ink_mut[40 * FLUID_W + 40] = 1.25f;
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
 
-    /* Stepping the fluid closes the mutable borrow and allows caching again. */
+    /* Ending a scoped mutable borrow bumps mutation_rev and allows paused frames to cache. */
+    const uint64_t rev_before_end = f->mutation_rev;
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_TRUE(f->mutation_rev > rev_before_end);
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    /* Stepping the fluid also closes an unclosed mutable borrow and allows caching again. */
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(f, 0));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
     fluid_step(f, 1.0f / 60.0f);
     TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
     cache.steps = f->steps;

@@ -66,12 +66,16 @@ void render_rain_streak_pos(int streak_idx, float phase_x, float phase_y, float 
                             float *out_y);
 
 /* 流体テクスチャ転送キャッシュ（静止・ポーズ・未描画ロビーで再符号化と転送を省く） */
+#define RENDER_FLUID_DIMS_KEY (((uint32_t)FLUID_W << 16) | (uint32_t)FLUID_H)
+
 typedef struct {
     bool valid;
     const FluidState *field_ptr;
-    uint64_t instance_id;
     uint64_t steps;
     uint64_t mutation_rev;
+    uint64_t solid_rev;
+    bool pristine;
+    uint32_t dims_key;
     float max_dye;
     bool gpu_path;
     int32_t slot;

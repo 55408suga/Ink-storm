@@ -196,7 +196,7 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->vfx_time = 0.0f;
     r->rain_phase_x = 0.0f;
     r->rain_phase_y = 0.0f;
-    r->fluid_cache.valid = false;
+    render_invalidate_fluid_cache(r);
     r->guide_cache.valid = false;
     r->shake_t = 0.0f;
     r->shake_amp = 0.0f;

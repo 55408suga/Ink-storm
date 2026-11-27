@@ -2,8 +2,8 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,9 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum { SAVE_MAX_BYTES = 8192, SAVE_TMP_CREATE_ATTEMPTS = 128 };
-
-static atomic_uint_fast32_t g_save_tmp_seq = 0;
+enum { SAVE_MAX_BYTES = 8192 };
 
 static bool copy_checked(char *out, size_t size, const char *fmt, const char *arg)
 {
@@ -137,56 +135,63 @@ static bool mkdir_parents(const char *file_path, int (*mkdir_fn)(const char *, m
     return true;
 }
 
-static bool format_unique_tmp_path(const char *path, char *tmp_path, size_t cap)
+static uint64_t mix_u64(uint64_t x)
 {
-    const uint32_t seq = (uint32_t)atomic_fetch_add(&g_save_tmp_seq, 1u);
-    const unsigned long pid = (unsigned long)getpid();
+    x ^= x >> 30;
+    x *= UINT64_C(0xbf58476d1ce4e5b9);
+    x ^= x >> 27;
+    x *= UINT64_C(0x94d049bb133111eb);
+    return x ^ (x >> 31);
+}
+
+static bool format_tmp_in_dir(const char *path, const char *suffix, char *tmp_path, size_t cap)
+{
     const char *slash = strrchr(path, '/');
     int n = -1;
     if (slash == NULL) {
-        n = snprintf(tmp_path, cap, ".inktmp.%lu.%u", pid, (unsigned)seq);
+        n = snprintf(tmp_path, cap, "%s", suffix);
     } else if (slash == path) {
-        n = snprintf(tmp_path, cap, "/.inktmp.%lu.%u", pid, (unsigned)seq);
+        n = snprintf(tmp_path, cap, "/%s", suffix);
     } else {
         const size_t dir_len = (size_t)(slash - path);
         if (dir_len > (size_t)INT_MAX) {
             return false;
         }
-        n = snprintf(tmp_path, cap, "%.*s/.inktmp.%lu.%u", (int)dir_len, path, pid, (unsigned)seq);
+        n = snprintf(tmp_path, cap, "%.*s/%s", (int)dir_len, path, suffix);
     }
     return n > 0 && (size_t)n < cap;
 }
 
-static FILE *open_unique_temp_stream(const char *path, const SaveIoOps *io, bool use_custom_fopen,
-                                     char *tmp_path, size_t cap)
+static FILE *open_unique_temp_stream(const char *path, const MetaState *meta, const SaveIoOps *io,
+                                     bool use_custom_fopen, char *tmp_path, size_t cap)
 {
     if (use_custom_fopen) {
-        if (!format_unique_tmp_path(path, tmp_path, cap)) {
+        const unsigned long pid = (unsigned long)getpid();
+        const uint64_t tag =
+            mix_u64((uint64_t)(uintptr_t)meta ^ mix_u64((uint64_t)(uintptr_t)tmp_path));
+        char suffix[64];
+        const int sn = snprintf(suffix, sizeof suffix, ".inktmp.%lu.%016" PRIx64, pid, tag);
+        if (sn <= 0 || (size_t)sn >= sizeof suffix ||
+            !format_tmp_in_dir(path, suffix, tmp_path, cap)) {
             return NULL;
         }
         return io->fopen(tmp_path, "wb");
     }
 
-    for (int attempt = 0; attempt < SAVE_TMP_CREATE_ATTEMPTS; ++attempt) {
-        if (!format_unique_tmp_path(path, tmp_path, cap)) {
-            return NULL;
-        }
-        const int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
-        if (fd < 0) {
-            if (errno == EEXIST) {
-                continue;
-            }
-            return NULL;
-        }
-        FILE *fp = fdopen(fd, "wb");
-        if (fp == NULL) {
-            (void)close(fd);
-            (void)io->remove(tmp_path);
-            return NULL;
-        }
-        return fp;
+    if (!format_tmp_in_dir(path, ".inktmp.XXXXXX", tmp_path, cap)) {
+        return NULL;
     }
-    return NULL;
+    const int fd = mkstemp(tmp_path);
+    if (fd < 0) {
+        return NULL;
+    }
+    FILE *fp = fdopen(fd, "wb");
+    if (fp == NULL) {
+        (void)close(fd);
+        (void)io->remove(tmp_path);
+        return NULL;
+    }
+    return fp;
 }
 
 static bool save_write_with_ops(const char *path, const MetaState *meta, const SaveIoOps *io,
@@ -203,7 +208,7 @@ static bool save_write_with_ops(const char *path, const MetaState *meta, const S
     }
 
     char tmp_path[PATH_MAX];
-    FILE *fp = open_unique_temp_stream(path, io, use_custom_fopen, tmp_path, sizeof tmp_path);
+    FILE *fp = open_unique_temp_stream(path, meta, io, use_custom_fopen, tmp_path, sizeof tmp_path);
     if (fp == NULL) {
         return false;
     }

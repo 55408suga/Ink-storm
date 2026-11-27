@@ -50,6 +50,7 @@ void render_scenery_draw(RenderState *r, BgKey key);
 /* Fluid visualization (fluid_view.c) */
 void render_fluid_init(RenderState *r, const RenderOptions *opt);
 void render_fluid_close(RenderState *r);
+void render_fluid_invalidate(RenderState *r);
 bool render_fluid_gpu_active(const RenderState *r);
 void render_fluid_update_and_draw(RenderState *r, const GameState *g);
 

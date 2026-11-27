@@ -16,8 +16,11 @@
 static void paint_fluid_blob(FluidState *f, int ch, float cx, float cy, float rx, float ry,
                              float peak)
 {
+    if (rx <= 0.1f || ry <= 0.1f) {
+        return;
+    }
     float *chan = fluid_channel_mut(f, ch);
-    if (chan == NULL || rx <= 0.1f || ry <= 0.1f) {
+    if (chan == NULL) {
         return;
     }
     for (int y = 1; y < FLUID_H - 1; ++y) {
@@ -34,6 +37,7 @@ static void paint_fluid_blob(FluidState *f, int ch, float cx, float cy, float rx
             }
         }
     }
+    fluid_end_mut_borrow(f);
 }
 
 static void populate_demo_meta(MetaState *m)
@@ -364,6 +368,7 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
                     ink[y * FLUID_W + x] = 1.20f;
                 }
             }
+            fluid_end_mut_borrow(&g->fluid);
         }
         paint_fluid_blob(&g->fluid, 1, 48.0f, 64.0f, 20.0f, 9.0f, 1.00f);
         paint_fluid_blob(&g->fluid, 2, 114.0f, 64.0f, 20.0f, 9.0f, 1.00f);

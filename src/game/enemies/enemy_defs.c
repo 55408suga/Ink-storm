@@ -312,6 +312,7 @@ static void step_elite_ink_repel(GameState *g, float ex, float ey)
             }
         }
     }
+    fluid_end_mut_borrow(&g->fluid);
 }
 
 void enemies_ai_step(GameState *g)

@@ -369,6 +369,7 @@ typedef struct {
 
 void render_init(RenderState *r, const RenderOptions *opt);
 void render_reset_vfx(RenderState *r, uint64_t seed);
+void render_invalidate_fluid_cache(RenderState *r);
 bool render_post_available(const RenderState *r);
 void render_set_post_enabled(RenderState *r, bool enabled);
 void render_set_lang_mode(RenderState *r, UiLangMode mode);

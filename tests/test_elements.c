@@ -1216,6 +1216,38 @@ static void test_tempest_lightning_fires_same_tick_after_burn_kills_storm_lanter
     game_destroy(g);
 }
 
+static void test_elements_step_closes_fluid_mut_borrow_for_paused_cache(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Inject active ink + fire + storm across two blocks so Stage 1, Stage 2 (Cataclysm), and
+     * Stage 3 (Thunderburst) all run, then confirm no open mut borrow remains for paused frames. */
+    const float dye[FLUID_MAX_CHANNELS] = {1.2f, 1.2f, 1.2f, 0.0f};
+    fluid_splat(&g->fluid, 320.0f, 240.0f, 5.0f, 0.0f, 0.0f, dye);
+    fluid_splat(&g->fluid, 520.0f, 240.0f, 5.0f, 0.0f, 0.0f, dye);
+    fluid_step(&g->fluid, INK_FIXED_DT);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    g->internal.cataclysm_cd = 0.0f;
+    elements_step_post_solve(g);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    elements_step(g);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    /* An unclosed external fluid_channel_mut() still keeps the borrow open until ended. */
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(&g->fluid, 1));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(&g->fluid));
+    fluid_end_mut_borrow(&g->fluid);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1241,5 +1273,6 @@ int main(void)
     RUN_TEST(test_tempest_lightning_recounts_storm_after_thunderburst_consumption);
     RUN_TEST(test_elements_step_post_solve_matches_full_scan);
     RUN_TEST(test_tempest_lightning_fires_same_tick_after_burn_kills_storm_lantern);
+    RUN_TEST(test_elements_step_closes_fluid_mut_borrow_for_paused_cache);
     return UNITY_END();
 }

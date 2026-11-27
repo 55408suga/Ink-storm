@@ -283,6 +283,8 @@ void render_draw_to_texture(RenderState *r, const GameState *g, const UiView *ui
     render_draw_internal(r, g, ui, true, target);
 }
 
+void render_invalidate_fluid_cache(RenderState *r) { render_fluid_invalidate(r); }
+
 void render_close(RenderState *r)
 {
     if (r == NULL) {

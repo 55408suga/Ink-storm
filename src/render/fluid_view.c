@@ -235,6 +235,14 @@ void render_fluid_close(RenderState *r)
     r->fluid_cache = (FluidUploadCache){0};
 }
 
+void render_fluid_invalidate(RenderState *r)
+{
+    if (r == NULL) {
+        return;
+    }
+    r->fluid_cache = (FluidUploadCache){0};
+}
+
 bool render_fluid_gpu_active(const RenderState *r)
 {
     return r != NULL &&
@@ -332,9 +340,11 @@ void render_fluid_update_and_draw(RenderState *r, const GameState *g)
         r->fluid_cache = (FluidUploadCache){
             .valid = !borrow_open,
             .field_ptr = &g->fluid,
-            .instance_id = g->fluid.instance_id,
             .steps = g->fluid.steps,
             .mutation_rev = g->fluid.mutation_rev,
+            .solid_rev = g->fluid.solid_rev,
+            .pristine = fluid_is_pristine(&g->fluid),
+            .dims_key = RENDER_FLUID_DIMS_KEY,
             .max_dye = g->fluid.cfg.max_dye,
             .gpu_path = use_gpu,
             .slot = slot,
