@@ -4,6 +4,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -509,6 +510,151 @@ static void test_save_backup_failure_publishes_nothing(void)
     (void)rmdir(dir);
 }
 
+typedef struct {
+    char save_path[PATH_MAX + 64];
+    char first_tmp[PATH_MAX + 128];
+    char second_tmp[PATH_MAX + 128];
+    int calls;
+    bool nested_ok;
+} OverlapSaveCtx;
+
+static OverlapSaveCtx g_overlap_ctx;
+
+static FILE *overlap_fopen_hook(const char *path, const char *mode)
+{
+    ++g_overlap_ctx.calls;
+    if (g_overlap_ctx.calls == 1) {
+        snprintf(g_overlap_ctx.first_tmp, sizeof g_overlap_ctx.first_tmp, "%s", path);
+        MetaState inner;
+        meta_init_default(&inner);
+        inner.ink_crystals = 777;
+        const SaveIoOps inner_ops = {.fopen = overlap_fopen_hook};
+        g_overlap_ctx.nested_ok = save_write(g_overlap_ctx.save_path, &inner, &inner_ops);
+    } else if (g_overlap_ctx.calls == 2) {
+        snprintf(g_overlap_ctx.second_tmp, sizeof g_overlap_ctx.second_tmp, "%s", path);
+    }
+    return fopen(path, mode);
+}
+
+static int count_tmp_files(const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (d == NULL) {
+        return -1;
+    }
+    int n = 0;
+    const struct dirent *e = NULL;
+    while ((e = readdir(d)) != NULL) {
+        if (strstr(e->d_name, ".tmp") != NULL || strncmp(e->d_name, ".inktmp.", 8) == 0) {
+            ++n;
+        }
+    }
+    (void)closedir(d);
+    return n;
+}
+
+static void test_save_overlapping_writes_use_distinct_temp_files(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    memset(&g_overlap_ctx, 0, sizeof g_overlap_ctx);
+    join_path(g_overlap_ctx.save_path, sizeof g_overlap_ctx.save_path, dir, "save.txt");
+
+    MetaState outer;
+    meta_init_default(&outer);
+    outer.ink_crystals = 333;
+    const SaveIoOps ops = {.fopen = overlap_fopen_hook};
+    TEST_ASSERT_TRUE(save_write(g_overlap_ctx.save_path, &outer, &ops));
+    TEST_ASSERT_TRUE(g_overlap_ctx.nested_ok);
+    TEST_ASSERT_EQUAL_INT(2, g_overlap_ctx.calls);
+    TEST_ASSERT_TRUE(strcmp(g_overlap_ctx.first_tmp, g_overlap_ctx.second_tmp) != 0);
+    TEST_ASSERT_EQUAL_INT(0, count_tmp_files(dir));
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(g_overlap_ctx.save_path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(333, loaded.ink_crystals);
+
+    (void)remove(g_overlap_ctx.save_path);
+    (void)rmdir(dir);
+}
+
+static void test_save_fifo_does_not_block_load_or_backup(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    char path[PATH_MAX + 64];
+    char bak[PATH_MAX + 64];
+    join_path(path, sizeof path, dir, "save.txt");
+    join_path(bak, sizeof bak, dir, "save.txt.bak");
+    TEST_ASSERT_EQUAL_INT(0, mkfifo(path, 0600));
+
+    MetaState m;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_IO_ERROR, save_load(path, &m));
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_FAILED, save_backup_unreadable(path, NULL, 0));
+    struct stat st;
+    TEST_ASSERT_NOT_EQUAL(0, stat(bak, &st));
+    TEST_ASSERT_EQUAL_INT(0, count_temp_backups(dir));
+
+    (void)unlink(path);
+    (void)rmdir(dir);
+}
+
+static void test_save_oversized_file_skips_backup_copy(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+    char path[PATH_MAX + 64];
+    char bak[PATH_MAX + 64];
+    join_path(path, sizeof path, dir, "save.txt");
+    join_path(bak, sizeof bak, dir, "save.txt.bak");
+
+    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(0, ftruncate(fd, (off_t)(SAVE_MAX_BACKUP_BYTES + 4096)));
+    (void)close(fd);
+
+    MetaState m;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_CORRUPT, save_load(path, &m));
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_FAILED, save_backup_unreadable(path, NULL, 0));
+    struct stat st;
+    TEST_ASSERT_EQUAL_INT(0, stat(path, &st));
+    TEST_ASSERT_EQUAL_INT64((int64_t)(SAVE_MAX_BACKUP_BYTES + 4096), (int64_t)st.st_size);
+    TEST_ASSERT_NOT_EQUAL(0, stat(bak, &st));
+    TEST_ASSERT_EQUAL_INT(0, count_temp_backups(dir));
+
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_save_248_byte_basename_roundtrips_without_enametoolong(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+
+    char long_name[249];
+    memset(long_name, 's', 244);
+    memcpy(long_name + 244, ".txt", 5);
+    TEST_ASSERT_EQUAL_UINT(248u, strlen(long_name));
+
+    char path[PATH_MAX + 300];
+    join_path(path, sizeof path, dir, long_name);
+
+    MetaState saved;
+    meta_init_default(&saved);
+    saved.ink_crystals = 421;
+    saved.runs_played = 7;
+    TEST_ASSERT_TRUE(save_write(path, &saved, NULL));
+    TEST_ASSERT_EQUAL_INT(0, count_tmp_files(dir));
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_OK, save_load(path, &loaded));
+    TEST_ASSERT_EQUAL_INT32(421, loaded.ink_crystals);
+    TEST_ASSERT_EQUAL_INT32(7, loaded.runs_played);
+
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -522,5 +668,9 @@ int main(void)
     RUN_TEST(test_save_backup_failure_publishes_nothing);
     RUN_TEST(test_save_backup_skips_symlinked_slot_pointing_at_the_save);
     RUN_TEST(test_save_backup_without_hard_links_fails_without_replacing);
+    RUN_TEST(test_save_overlapping_writes_use_distinct_temp_files);
+    RUN_TEST(test_save_fifo_does_not_block_load_or_backup);
+    RUN_TEST(test_save_oversized_file_skips_backup_copy);
+    RUN_TEST(test_save_248_byte_basename_roundtrips_without_enametoolong);
     return UNITY_END();
 }

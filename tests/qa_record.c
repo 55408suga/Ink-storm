@@ -457,8 +457,10 @@ static void mix_audio_tick(QaSession *s, int16_t out[AUDIO_SAMPLES_PER_TICK], bo
                            AUDIO_EXTERNAL_BGM_GAIN * pause_duck;
     const BgmTrack cur = b->fade.cur;
     const BgmTrack prev = b->fade.prev;
+    const BgmTrack prev2 = b->fade.prev2;
     const float gain_cur = base_vol * b->fade.gain_cur;
     const float gain_prev = base_vol * b->fade.gain_prev;
+    const float gain_prev2 = base_vol * b->fade.gain_prev2;
 
     int32_t tick_peak = 0;
     for (int i = 0; i < AUDIO_SAMPLES_PER_TICK; ++i) {
@@ -467,6 +469,9 @@ static void mix_audio_tick(QaSession *s, int16_t out[AUDIO_SAMPLES_PER_TICK], bo
             bgm_sample = bgm_next_sample(b, cur) * gain_cur;
             if (prev != cur) {
                 bgm_sample += bgm_next_sample(b, prev) * gain_prev;
+            }
+            if (prev2 != cur && prev2 != prev) {
+                bgm_sample += bgm_next_sample(b, prev2) * gain_prev2;
             }
         }
         float mixed = (float)se[i] + bgm_sample;

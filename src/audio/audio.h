@@ -149,6 +149,7 @@ typedef struct {
     AudioPink brush_pink[2];
     AudioWalk brush_walk[AUDIO_BRUSH_WALK_COUNT];
     AudioSvf brush_svf[AUDIO_BRUSH_SVF_COUNT];
+    AudioSvfCoeffs brush_hp_coeffs[4]; /* Precomputed HP coeffs: Heavy/Ember/Quill/Dry, Q=0.71 */
     AudioGrainLoop brush_flow_grain;
     AudioGrainLoop brush_swish_grain;
     float brush_delay[2][AUDIO_BRUSH_DELAY_LEN];
@@ -178,6 +179,7 @@ typedef struct {
     uint8_t thunderburst_chain;
 
     AudioVoice voices[AUDIO_MAX_VOICES];
+    int32_t voice_high_water;
     AudioPendingVoice pending[AUDIO_PENDING_VOICE_CAP];
     int32_t pending_head;
     int32_t pending_count;

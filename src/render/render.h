@@ -3,7 +3,9 @@
 
 #include "game.h"
 #include "raylib.h"
+#include "render_rules.h"
 #include "sprite_rules.h"
+#include "text_layout.h"
 #include "text_table.h"
 #include "ui_view.h"
 #include "vfx_rules.h"
@@ -23,6 +25,35 @@
 #define RENDER_INK_LUT_LEVELS 256
 #define RENDER_GRAD_LUT_LEVELS 24
 #define RENDER_ELEM_LUT_LEVELS 64
+#define RENDER_GUIDE_CACHE_SLOTS 48
+#define RENDER_CACHED_LINE_CAP 192
+
+typedef struct {
+    char src[512];
+    char lines[TEXT_LAYOUT_MAX_LINES][RENDER_CACHED_LINE_CAP];
+    float x[TEXT_LAYOUT_MAX_LINES];
+    float y[TEXT_LAYOUT_MAX_LINES];
+    int32_t line_count;
+    float font_size;
+    Rectangle box;
+    float req_size;
+    float min_size;
+    bool title_font;
+    bool center;
+    bool is_wrapped;
+} RenderCachedText;
+
+typedef struct {
+    bool valid;
+    int32_t page;
+    bool use_ja;
+    unsigned int body_font_id;
+    unsigned int title_font_id;
+    Rectangle panel_rect;
+    int32_t count;
+    int32_t cursor;
+    RenderCachedText slots[RENDER_GUIDE_CACHE_SLOTS];
+} GuideTextCache;
 
 typedef struct {
     bool use_post;
@@ -244,6 +275,7 @@ typedef struct {
     Texture2D fluid_ink_tex[2];   /* CPU 経路: 墨の乗算色 */
     Texture2D fluid_elem_tex[2];  /* CPU 経路: 火・雷の乗算済みアルファ */
     int32_t fluid_tex_slot;
+    FluidUploadCache fluid_cache;
     unsigned char fluid_field_px[FLUID_N * 4];
     Color fluid_ink_px[FLUID_N];
     Color fluid_elem_px[FLUID_N];
@@ -263,6 +295,9 @@ typedef struct {
     uint64_t vfx_rng;
     uint64_t events_seen;
     float vfx_time;
+    float rain_phase_x;
+    float rain_phase_y;
+    GuideTextCache guide_cache;
 
     /* Screen shake & flash rate limiter */
     float shake_t;
@@ -334,6 +369,7 @@ typedef struct {
 
 void render_init(RenderState *r, const RenderOptions *opt);
 void render_reset_vfx(RenderState *r, uint64_t seed);
+void render_invalidate_fluid_cache(RenderState *r);
 bool render_post_available(const RenderState *r);
 void render_set_post_enabled(RenderState *r, bool enabled);
 void render_set_lang_mode(RenderState *r, UiLangMode mode);

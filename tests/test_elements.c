@@ -1114,6 +1114,140 @@ static void test_relic_thunderfire_gem(void)
     game_destroy(g);
 }
 
+static void test_tempest_lightning_recounts_storm_after_thunderburst_consumption(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    (void)game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 600.0f, 360.0f);
+    fluid_reset(&g->fluid);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+
+    /* 6 overlapping fire+storm cells in block (5,5) trigger Thunderburst and drop storm below 0.25,
+     * leaving only 5 isolated storm cells (< 10), so Tempest Lightning must NOT fire. */
+    for (int k = 0; k < 6; ++k) {
+        fire[cell_idx(40 + k, 40)] = 0.45f;
+        storm[cell_idx(40 + k, 40)] = 0.45f;
+    }
+    for (int k = 0; k < 5; ++k) {
+        storm[cell_idx(100 + k, 20)] = 0.45f;
+    }
+    g->internal.storm_zap_cd = 0.0f;
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_THUNDERBURST));
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_STORM_ZAP));
+
+    game_destroy(g);
+}
+
+static void test_elements_step_post_solve_matches_full_scan(void)
+{
+    GameState *a = game_create(NULL);
+    GameState *b = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    game_debug_start_wave(a, 0);
+    game_debug_start_wave(b, 0);
+    clear_all_entities(a);
+    clear_all_entities(b);
+    fluid_reset(&a->fluid);
+    fluid_reset(&b->fluid);
+
+    /* Quiet field: both match bit-for-bit. */
+    fluid_step(&a->fluid, INK_FIXED_DT);
+    fluid_step(&b->fluid, INK_FIXED_DT);
+    elements_step_post_solve(a);
+    elements_step(b);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(b), game_hash(a));
+
+    /* Active field with ink + fire + storm: both match bit-for-bit. */
+    const float dye[FLUID_MAX_CHANNELS] = {0.9f, 0.7f, 0.7f, 0.0f};
+    fluid_splat(&a->fluid, 340.0f, 320.0f, 4.0f, 15.0f, -10.0f, dye);
+    fluid_splat(&b->fluid, 340.0f, 320.0f, 4.0f, 15.0f, -10.0f, dye);
+    fluid_step(&a->fluid, INK_FIXED_DT);
+    fluid_step(&b->fluid, INK_FIXED_DT);
+    elements_step_post_solve(a);
+    elements_step(b);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(b), game_hash(a));
+
+    game_destroy(b);
+    game_destroy(a);
+}
+
+static void test_tempest_lightning_fires_same_tick_after_burn_kills_storm_lantern(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Storm Lantern at 1 HP standing in fire dye; bystander within zap reach (<= 150px). */
+    const EntityId lantern = game_debug_spawn_enemy(g, ENEMY_LANTERN_STORM, 420.0f, 360.0f);
+    const EntityId bystander = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 500.0f, 360.0f);
+    game_health_mut(g, lantern)->hp = 1;
+    game_status_mut(g, lantern)->burn_acc = 0.36f;
+
+    /* Put fire only under the Storm Lantern and zero storm anywhere on the grid before the tick. */
+    fluid_reset(&g->fluid);
+    float *fire = fluid_channel_mut(&g->fluid, 1);
+    const int lx = (int)(420.0f / FLUID_CELL_PX);
+    const int ly = (int)(360.0f / FLUID_CELL_PX);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            fire[cell_idx(lx + dx, ly + dy)] = 0.80f;
+        }
+    }
+    const int32_t bystander_hp_before = game_health(g, bystander)->hp;
+    g->internal.storm_zap_cd = 0.0f;
+    g->event_count = 0;
+
+    elements_step(g);
+
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_KILL));
+    TEST_ASSERT_GREATER_THAN_INT(0, count_events(g, EV_STORM_ZAP));
+    TEST_ASSERT_TRUE(game_health(g, bystander)->hp < bystander_hp_before);
+
+    game_destroy(g);
+}
+
+static void test_elements_step_closes_fluid_mut_borrow_for_paused_cache(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* Inject active ink + fire + storm across two blocks so Stage 1, Stage 2 (Cataclysm), and
+     * Stage 3 (Thunderburst) all run, then confirm no open mut borrow remains for paused frames. */
+    const float dye[FLUID_MAX_CHANNELS] = {1.2f, 1.2f, 1.2f, 0.0f};
+    fluid_splat(&g->fluid, 320.0f, 240.0f, 5.0f, 0.0f, 0.0f, dye);
+    fluid_splat(&g->fluid, 520.0f, 240.0f, 5.0f, 0.0f, 0.0f, dye);
+    fluid_step(&g->fluid, INK_FIXED_DT);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    g->internal.cataclysm_cd = 0.0f;
+    elements_step_post_solve(g);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    elements_step(g);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    /* An unclosed external fluid_channel_mut() still keeps the borrow open until ended. */
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(&g->fluid, 1));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(&g->fluid));
+    fluid_end_mut_borrow(&g->fluid);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1136,5 +1270,9 @@ int main(void)
     RUN_TEST(test_relic_seal_of_trinity);
     RUN_TEST(test_relic_inkstorm_secret);
     RUN_TEST(test_relic_thunderfire_gem);
+    RUN_TEST(test_tempest_lightning_recounts_storm_after_thunderburst_consumption);
+    RUN_TEST(test_elements_step_post_solve_matches_full_scan);
+    RUN_TEST(test_tempest_lightning_fires_same_tick_after_burn_kills_storm_lantern);
+    RUN_TEST(test_elements_step_closes_fluid_mut_borrow_for_paused_cache);
     return UNITY_END();
 }

@@ -134,6 +134,8 @@ static void wind_return_on_tick(const TickHookArgs *a)
 
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    const float shrine_proj_r = g->shrine_count > 0 ? g->shrines[0].hit_radius_proj : 32.0f;
+    const float shrine_proj_r2 = shrine_proj_r * shrine_proj_r;
     const float contact_r = g->shrine_count > 0 ? g->shrines[0].hit_radius_contact : 42.0f;
     const float proj_rad2 = 54.0f * 54.0f;
     const float melee_rad = contact_r + 24.0f;
@@ -161,8 +163,16 @@ static void wind_return_on_tick(const TickHookArgs *a)
         bool threat = false;
         if (proj != NULL) {
             const VelocityComp *vel = game_velocity(g, id);
-            threat = !proj->deflected && d2 <= proj_rad2 && vel != NULL &&
-                     ((sx - tr->x) * vel->vx + (sy - tr->y) * vel->vy) > 0.0f;
+            if (!proj->deflected && d2 <= proj_rad2 && vel != NULL) {
+                const float inward = -(dx * vel->vx + dy * vel->vy);
+                const float v2 = vel->vx * vel->vx + vel->vy * vel->vy;
+                if (inward > 0.0f && v2 > 1e-6f) {
+                    const float t_close = fminf(inward / v2, 0.5f);
+                    const float cx = dx + vel->vx * t_close;
+                    const float cy = dy + vel->vy * t_close;
+                    threat = (cx * cx + cy * cy) < shrine_proj_r2;
+                }
+            }
         } else if (d2 <= melee_rad2 && game_enemy_is_targetable(g, id)) {
             const VelocityComp *vel = game_velocity(g, id);
             const EnemyComp *en = game_enemy(g, id);

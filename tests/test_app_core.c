@@ -1365,6 +1365,218 @@ static void test_exit_settlement_double_write_failure_recovers_on_dirty_retry(vo
     (void)rmdir(dir);
 }
 
+static void test_resolve_and_settle_matches_exit_for_act3_boss_hitstop(void)
+{
+    GameState *g_pause = game_create(NULL);
+    GameState *g_exit = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g_pause);
+    TEST_ASSERT_NOT_NULL(g_exit);
+
+    GameState *pair[2] = {g_pause, g_exit};
+    for (int i = 0; i < 2; ++i) {
+        GameState *g = pair[i];
+        game_debug_start_act(g, 2);
+        g->run.acts_cleared = 2;
+        for (int t = 0; t < 240 && g->phase == RUN_PHASE_ACT_TRANSITION; ++t) {
+            game_step(g, NULL, NULL);
+        }
+        game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+        for (int s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+            (void)combat_apply_damage(g, g->ryu_body.orb_ids[s], 500, DMG_PHYSICAL, 0.0f, 0.0f);
+        }
+        ecs_flush_destroy(&g->ecs);
+        const EntityId head = g->run.boss_id;
+        game_health_mut(g, head)->invuln_t = 0.0f;
+        game_health_mut(g, head)->hp = 10;
+        (void)combat_apply_damage(g, head, 100, DMG_PHYSICAL, 0.0f, 0.0f);
+        g->hitstop_t = 0.05f;
+        TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+        TEST_ASSERT_TRUE(game_wave_goal_met(g));
+    }
+
+    MetaState meta_pause;
+    MetaState meta_exit;
+    meta_init_default(&meta_pause);
+    meta_init_default(&meta_exit);
+    MetaSettleBreakdown br_pause = {0};
+    MetaSettleBreakdown br_exit = {0};
+    bool dirty_exit = false;
+
+    const char *base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    char dir[PATH_MAX];
+    const int dn = snprintf(dir, sizeof dir, "%s/inkstorm-pause-XXXXXX", base);
+    TEST_ASSERT_TRUE(dn > 0 && (size_t)dn < sizeof dir);
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+    char path[PATH_MAX + 32];
+    const int pn = snprintf(path, sizeof path, "%s/save.txt", dir);
+    TEST_ASSERT_TRUE(pn > 0 && (size_t)pn < sizeof path);
+
+    /* Pause -> Lobby / Pause -> Restart helper. */
+    TEST_ASSERT_TRUE(save_resolve_and_settle_run(&meta_pause, g_pause, &br_pause));
+    /* Window-close / shutdown helper. */
+    TEST_ASSERT_TRUE(
+        save_finish_run_on_exit(path, true, &meta_exit, &dirty_exit, g_exit, true, &br_exit, NULL));
+
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, g_pause->phase);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_VICTORY, g_exit->phase);
+    TEST_ASSERT_EQUAL_INT32(1, meta_pause.clears);
+    TEST_ASSERT_EQUAL_INT32(1, meta_pause.runs_played);
+    TEST_ASSERT_EQUAL_INT32(meta_exit.clears, meta_pause.clears);
+    TEST_ASSERT_EQUAL_INT32(meta_exit.runs_played, meta_pause.runs_played);
+    TEST_ASSERT_EQUAL_INT32(meta_exit.ink_crystals, meta_pause.ink_crystals);
+    TEST_ASSERT_EQUAL_INT32(br_exit.total_crystals, br_pause.total_crystals);
+
+    game_destroy(g_exit);
+    game_destroy(g_pause);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
+static void test_latch_retains_skill_edges_across_hitstop_and_clears_on_phase_change(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    g->hitstop_t = 0.05f;
+
+    InputLatch l;
+    input_latch_init(&l, 400.0f, 300.0f);
+    RawInput raw = make_raw(460.0f, 300.0f);
+    raw.gale_pressed = true;
+    raw.cyclone_pressed = true;
+    input_latch_feed(&l, &raw);
+
+    /* During hitstop: pointer advances, but Gale/Cyclone stay latched instead of being dropped. */
+    const BrushInput frozen = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 460.0f, frozen.mx);
+    TEST_ASSERT_FALSE(frozen.gale);
+    TEST_ASSERT_FALSE(frozen.cyclone);
+    TEST_ASSERT_TRUE(l.gale_pending);
+    TEST_ASSERT_TRUE(l.cyclone_pending);
+
+    /* First live combat tick after hitstop consumes the retained skill edges. */
+    g->hitstop_t = 0.0f;
+    const BrushInput live = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live.gale);
+    TEST_ASSERT_TRUE(live.cyclone);
+    TEST_ASSERT_FALSE(l.gale_pending);
+    TEST_ASSERT_FALSE(l.cyclone_pending);
+
+    /* Phase change helper drops stale pending skills and hitstop motion cleanly. */
+    input_latch_feed(&l, &raw);
+    TEST_ASSERT_TRUE(l.gale_pending);
+    TEST_ASSERT_TRUE(l.cyclone_pending);
+    input_latch_clear_skills(&l);
+    TEST_ASSERT_FALSE(l.gale_pending);
+    TEST_ASSERT_FALSE(l.cyclone_pending);
+
+    /* Sweeping left during hitstop while aiming right must preserve the leftward aim delta for
+     * the buffered Gale fired on the first live combat tick. */
+    g->player.aim_x = 1.0f;
+    g->player.aim_y = 0.0f;
+    g->player.ink = g->player.ink_max;
+    g->player.gale_charges = g->player.gale_max_charges;
+    g->hitstop_t = 0.05f;
+    input_latch_init(&l, 500.0f, 300.0f);
+
+    RawInput sweep_left = make_raw(420.0f, 300.0f);
+    sweep_left.gale_pressed = true;
+    input_latch_feed(&l, &sweep_left);
+    RawInput still_left = make_raw(420.0f, 300.0f);
+
+    for (int t = 0; t < 3; ++t) {
+        const BrushInput bi = input_latch_take_subtick_for_game(&l, 1, g);
+        game_step(g, &bi, NULL);
+        input_latch_feed(&l, &still_left);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->hitstop_t);
+
+    const BrushInput post = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(post.gale);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 420.0f, post.mx);
+    TEST_ASSERT_TRUE(post.mx - post.pmx < -2.0f);
+    game_step(g, &post, NULL);
+    TEST_ASSERT_TRUE(g->player.aim_x < -0.9f);
+    bool saw_left_gale = false;
+    for (int32_t e = 0; e < g->event_count; ++e) {
+        if (g->events[e].type == EV_GALE && fabsf(g->events[e].x - 420.0f) < 1.0f &&
+            g->events[e].x2 < -0.9f) {
+            saw_left_gale = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_left_gale);
+
+    game_destroy(g);
+}
+
+static void test_bgm_rapid_three_track_switch_tapers_both_outgoing_tracks(void)
+{
+    BgmFade f;
+    bgm_fade_reset(&f);
+    (void)bgm_fade_request(&f, BGM_BATTLE);
+    for (int i = 0; i < 40; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, f.gain_cur);
+
+    /* Battle -> Boss mid-fade (~0.10s): Battle ~0.83, Boss ~0.17. */
+    (void)bgm_fade_request(&f, BGM_BOSS);
+    for (int i = 0; i < 6; ++i) {
+        (void)bgm_fade_step(&f, 1.0f / 60.0f);
+    }
+    const float battle_mid = f.gain_prev;
+    const float boss_mid = f.gain_cur;
+    TEST_ASSERT_TRUE(battle_mid > 0.75f && boss_mid > 0.10f);
+
+    /* Rapid switch to Lobby: neither outgoing track is hard-cut; louder Battle stays in prev,
+     * quieter Boss moves to prev2, and both taper monotonically to 0. */
+    const BgmFadeActions act = bgm_fade_request(&f, BGM_LOBBY);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, act.play);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, act.stop);
+    TEST_ASSERT_EQUAL_INT(BGM_LOBBY, f.cur);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, f.prev);
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, f.prev2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, battle_mid, f.gain_prev);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, boss_mid, f.gain_prev2);
+
+    /* Returning to prev2 (Boss) swaps it back into cur without restarting it. */
+    BgmFade ret = f;
+    const BgmFadeActions ret_act = bgm_fade_request(&ret, BGM_BOSS);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, ret_act.play);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, ret_act.stop);
+    TEST_ASSERT_EQUAL_INT(BGM_BOSS, ret.cur);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, boss_mid, ret.gain_cur);
+    TEST_ASSERT_EQUAL_INT(BGM_BATTLE, ret.prev);
+
+    /* Stepping completes both outgoing streams cleanly with no hard cuts. */
+    bool stopped_battle = false;
+    bool stopped_boss = false;
+    float last_p1 = f.gain_prev;
+    float last_p2 = f.gain_prev2;
+    for (int i = 0; i < 60; ++i) {
+        const BgmFadeFinished fin = bgm_fade_step_all(&f, 1.0f / 60.0f);
+        for (int k = 0; k < fin.count; ++k) {
+            if (fin.stop[k] == BGM_BATTLE) {
+                stopped_battle = true;
+            } else if (fin.stop[k] == BGM_BOSS) {
+                stopped_boss = true;
+            }
+        }
+        TEST_ASSERT_TRUE(f.gain_prev <= last_p1 + 1e-6f);
+        TEST_ASSERT_TRUE(f.gain_prev2 <= last_p2 + 1e-6f);
+        last_p1 = f.gain_prev;
+        last_p2 = f.gain_prev2;
+    }
+    TEST_ASSERT_TRUE(stopped_battle);
+    TEST_ASSERT_TRUE(stopped_boss);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, f.prev);
+    TEST_ASSERT_EQUAL_INT(BGM_NONE, f.prev2);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, f.gain_cur);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1404,5 +1616,8 @@ int main(void)
     RUN_TEST(test_esc_resume_with_held_lmb_suppresses_paint);
     RUN_TEST(test_exit_settlement_drains_act3_boss_victory_and_retries_dirty_save);
     RUN_TEST(test_exit_settlement_double_write_failure_recovers_on_dirty_retry);
+    RUN_TEST(test_resolve_and_settle_matches_exit_for_act3_boss_hitstop);
+    RUN_TEST(test_latch_retains_skill_edges_across_hitstop_and_clears_on_phase_change);
+    RUN_TEST(test_bgm_rapid_three_track_switch_tapers_both_outgoing_tracks);
     return UNITY_END();
 }

@@ -8,10 +8,24 @@
 static const float k_fast_field_limit = 1e15f;
 static const float k_fast_eps_limit = 1e10f;
 static const float k_fast_dt_limit = 1e5f;
+static const float k_dye_flush_eps = 1e-6f;
 
 static inline float clamp(float value, float low, float high)
 {
     return value < low ? low : (value > high ? high : value);
+}
+
+static inline float dye_flush_floor(float max_dye)
+{
+    return fmaxf(FLT_MIN, fminf(k_dye_flush_eps, max_dye * 1e-4f));
+}
+
+static inline float clamp_flush_dye(float value, float floor_eps, float high)
+{
+    if (value < floor_eps) {
+        return 0.0f;
+    }
+    return value > high ? high : value;
 }
 
 static float limit_magnitude(double value, float limit)
@@ -396,23 +410,78 @@ static void project_safe(FluidState *f)
     }
 }
 
-/* Clip at the last fluid point on the ray, then discard solid interpolation taps. */
-static Stencil trace_walls(const uint8_t *solid, int x, int y, float ex, float ey, float distance2)
+/* Exact 2D grid DDA on the slow near-wall backtrace path (cell (cx, cy) spans
+ * [cx - 0.5, cx + 0.5) x [cy - 0.5, cy + 0.5)). Clips to the last reachable fluid coordinate on
+ * solid contact with a conservative corner tie rule, then discards solid interpolation taps. */
+static Stencil trace_walls(const uint8_t *solid, int x, int y, float ex, float ey)
 {
-    int n = (int)ceilf(2 * sqrtf(distance2));
-    float qx = (float)x, qy = (float)y;
-    if (n > 0) {
-        float sx = (ex - (float)x) / (float)n, sy = (ey - (float)y) / (float)n;
-        for (int k = 1; k <= n; ++k) {
-            float tx = k == n ? ex : (float)x + (float)k * sx;
-            float ty = k == n ? ey : (float)y + (float)k * sy;
-            if (solid[(int)(tx + 0.5f) + FLUID_W * (int)(ty + 0.5f)]) {
+    const float dx = ex - (float)x;
+    const float dy = ey - (float)y;
+    const int step_x = dx > 0.0f ? 1 : (dx < 0.0f ? -1 : 0);
+    const int step_y = dy > 0.0f ? 1 : (dy < 0.0f ? -1 : 0);
+
+    float qx = ex;
+    float qy = ey;
+    if (step_x != 0 || step_y != 0) {
+        const float t_delta_x = step_x != 0 ? fabsf(1.0f / dx) : FLT_MAX;
+        const float t_delta_y = step_y != 0 ? fabsf(1.0f / dy) : FLT_MAX;
+        float t_max_x = step_x != 0 ? 0.5f * t_delta_x : FLT_MAX;
+        float t_max_y = step_y != 0 ? 0.5f * t_delta_y : FLT_MAX;
+        int cx = x;
+        int cy = y;
+        bool hit = false;
+        float t_hit = 1.0f;
+
+        for (int iter = 0; iter < FLUID_W + FLUID_H; ++iter) {
+            const float t_next = t_max_x < t_max_y ? t_max_x : t_max_y;
+            if (t_next > 1.0f) {
                 break;
             }
-            qx = tx;
-            qy = ty;
+            if (fabsf(t_max_x - t_max_y) <= 1e-6f) {
+                const int nx = cx + step_x;
+                const int ny = cy + step_y;
+                const bool bx = nx < 0 || nx >= FLUID_W || solid[nx + FLUID_W * cy] != 0;
+                const bool by = ny < 0 || ny >= FLUID_H || solid[cx + FLUID_W * ny] != 0;
+                const bool bd = nx < 0 || nx >= FLUID_W || ny < 0 || ny >= FLUID_H ||
+                                solid[nx + FLUID_W * ny] != 0;
+                if (bx || by || bd) {
+                    hit = true;
+                    t_hit = t_next;
+                    break;
+                }
+                cx = nx;
+                cy = ny;
+                t_max_x += t_delta_x;
+                t_max_y += t_delta_y;
+            } else if (t_max_x < t_max_y) {
+                const int nx = cx + step_x;
+                if (nx < 0 || nx >= FLUID_W || solid[nx + FLUID_W * cy] != 0) {
+                    hit = true;
+                    t_hit = t_max_x;
+                    break;
+                }
+                cx = nx;
+                t_max_x += t_delta_x;
+            } else {
+                const int ny = cy + step_y;
+                if (ny < 0 || ny >= FLUID_H || solid[cx + FLUID_W * ny] != 0) {
+                    hit = true;
+                    t_hit = t_max_y;
+                    break;
+                }
+                cy = ny;
+                t_max_y += t_delta_y;
+            }
+        }
+        if (hit) {
+            const float t_safe = t_hit > 1e-4f ? t_hit - 1e-4f : 0.0f;
+            qx = clamp((float)x + dx * t_safe, (float)cx - 0.5f, (float)cx + 0.5f);
+            qy = clamp((float)y + dy * t_safe, (float)cy - 0.5f, (float)cy + 0.5f);
+            qx = clamp(qx, 0.5f, FLUID_W - 1.5f);
+            qy = clamp(qy, 0.5f, FLUID_H - 1.5f);
         }
     }
+
     Stencil s = bilinear(qx, qy);
     const uint8_t *mask = solid + s.base;
     if (mask[0] || mask[1] || mask[FLUID_W] || mask[FLUID_W + 1]) {
@@ -428,11 +497,16 @@ static Stencil trace_walls(const uint8_t *solid, int x, int y, float ex, float e
         if (mask[FLUID_W + 1]) {
             s.w11 = 0;
         }
-        float inv_sum = 1.0f / (s.w00 + s.w10 + s.w01 + s.w11);
-        s.w00 *= inv_sum;
-        s.w10 *= inv_sum;
-        s.w01 *= inv_sum;
-        s.w11 *= inv_sum;
+        const float sum = s.w00 + s.w10 + s.w01 + s.w11;
+        if (sum > 0.0f) {
+            const float inv_sum = 1.0f / sum;
+            s.w00 *= inv_sum;
+            s.w10 *= inv_sum;
+            s.w01 *= inv_sum;
+            s.w11 *= inv_sum;
+        } else {
+            s = (Stencil){x + FLUID_W * y, 1.0f, 0.0f, 0.0f, 0.0f};
+        }
     }
     return s;
 }
@@ -447,7 +521,7 @@ static inline Stencil backtrace(const uint8_t *solid, bool near_wall, int x, int
     if (!near_wall && distance2 <= 4.0f) {
         return bilinear(ex, ey);
     }
-    return trace_walls(solid, x, y, ex, ey, distance2);
+    return trace_walls(solid, x, y, ex, ey);
 }
 
 static void advect_velocity_fast(FluidState *f, float dt)
@@ -505,6 +579,7 @@ static void advect_scalars_fast(FluidState *f, float dt)
     const uint8_t *restrict solid = f->solid;
     const uint8_t *restrict near_wall = f->near_wall;
     const float max_dye = f->cfg.max_dye;
+    const float dye_floor = dye_flush_floor(max_dye);
 
     float max_speed2 = 0.0f;
     if (channels == 3) {
@@ -535,9 +610,9 @@ static void advect_scalars_fast(FluidState *f, float dt)
                     max_speed2 = sp2;
                 }
                 Stencil s = backtrace(solid, near_wall[i] != 0, x, y, ui, vi, dt);
-                float d0 = clamp(interpolate_fast(src0, s) * damp0, 0.0f, max_dye);
-                float d1 = clamp(interpolate_fast(src1, s) * damp1, 0.0f, max_dye);
-                float d2 = clamp(interpolate_fast(src2, s) * damp2, 0.0f, max_dye);
+                float d0 = clamp_flush_dye(interpolate_fast(src0, s) * damp0, dye_floor, max_dye);
+                float d1 = clamp_flush_dye(interpolate_fast(src1, s) * damp1, dye_floor, max_dye);
+                float d2 = clamp_flush_dye(interpolate_fast(src2, s) * damp2, dye_floor, max_dye);
                 dst0[i] = d0;
                 dst1[i] = d1;
                 dst2[i] = d2;
@@ -573,8 +648,9 @@ static void advect_scalars_fast(FluidState *f, float dt)
                 if (channels > 0) {
                     Stencil s = backtrace(solid, near_wall[i] != 0, x, y, ui, vi, dt);
                     for (int ch = 0; ch < channels; ++ch) {
-                        float dye = clamp(interpolate_fast(f->dye0[ch], s) * f->cfg.dye_damp[ch],
-                                          0.0f, max_dye);
+                        float dye =
+                            clamp_flush_dye(interpolate_fast(f->dye0[ch], s) * f->cfg.dye_damp[ch],
+                                            dye_floor, max_dye);
                         f->dye[ch][i] = dye;
                         if (dye > max_d[ch]) {
                             max_d[ch] = dye;
@@ -595,6 +671,7 @@ static void advect_scalars_safe(FluidState *f, float dt)
     int channels = f->cfg.active_channels;
     memcpy(f->dye0, f->dye, (size_t)channels * sizeof f->dye[0]);
     const uint8_t *near_wall = f->near_wall;
+    const float dye_floor = dye_flush_floor(f->cfg.max_dye);
     double max_speed2 = 0;
     for (int y = 1; y < FLUID_H - 1; ++y) {
         for (int x = 1; x < FLUID_W - 1; ++x) {
@@ -609,8 +686,9 @@ static void advect_scalars_safe(FluidState *f, float dt)
             if (channels > 0) {
                 Stencil s = backtrace(f->solid, near_wall[i] != 0, x, y, f->u[i], f->v[i], dt);
                 for (int ch = 0; ch < channels; ++ch) {
-                    float dye = clamp(interpolate_safe(f->dye0[ch], s) * f->cfg.dye_damp[ch], 0,
-                                      f->cfg.max_dye);
+                    float dye =
+                        clamp_flush_dye(interpolate_safe(f->dye0[ch], s) * f->cfg.dye_damp[ch],
+                                        dye_floor, f->cfg.max_dye);
                     f->dye[ch][i] = dye;
                     if (dye > f->stats.max_dye[ch]) {
                         f->stats.max_dye[ch] = dye;
@@ -658,6 +736,8 @@ void fluid_step(FluidState *f, float dt)
     }
 
     ++f->steps;
+    f->mut_borrow_dirty = 0;
+    ++f->mutation_rev;
     clock_gettime(CLOCK_MONOTONIC, &end);
     f->stats.solve_ms = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) * 1e-6;
 }

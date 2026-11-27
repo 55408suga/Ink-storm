@@ -1,5 +1,6 @@
 #include "fluid.h"
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -60,7 +61,10 @@ void fluid_init(FluidState *f, const FluidConfig *cfg)
     }
     memset(f, 0, sizeof *f);
     f->cfg = c;
+    f->pristine = 1;
     fluid_clear_solids(f);
+    f->mutation_rev = 1;
+    f->solid_rev = 1;
 }
 
 void fluid_reset(FluidState *f)
@@ -79,6 +83,12 @@ void fluid_reset(FluidState *f)
     memset(f->curl, 0, sizeof f->curl);
     memset(f->dye, 0, sizeof f->dye);
     memset(f->dye0, 0, sizeof f->dye0);
+    f->pristine = 1;
+    f->mut_borrow_dirty = 0;
+    ++f->mutation_rev;
+    if (f->mutation_rev == 0) {
+        f->mutation_rev = 1;
+    }
 }
 
 static void set_solid(FluidState *f, int i, bool solid)
@@ -87,6 +97,8 @@ static void set_solid(FluidState *f, int i, bool solid)
     if (f->solid[i] != next) {
         f->solid[i] = next;
         f->geometry_valid = 0;
+        ++f->solid_rev;
+        ++f->mutation_rev;
     }
     if (solid) {
         f->u[i] = 0.0f;
@@ -221,6 +233,204 @@ bool fluid_solid_normal(const FluidState *f, float px, float py, float *nx, floa
     return found;
 }
 
+static bool cell_is_solid(const FluidState *f, int cx, int cy)
+{
+    return cx < 0 || cx >= FLUID_W || cy < 0 || cy >= FLUID_H || f->solid[cy * FLUID_W + cx] != 0;
+}
+
+static void place_clear_point(const FluidState *f, int clear_cx, int clear_cy, double x0_px,
+                              double y0_px, double dx_px, double dy_px, double t_hit, float nx,
+                              float ny, float *out_x, float *out_y)
+{
+    const double eps_px = 0.25;
+    const float cand_x = (float)(x0_px + dx_px * t_hit + (double)nx * eps_px);
+    const float cand_y = (float)(y0_px + dy_px * t_hit + (double)ny * eps_px);
+    if (!fluid_is_solid(f, cand_x, cand_y)) {
+        *out_x = cand_x;
+        *out_y = cand_y;
+        return;
+    }
+    const double back_t = t_hit > 1e-3 ? t_hit - 1e-3 : 0.0;
+    const float back_x = (float)(x0_px + dx_px * back_t);
+    const float back_y = (float)(y0_px + dy_px * back_t);
+    if (!fluid_is_solid(f, back_x, back_y)) {
+        *out_x = back_x;
+        *out_y = back_y;
+        return;
+    }
+    *out_x = ((float)clear_cx + 0.5f) * FLUID_CELL_PX;
+    *out_y = ((float)clear_cy + 0.5f) * FLUID_CELL_PX;
+}
+
+static double clamp_d(double value, double lo, double hi)
+{
+    return value < lo ? lo : value > hi ? hi : value;
+}
+
+FluidRayHit fluid_trace_solid_segment(const FluidState *f, float x0_px, float y0_px, float x1_px,
+                                      float y1_px)
+{
+    FluidRayHit out = {
+        .hit = false,
+        .t = 1.0f,
+        .hit_x = x1_px,
+        .hit_y = y1_px,
+        .nx = 0.0f,
+        .ny = 0.0f,
+        .cell_x = -1,
+        .cell_y = -1,
+    };
+    if (!f || !isfinite(x0_px) || !isfinite(y0_px) || !isfinite(x1_px) || !isfinite(y1_px)) {
+        return out;
+    }
+
+    const double sx = (double)x0_px / (double)FLUID_CELL_PX;
+    const double sy = (double)y0_px / (double)FLUID_CELL_PX;
+    const double fx = floor(sx);
+    const double fy = floor(sy);
+    if (fx < 0.0 || fx >= (double)FLUID_W || fy < 0.0 || fy >= (double)FLUID_H) {
+        out.hit = true;
+        out.t = 0.0f;
+        out.hit_x = x0_px;
+        out.hit_y = y0_px;
+        out.cell_x = (int)clamp_d(fx, -1.0, (double)FLUID_W);
+        out.cell_y = (int)clamp_d(fy, -1.0, (double)FLUID_H);
+        (void)fluid_solid_normal(f, x0_px, y0_px, &out.nx, &out.ny);
+        return out;
+    }
+
+    int cx = (int)fx;
+    int cy = (int)fy;
+    if (cell_is_solid(f, cx, cy)) {
+        out.hit = true;
+        out.t = 0.0f;
+        out.hit_x = x0_px;
+        out.hit_y = y0_px;
+        out.cell_x = cx;
+        out.cell_y = cy;
+        (void)fluid_solid_normal(f, x0_px, y0_px, &out.nx, &out.ny);
+        return out;
+    }
+
+    const double ex = (double)x1_px / (double)FLUID_CELL_PX;
+    const double ey = (double)y1_px / (double)FLUID_CELL_PX;
+    const double dx = ex - sx;
+    const double dy = ey - sy;
+    const double dx_px = (double)x1_px - (double)x0_px;
+    const double dy_px = (double)y1_px - (double)y0_px;
+
+    const int step_x = dx > 0.0 ? 1 : (dx < 0.0 ? -1 : 0);
+    const int step_y = dy > 0.0 ? 1 : (dy < 0.0 ? -1 : 0);
+    if (step_x == 0 && step_y == 0) {
+        return out;
+    }
+
+    double t_delta_x = DBL_MAX;
+    double t_max_x = DBL_MAX;
+    if (step_x > 0) {
+        t_delta_x = 1.0 / dx;
+        t_max_x = ((double)(cx + 1) - sx) * t_delta_x;
+    } else if (step_x < 0) {
+        t_delta_x = -1.0 / dx;
+        t_max_x = (sx - (double)cx) * t_delta_x;
+    }
+
+    double t_delta_y = DBL_MAX;
+    double t_max_y = DBL_MAX;
+    if (step_y > 0) {
+        t_delta_y = 1.0 / dy;
+        t_max_y = ((double)(cy + 1) - sy) * t_delta_y;
+    } else if (step_y < 0) {
+        t_delta_y = -1.0 / dy;
+        t_max_y = (sy - (double)cy) * t_delta_y;
+    }
+
+    const int max_steps = FLUID_W + FLUID_H + 4;
+    for (int iter = 0; iter < max_steps; ++iter) {
+        const double t_next = t_max_x < t_max_y ? t_max_x : t_max_y;
+        if (t_next > 1.0) {
+            break;
+        }
+        const double tie = fabs(t_max_x - t_max_y);
+        if (tie <= 1e-6) {
+            const int nx_c = cx + step_x;
+            const int ny_c = cy + step_y;
+            const bool sx_solid = cell_is_solid(f, nx_c, cy);
+            const bool sy_solid = cell_is_solid(f, cx, ny_c);
+            const bool diag_solid = cell_is_solid(f, nx_c, ny_c);
+            if (sx_solid || sy_solid || diag_solid) {
+                const double t_hit = clamp_d(t_next, 0.0, 1.0);
+                out.hit = true;
+                out.t = (float)t_hit;
+                if (sx_solid && !sy_solid) {
+                    out.nx = -(float)step_x;
+                    out.ny = 0.0f;
+                    out.cell_x = nx_c;
+                    out.cell_y = cy;
+                } else if (sy_solid && !sx_solid) {
+                    out.nx = 0.0f;
+                    out.ny = -(float)step_y;
+                    out.cell_x = cx;
+                    out.cell_y = ny_c;
+                } else {
+                    static const float k_inv_sqrt2 = 0.70710678f;
+                    out.nx = -(float)step_x * k_inv_sqrt2;
+                    out.ny = -(float)step_y * k_inv_sqrt2;
+                    out.cell_x = nx_c;
+                    out.cell_y = ny_c;
+                }
+                place_clear_point(f, cx, cy, (double)x0_px, (double)y0_px, dx_px, dy_px, t_hit,
+                                  out.nx, out.ny, &out.hit_x, &out.hit_y);
+                return out;
+            }
+            cx = nx_c;
+            cy = ny_c;
+            t_max_x += t_delta_x;
+            t_max_y += t_delta_y;
+        } else if (t_max_x < t_max_y) {
+            const int nx_c = cx + step_x;
+            if (cell_is_solid(f, nx_c, cy)) {
+                const double t_hit = clamp_d(t_max_x, 0.0, 1.0);
+                out.hit = true;
+                out.t = (float)t_hit;
+                out.nx = -(float)step_x;
+                out.ny = 0.0f;
+                out.cell_x = nx_c;
+                out.cell_y = cy;
+                place_clear_point(f, cx, cy, (double)x0_px, (double)y0_px, dx_px, dy_px, t_hit,
+                                  out.nx, out.ny, &out.hit_x, &out.hit_y);
+                return out;
+            }
+            cx = nx_c;
+            t_max_x += t_delta_x;
+        } else {
+            const int ny_c = cy + step_y;
+            if (cell_is_solid(f, cx, ny_c)) {
+                const double t_hit = clamp_d(t_max_y, 0.0, 1.0);
+                out.hit = true;
+                out.t = (float)t_hit;
+                out.nx = 0.0f;
+                out.ny = -(float)step_y;
+                out.cell_x = cx;
+                out.cell_y = ny_c;
+                place_clear_point(f, cx, cy, (double)x0_px, (double)y0_px, dx_px, dy_px, t_hit,
+                                  out.nx, out.ny, &out.hit_x, &out.hit_y);
+                return out;
+            }
+            cy = ny_c;
+            t_max_y += t_delta_y;
+        }
+    }
+    return out;
+}
+
+bool fluid_is_pristine(const FluidState *f) { return f != NULL && f->pristine != 0; }
+
+bool fluid_has_open_mut_borrow(const FluidState *f)
+{
+    return f != NULL && f->mut_borrow_dirty != 0;
+}
+
 typedef enum { SPLAT, SWIRL, RADIAL } Injection;
 
 static void inject(FluidState *f, Injection kind, float px, float py, float radius, float fx,
@@ -246,6 +456,7 @@ static void inject(FluidState *f, Injection kind, float px, float py, float radi
     const int ymax = (int)clamp(cy + radius, 1, FLUID_H - 2);
     const float r2 = radius * radius;
 
+    bool modified = false;
     for (int y = ymin; y <= ymax; ++y) {
         for (int x = xmin; x <= xmax; ++x) {
             int i = y * FLUID_W + x;
@@ -280,15 +491,28 @@ static void inject(FluidState *f, Injection kind, float px, float py, float radi
                     dv = speed * (dy / d);
                 }
             }
-            f->u[i] = clamp(f->u[i] + du, -f->cfg.max_vel, f->cfg.max_vel);
-            f->v[i] = clamp(f->v[i] + dv, -f->cfg.max_vel, f->cfg.max_vel);
+            const float next_u = clamp(f->u[i] + du, -f->cfg.max_vel, f->cfg.max_vel);
+            const float next_v = clamp(f->v[i] + dv, -f->cfg.max_vel, f->cfg.max_vel);
+            if (next_u != f->u[i] || next_v != f->v[i]) {
+                modified = true;
+            }
+            f->u[i] = next_u;
+            f->v[i] = next_v;
             if (dye_add) {
                 for (int ch = 0; ch < f->cfg.active_channels; ++ch) {
-                    f->dye[ch][i] =
+                    const float next_d =
                         clamp(f->dye[ch][i] + dye_add[ch] * dye_weight, 0.0f, f->cfg.max_dye);
+                    if (next_d != f->dye[ch][i]) {
+                        modified = true;
+                    }
+                    f->dye[ch][i] = next_d;
                 }
             }
         }
+    }
+    if (modified) {
+        f->pristine = 0;
+        ++f->mutation_rev;
     }
 }
 
@@ -318,7 +542,22 @@ float *fluid_channel_mut(FluidState *f, int ch)
 {
     /* Inactive channels stay zero only while nothing outside the solver can write them, which lets
      * fluid_sanitize_channels skip them. */
-    return f && ch >= 0 && ch < f->cfg.active_channels ? f->dye[ch] : NULL;
+    if (f && ch >= 0 && ch < f->cfg.active_channels) {
+        f->pristine = 0;
+        f->mut_borrow_dirty = 1;
+        ++f->mutation_rev;
+        return f->dye[ch];
+    }
+    return NULL;
+}
+
+void fluid_end_mut_borrow(FluidState *f)
+{
+    if (!f) {
+        return;
+    }
+    f->mut_borrow_dirty = 0;
+    ++f->mutation_rev;
 }
 
 const float *fluid_u_const(const FluidState *f) { return f ? f->u : NULL; }
@@ -332,12 +571,19 @@ void fluid_sanitize_channels(FluidState *f)
     if (!f) {
         return;
     }
+    bool changed = false;
     for (int ch = 0; ch < f->cfg.active_channels; ++ch) {
         for (int i = 0; i < FLUID_N; ++i) {
             float value = f->dye[ch][i];
-            f->dye[ch][i] =
-                f->solid[i] || !isfinite(value) ? 0.0f : clamp(value, 0, f->cfg.max_dye);
+            float next = f->solid[i] || !isfinite(value) ? 0.0f : clamp(value, 0, f->cfg.max_dye);
+            if (next != value || isnan(value)) {
+                f->dye[ch][i] = next;
+                changed = true;
+            }
         }
+    }
+    if (changed) {
+        ++f->mutation_rev;
     }
 }
 
@@ -398,6 +644,7 @@ uint64_t fluid_hash(const FluidState *f)
     uint64_t h = UINT64_C(0xcbf29ce484222325);
     h = hash_u32(h, (uint32_t)f->steps);
     h = hash_u32(h, (uint32_t)(f->steps >> 32));
+    h = hash_byte(h, f->pristine ? 1u : 0u);
     const FluidConfig *c = &f->cfg;
     h = hash_u32(h, (uint32_t)c->project_iters);
     h = hash_float(h, c->vorticity_eps);

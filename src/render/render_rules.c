@@ -192,3 +192,45 @@ int render_polyline_plan(const float *seg_len, int segs, int cap, RenderPolySamp
     }
     return n;
 }
+
+void render_rain_advance(float *phase_x, float *phase_y, float dt)
+{
+    if (phase_x == NULL || phase_y == NULL || !isfinite(dt) || dt <= 0.0f) {
+        return;
+    }
+    float px = isfinite(*phase_x) ? *phase_x : 0.0f;
+    float py = isfinite(*phase_y) ? *phase_y : 0.0f;
+    px = fmodf(px + dt * 60.0f * 0.45f, RENDER_RAIN_PERIOD_X);
+    py = fmodf(py + dt * 60.0f, RENDER_RAIN_PERIOD_Y);
+    if (px < 0.0f) {
+        px += RENDER_RAIN_PERIOD_X;
+    }
+    if (py < 0.0f) {
+        py += RENDER_RAIN_PERIOD_Y;
+    }
+    *phase_x = px;
+    *phase_y = py;
+}
+
+void render_rain_streak_pos(int streak_idx, float phase_x, float phase_y, float *out_x,
+                            float *out_y)
+{
+    if (out_x == NULL || out_y == NULL) {
+        return;
+    }
+    const float bx = fmodf((float)streak_idx * 88.0f + phase_x, RENDER_RAIN_PERIOD_X) - 30.0f;
+    const float by = fmodf((float)(streak_idx * 137 % 720) + phase_y, RENDER_RAIN_PERIOD_Y) - 40.0f;
+    *out_x = bx;
+    *out_y = by;
+}
+
+bool render_fluid_cache_matches(const FluidUploadCache *cache, const FluidState *f, bool gpu_path)
+{
+    if (cache == NULL || f == NULL || !cache->valid || fluid_has_open_mut_borrow(f)) {
+        return false;
+    }
+    return cache->field_ptr == f && cache->steps == f->steps &&
+           cache->mutation_rev == f->mutation_rev && cache->solid_rev == f->solid_rev &&
+           cache->pristine == fluid_is_pristine(f) && cache->dims_key == RENDER_FLUID_DIMS_KEY &&
+           cache->max_dye == f->cfg.max_dye && cache->gpu_path == gpu_path;
+}

@@ -2312,6 +2312,28 @@ static void test_wind_return_ignores_departing_projectile(void)
     TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_GALE));
     TEST_ASSERT_TRUE(game_proj(g, departing)->deflected);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->internal.wind_return_cd);
+
+    /* Tangent arrow whose closest approach equals shrine hit_radius_proj misses under strict `<`,
+     * so Wind Return must not spend its cooldown until the arrow actually enters < hit_radius_proj.
+     */
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+    g->internal.wind_return_cd = 0.0f;
+    const float proj_r = g->shrines[0].hit_radius_proj;
+    const EntityId tangent =
+        game_debug_spawn_projectile(g, PROJ_ARROW, sx + 40.0f, sy + proj_r, -150.0f, 0.0f);
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_GALE));
+    TEST_ASSERT_FALSE(game_proj(g, tangent)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->internal.wind_return_cd);
+
+    game_transform_mut(g, tangent)->y = sy + proj_r - 1.0f;
+    g->event_count = 0;
+    upgrades_fire_on_tick(g, INK_FIXED_DT);
+    TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_GALE));
+    TEST_ASSERT_TRUE(game_proj(g, tangent)->deflected);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.0f, g->internal.wind_return_cd);
     game_destroy(g);
 }
 
@@ -2372,6 +2394,151 @@ static void test_fallback_repair_overflow_contract_regular_vs_relic(void)
     }
 }
 
+static void test_endless_reroll_preserves_axis_diversity_across_exclude_pool(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    /* Leave all Blaze upgrades and Shrine Ward (Common) unmaxed; max out all other upgrades. */
+    for (int id = 0; id < (int)UPG_COUNT; ++id) {
+        if (game_upgrade_axis((UpgradeId)id) != AXIS_BLAZE && id != (int)UPG_SHRINE_WARD) {
+            for (int lv = 0; lv < 3; ++lv) {
+                TEST_ASSERT_TRUE(roguelike_grant_upgrade(g, (UpgradeId)id));
+            }
+        }
+    }
+
+    enter_reward_phase(g);
+    /* Force prior offer to include Shrine Ward + 2 Blaze upgrades so fresh pool is Blaze-only. */
+    int32_t blaze_ids[2] = {-1, -1};
+    int bi = 0;
+    for (int id = 0; id < (int)UPG_COUNT && bi < 2; ++id) {
+        if (game_upgrade_axis((UpgradeId)id) == AXIS_BLAZE) {
+            blaze_ids[bi++] = id;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(2, bi);
+    g->run.reward.kind = REWARD_KIND_UPGRADE;
+    g->run.reward.choice_count = 3;
+    g->run.reward.choice_ids[0] = (int32_t)UPG_SHRINE_WARD;
+    g->run.reward.choice_ids[1] = blaze_ids[0];
+    g->run.reward.choice_ids[2] = blaze_ids[1];
+    g->run.rerolls_left = 1;
+
+    const GameCommand reroll = {.type = CMD_REROLL_REWARD, .arg = 0};
+    game_step(g, NULL, &reroll);
+    TEST_ASSERT_EQUAL_INT32(3, g->run.reward.choice_count);
+
+    bool has_common = false;
+    bool has_blaze = false;
+    for (int32_t i = 0; i < g->run.reward.choice_count; ++i) {
+        const UpgradeAxis ax = game_upgrade_axis((UpgradeId)g->run.reward.choice_ids[i]);
+        if (ax == AXIS_COMMON) {
+            has_common = true;
+        } else if (ax == AXIS_BLAZE) {
+            has_blaze = true;
+        }
+    }
+    TEST_ASSERT_TRUE(has_common);
+    TEST_ASSERT_TRUE(has_blaze);
+    game_destroy(g);
+
+    /* Endless Act 30 / seed 11 style 4-card pool (3 Blaze + 1 Common): prior offer holds 2 Blaze +
+     * Common while 1 Blaze unseen remains. Reroll must NEVER return the identical 3-card set and
+     * must still preserve 2-axis diversity across seeds. */
+    for (uint64_t seed = 1; seed <= 32; ++seed) {
+        RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, seed);
+        cfg.endless_loop = 10;
+        GameState *eg = game_create(&cfg);
+        TEST_ASSERT_NOT_NULL(eg);
+        int32_t blaze3[3] = {-1, -1, -1};
+        int found = 0;
+        for (int id = 0; id < (int)UPG_COUNT; ++id) {
+            if (game_upgrade_axis((UpgradeId)id) == AXIS_BLAZE && found < 3) {
+                blaze3[found++] = id;
+                continue;
+            }
+            if (id == (int)UPG_SHRINE_WARD) {
+                continue;
+            }
+            for (int lv = 0; lv < 3; ++lv) {
+                TEST_ASSERT_TRUE(roguelike_grant_upgrade(eg, (UpgradeId)id));
+            }
+        }
+        TEST_ASSERT_EQUAL_INT(3, found);
+        enter_reward_phase(eg);
+        eg->run.act_index = 30;
+        eg->run.reward.kind = REWARD_KIND_UPGRADE;
+        eg->run.reward.choice_count = 3;
+        eg->run.reward.choice_ids[0] = blaze3[0];
+        eg->run.reward.choice_ids[1] = blaze3[1];
+        eg->run.reward.choice_ids[2] = (int32_t)UPG_SHRINE_WARD;
+        eg->run.rerolls_left = 1;
+
+        const GameCommand reroll_cmd = {.type = CMD_REROLL_REWARD, .arg = 0};
+        game_step(eg, NULL, &reroll_cmd);
+        TEST_ASSERT_EQUAL_INT32(3, eg->run.reward.choice_count);
+
+        bool saw_unseen = false;
+        bool saw_common = false;
+        bool saw_blaze = false;
+        for (int32_t i = 0; i < eg->run.reward.choice_count; ++i) {
+            const int32_t cid = eg->run.reward.choice_ids[i];
+            if (cid == blaze3[2]) {
+                saw_unseen = true;
+            }
+            const UpgradeAxis ax = game_upgrade_axis((UpgradeId)cid);
+            if (ax == AXIS_COMMON) {
+                saw_common = true;
+            } else if (ax == AXIS_BLAZE) {
+                saw_blaze = true;
+            }
+        }
+        TEST_ASSERT_TRUE(saw_unseen);
+        TEST_ASSERT_TRUE(saw_common);
+        TEST_ASSERT_TRUE(saw_blaze);
+        game_destroy(eg);
+    }
+}
+
+static void test_wave_spawn_picker_falls_back_to_perimeter_and_defers_when_full(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    g->internal.mods.max_alive_add = 200;
+
+    /* Block almost the entire perimeter with enemies spaced 72px apart, leaving one open gap near
+     * top-center x = 640, y = 96. */
+    for (int32_t x_px = 76; x_px <= INK_SCREEN_W - 76; x_px += 72) {
+        const float x = (float)x_px;
+        if (fabsf(x - 640.0f) > 100.0f) {
+            (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, x, 96.0f);
+        }
+        (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, x, (float)INK_SCREEN_H - 86.0f);
+    }
+    for (int32_t y_px = 130; y_px <= INK_SCREEN_H - 115; y_px += 72) {
+        const float y = (float)y_px;
+        (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 76.0f, y);
+        (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, (float)INK_SCREEN_W - 76.0f, y);
+    }
+    const int32_t before_gap = waves_count_alive_escorts(g);
+    g->internal.spawn_cd = 0.0f;
+    waves_step_spawns(g);
+    TEST_ASSERT_EQUAL_INT32(before_gap + 1, waves_count_alive_escorts(g));
+
+    /* Now plug the remaining top-center gap so no valid 88px-spaced perimeter spot exists. */
+    (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 604.0f, 96.0f);
+    (void)game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 676.0f, 96.0f);
+    const int32_t before_full = waves_count_alive_escorts(g);
+    g->internal.spawn_cd = 0.0f;
+    waves_step_spawns(g);
+    TEST_ASSERT_EQUAL_INT32(before_full, waves_count_alive_escorts(g));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2411,5 +2578,7 @@ int main(void)
     RUN_TEST(test_autoplay_skill_budget_and_surge_expiry);
     RUN_TEST(test_wind_return_ignores_departing_projectile);
     RUN_TEST(test_fallback_repair_overflow_contract_regular_vs_relic);
+    RUN_TEST(test_endless_reroll_preserves_axis_diversity_across_exclude_pool);
+    RUN_TEST(test_wave_spawn_picker_falls_back_to_perimeter_and_defers_when_full);
     return UNITY_END();
 }

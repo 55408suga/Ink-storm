@@ -53,11 +53,12 @@ void boss_tengu_step(GameState *g, EntityId id)
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
     const float slow = st->ink_mark_t > 0.0f ? 0.66f : 1.0f;
-    const float ph = (float)en->phase * 0.001f;
-    en->phase = (en->phase + 24) % 6283;
+    static const float k_two_pi = 6.2831853f;
+    const float ph = (float)en->phase * (k_two_pi / 6283.0f);
+    en->phase = (en->phase + 15) % 6283;
 
-    const float tx = sx + sinf(ph * 0.62f) * 390.0f;
-    const float ty = 135.0f + (1.0f - cosf(ph * 1.24f)) * 90.0f;
+    const float tx = sx + sinf(ph) * 390.0f;
+    const float ty = 225.0f + sinf(2.0f * ph) * 90.0f;
     vel->vx = (vel->vx + (tx - tr->x) * 2.4f * INK_FIXED_DT * slow) * 0.90f;
     vel->vy = (vel->vy + (ty - tr->y) * 2.4f * INK_FIXED_DT * slow) * 0.90f;
     tr->x = ink_clampf(tr->x + vel->vx * INK_FIXED_DT, 130.0f, (float)INK_SCREEN_W - 130.0f);

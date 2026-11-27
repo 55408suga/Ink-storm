@@ -93,8 +93,10 @@ void boss_nue_step(GameState *g, EntityId id)
     const int32_t wp_idx = en->phase & 7;
     const GameVec2 wp = k_nue_waypoints[wp_idx];
 
+    const float trail_life = boss->phase_idx >= 1 ? 3.5f : 2.0f;
+
     if (en->ai_state == 0) {
-        /* Dash telegraph (0.5s). */
+        /* Dash telegraph (0.5s). Hold telegraph during phase-change invulnerability. */
         vel->mass_tier = MASS_BOSS;
         st->knockback_t = 0.0f;
         vel->vx = 0.0f;
@@ -103,10 +105,15 @@ void boss_nue_step(GameState *g, EntityId id)
         tr->facing = atan2f(boss->gale_dy, boss->gale_dx);
         boss->telegraph_pattern = 0;
 
+        if (hp->invuln_t > 0.0f) {
+            boss->telegraph = 0.0f;
+            return;
+        }
+
         en->fire_cd -= INK_FIXED_DT * slow;
         boss->telegraph = ink_clampf((0.5f - en->fire_cd) / 0.5f, 0.0f, 1.0f);
         if (en->fire_cd <= 0.0f) {
-            /* Register lightning trail along the dash path (2.0s; 2 simultaneous in Phase 2). */
+            /* Register lightning trail along the dash path (2 simultaneous in Phase 2). */
             if (boss->phase_idx >= 1) {
                 g->internal.nue_trail_x[1][0] = g->internal.nue_trail_x[0][0];
                 g->internal.nue_trail_x[1][1] = g->internal.nue_trail_x[0][1];
@@ -120,7 +127,7 @@ void boss_nue_step(GameState *g, EntityId id)
             g->internal.nue_trail_y[0][0] = tr->y;
             g->internal.nue_trail_x[0][1] = tr->x;
             g->internal.nue_trail_y[0][1] = tr->y;
-            g->internal.nue_trail_t[0] = 2.0f;
+            g->internal.nue_trail_t[0] = trail_life;
 
             en->ai_state = 2;
             en->fire_cd = 1.5f;
@@ -178,10 +185,10 @@ void boss_nue_step(GameState *g, EntityId id)
         }
         tr->x = safe_x;
         tr->y = safe_y;
-        if (g->internal.nue_trail_t[0] > 0.0f) {
-            g->internal.nue_trail_x[0][1] = tr->x;
-            g->internal.nue_trail_y[0][1] = tr->y;
-        }
+        /* Keep the active trail alive while Nue is drawing it; count its lifetime post-dash. */
+        g->internal.nue_trail_x[0][1] = tr->x;
+        g->internal.nue_trail_y[0][1] = tr->y;
+        g->internal.nue_trail_t[0] = trail_life;
 
         if (hit_solid || reaching_wp || en->fire_cd <= 0.0f) {
             en->ai_state = 1;
@@ -203,8 +210,12 @@ void boss_nue_step(GameState *g, EntityId id)
         tr->facing = atan2f(sy - tr->y, sx - tr->x);
 
         if (hp->invuln_t > 0.0f) {
+            /* Freeze both windup and stop-exit timers during phase invulnerability so Nue never
+             * abandons a warned shot or starts dashing while invulnerable. */
             boss->telegraph = 0.0f;
-        } else if (en->windup > 0.0f) {
+            return;
+        }
+        if (en->windup > 0.0f) {
             en->windup -= INK_FIXED_DT * slow;
             boss->telegraph = ink_clampf((0.65f - en->windup) / 0.65f, 0.0f, 1.0f);
             if (en->windup <= 0.0f) {

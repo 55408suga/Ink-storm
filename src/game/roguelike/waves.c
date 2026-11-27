@@ -408,29 +408,64 @@ static bool spawn_pos_is_valid(const GameState *g, float x, float y)
     return true;
 }
 
-static void pick_spawn_position(GameState *g, EnemyDefId def_id, int32_t edge_hint, float *out_x,
+static bool scan_perimeter_for_valid_spawn(const GameState *g, int32_t start_side, float *out_x,
+                                           float *out_y)
+{
+    static const int32_t k_step_px = 16;
+    for (int32_t s = 0; s < 4; ++s) {
+        const int32_t side = (start_side + s) & 3;
+        if (side == 0 || side == 1) {
+            const float x = side == 0 ? 76.0f : (float)INK_SCREEN_W - 76.0f;
+            const int32_t y_max = INK_SCREEN_H - 115;
+            for (int32_t y_px = 130; y_px <= y_max; y_px += k_step_px) {
+                const float y = (float)y_px;
+                if (spawn_pos_is_valid(g, x, y)) {
+                    *out_x = x;
+                    *out_y = y;
+                    return true;
+                }
+            }
+        } else {
+            const float y = side == 2 ? 96.0f : (float)INK_SCREEN_H - 86.0f;
+            const int32_t x_max = INK_SCREEN_W - 210;
+            for (int32_t x_px = 210; x_px <= x_max; x_px += k_step_px) {
+                const float x = (float)x_px;
+                if (spawn_pos_is_valid(g, x, y)) {
+                    *out_x = x;
+                    *out_y = y;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool pick_spawn_position(GameState *g, EnemyDefId def_id, int32_t edge_hint, float *out_x,
                                 float *out_y)
 {
     if (def_id == ENEMY_BOSS_TENGU) {
         *out_x = (float)INK_SCREEN_W * 0.5f;
         *out_y = 112.0f;
-        return;
+        return true;
     }
     if (def_id == ENEMY_BOSS_NUE) {
         *out_x = (float)INK_SCREEN_W * 0.5f;
         *out_y = 140.0f;
-        return;
+        return true;
     }
     if (def_id == ENEMY_BOSS_RYU) {
         *out_x = 260.0f;
         *out_y = 150.0f;
-        return;
+        return true;
     }
-    float cand_x = 76.0f;
-    float cand_y = 140.0f;
+    int32_t last_side = edge_hint >= 0 ? (edge_hint & 3) : 0;
     for (int32_t tries = 0; tries < 10; ++tries) {
         const int32_t side = edge_hint >= 0 ? (edge_hint + tries) % 4
                                             : (int32_t)(ink_rng_next(&g->rng) % UINT64_C(4));
+        last_side = side;
+        float cand_x;
+        float cand_y;
         if (side == 0) {
             cand_x = 76.0f;
             cand_y = rng_range_f(&g->rng, 130.0f, (float)INK_SCREEN_H - 115.0f);
@@ -445,11 +480,12 @@ static void pick_spawn_position(GameState *g, EnemyDefId def_id, int32_t edge_hi
             cand_y = (float)INK_SCREEN_H - 86.0f;
         }
         if (spawn_pos_is_valid(g, cand_x, cand_y)) {
-            break;
+            *out_x = cand_x;
+            *out_y = cand_y;
+            return true;
         }
     }
-    *out_x = cand_x;
-    *out_y = cand_y;
+    return scan_perimeter_for_valid_spawn(g, last_side, out_x, out_y);
 }
 
 static void record_enemy_intro(GameState *g, EnemyDefId def_id)
@@ -518,7 +554,9 @@ static EntityId spawn_wave_enemy(GameState *g, EnemyDefId def_id, int32_t edge_h
 {
     float x = 0.0f;
     float y = 0.0f;
-    pick_spawn_position(g, def_id, edge_hint, &x, &y);
+    if (!pick_spawn_position(g, def_id, edge_hint, &x, &y)) {
+        return (EntityId){ECS_INVALID_INDEX, 0};
+    }
     const EntityId id = enemy_spawn(g, def_id, x, y);
     if (id.index == ECS_INVALID_INDEX) {
         return id;
@@ -628,6 +666,8 @@ void waves_prepare_act(GameState *g)
     g->pending_impulse_count = 0;
     g->internal.boss_vortex_t = 0.0f;
     g->internal.ryu_coil_t = 0.0f;
+    g->internal.ryu_coil_angle = 0.0f;
+    g->internal.ryu_coil_active = false;
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
     clear_transient_field_state(g);
@@ -681,6 +721,8 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
     g->internal.ryu_coil_t = 0.0f;
+    g->internal.ryu_coil_angle = 0.0f;
+    g->internal.ryu_coil_active = false;
     clear_transient_field_state(g);
 
     g->player.ink = g->player.ink_max;

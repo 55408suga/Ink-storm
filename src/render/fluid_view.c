@@ -195,6 +195,7 @@ void render_fluid_init(RenderState *r, const RenderOptions *opt)
         r->fluid_elem_tex[i] = load_field_texture(pal_blank());
     }
     r->fluid_tex_slot = 0;
+    r->fluid_cache = (FluidUploadCache){0};
     build_cpu_luts(r);
 
     /* The GPU path rides on the post-processing switch, so --no-post and an injected shader fault
@@ -231,6 +232,15 @@ void render_fluid_close(RenderState *r)
     }
     r->fluid_paper_loc = -1;
     r->fluid_max_dye_loc = -1;
+    r->fluid_cache = (FluidUploadCache){0};
+}
+
+void render_fluid_invalidate(RenderState *r)
+{
+    if (r == NULL) {
+        return;
+    }
+    r->fluid_cache = (FluidUploadCache){0};
 }
 
 bool render_fluid_gpu_active(const RenderState *r)
@@ -241,11 +251,13 @@ bool render_fluid_gpu_active(const RenderState *r)
            r->fluid_field_tex[0].id != 0 && r->fluid_field_tex[1].id != 0;
 }
 
-static void draw_fluid_gpu(RenderState *r, const GameState *g)
+static void draw_fluid_gpu(RenderState *r, const GameState *g, int32_t slot, bool upload)
 {
-    render_fluid_encode_field(&g->fluid, r->fluid_field_px);
-    const Texture2D field = r->fluid_field_tex[r->fluid_tex_slot];
-    UpdateTexture(field, r->fluid_field_px);
+    const Texture2D field = r->fluid_field_tex[slot];
+    if (upload) {
+        render_fluid_encode_field(&g->fluid, r->fluid_field_px);
+        UpdateTexture(field, r->fluid_field_px);
+    }
 
     const Rectangle src = {0.0f, 0.0f, (float)FLUID_W, (float)FLUID_H};
     const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
@@ -261,38 +273,40 @@ static void draw_fluid_gpu(RenderState *r, const GameState *g)
     render_set_blend(r, BLEND_ALPHA);
 }
 
-static void draw_fluid_cpu(RenderState *r, const GameState *g)
+static void draw_fluid_cpu(RenderState *r, const GameState *g, int32_t slot, bool upload)
 {
-    const float *ink = fluid_channel_const(&g->fluid, 0);
-    const float *fire = fluid_channel_const(&g->fluid, 1);
-    const float *storm = fluid_channel_const(&g->fluid, 2);
-    if (ink == NULL || fire == NULL || storm == NULL) {
-        return;
-    }
-    const float grad_scale = (float)(RENDER_GRAD_LUT_LEVELS - 1) / k_lut_max_grad;
-    for (int y = 0; y < FLUID_H; ++y) {
-        const int y_up = y > 0 ? y - 1 : 0;
-        const int y_dn = y + 1 < FLUID_H ? y + 1 : FLUID_H - 1;
-        for (int x = 0; x < FLUID_W; ++x) {
-            const int idx = y * FLUID_W + x;
-            const int xl = x > 0 ? x - 1 : 0;
-            const int xr = x + 1 < FLUID_W ? x + 1 : FLUID_W - 1;
-            const float gx = 0.5f * (ink[y * FLUID_W + xr] - ink[y * FLUID_W + xl]);
-            const float gy = 0.5f * (ink[y_dn * FLUID_W + x] - ink[y_up * FLUID_W + x]);
-            const float grad_level =
-                fminf(sqrtf(gx * gx + gy * gy) * grad_scale, (float)(RENDER_GRAD_LUT_LEVELS - 1));
-            const int gi = isfinite(grad_level) ? (int)(grad_level + 0.5f) : 0;
-            const int di = lut_level(ink[idx], RENDER_INK_LUT_LEVELS);
-            r->fluid_ink_px[idx] = r->fluid_ink_lut[di * RENDER_GRAD_LUT_LEVELS + gi];
-            const int fi = lut_level(fire[idx], RENDER_ELEM_LUT_LEVELS);
-            const int si = lut_level(storm[idx], RENDER_ELEM_LUT_LEVELS);
-            r->fluid_elem_px[idx] = r->fluid_elem_lut[fi * RENDER_ELEM_LUT_LEVELS + si];
+    const Texture2D ink_tex = r->fluid_ink_tex[slot];
+    const Texture2D elem_tex = r->fluid_elem_tex[slot];
+    if (upload) {
+        const float *ink = fluid_channel_const(&g->fluid, 0);
+        const float *fire = fluid_channel_const(&g->fluid, 1);
+        const float *storm = fluid_channel_const(&g->fluid, 2);
+        if (ink == NULL || fire == NULL || storm == NULL) {
+            return;
         }
+        const float grad_scale = (float)(RENDER_GRAD_LUT_LEVELS - 1) / k_lut_max_grad;
+        for (int y = 0; y < FLUID_H; ++y) {
+            const int y_up = y > 0 ? y - 1 : 0;
+            const int y_dn = y + 1 < FLUID_H ? y + 1 : FLUID_H - 1;
+            for (int x = 0; x < FLUID_W; ++x) {
+                const int idx = y * FLUID_W + x;
+                const int xl = x > 0 ? x - 1 : 0;
+                const int xr = x + 1 < FLUID_W ? x + 1 : FLUID_W - 1;
+                const float gx = 0.5f * (ink[y * FLUID_W + xr] - ink[y * FLUID_W + xl]);
+                const float gy = 0.5f * (ink[y_dn * FLUID_W + x] - ink[y_up * FLUID_W + x]);
+                const float grad_level = fminf(sqrtf(gx * gx + gy * gy) * grad_scale,
+                                               (float)(RENDER_GRAD_LUT_LEVELS - 1));
+                const int gi = isfinite(grad_level) ? (int)(grad_level + 0.5f) : 0;
+                const int di = lut_level(ink[idx], RENDER_INK_LUT_LEVELS);
+                r->fluid_ink_px[idx] = r->fluid_ink_lut[di * RENDER_GRAD_LUT_LEVELS + gi];
+                const int fi = lut_level(fire[idx], RENDER_ELEM_LUT_LEVELS);
+                const int si = lut_level(storm[idx], RENDER_ELEM_LUT_LEVELS);
+                r->fluid_elem_px[idx] = r->fluid_elem_lut[fi * RENDER_ELEM_LUT_LEVELS + si];
+            }
+        }
+        UpdateTexture(ink_tex, r->fluid_ink_px);
+        UpdateTexture(elem_tex, r->fluid_elem_px);
     }
-    const Texture2D ink_tex = r->fluid_ink_tex[r->fluid_tex_slot];
-    const Texture2D elem_tex = r->fluid_elem_tex[r->fluid_tex_slot];
-    UpdateTexture(ink_tex, r->fluid_ink_px);
-    UpdateTexture(elem_tex, r->fluid_elem_px);
 
     const Rectangle src = {0.0f, 0.0f, (float)FLUID_W, (float)FLUID_H};
     const Rectangle dst = {0.0f, 0.0f, (float)INK_SCREEN_W, (float)INK_SCREEN_H};
@@ -309,13 +323,38 @@ void render_fluid_update_and_draw(RenderState *r, const GameState *g)
     if (r == NULL || g == NULL) {
         return;
     }
-    if (render_fluid_gpu_active(r)) {
-        draw_fluid_gpu(r, g);
-    } else if (r->fluid_ink_tex[0].id != 0 && r->fluid_ink_tex[1].id != 0 &&
-               r->fluid_elem_tex[0].id != 0 && r->fluid_elem_tex[1].id != 0) {
-        draw_fluid_cpu(r, g);
-    } else {
+    const bool use_gpu = render_fluid_gpu_active(r);
+    if (!use_gpu && (r->fluid_ink_tex[0].id == 0 || r->fluid_ink_tex[1].id == 0 ||
+                     r->fluid_elem_tex[0].id == 0 || r->fluid_elem_tex[1].id == 0)) {
         return;
     }
-    r->fluid_tex_slot ^= 1;
+
+    const bool borrow_open = fluid_has_open_mut_borrow(&g->fluid);
+    const bool hit =
+        !borrow_open && render_fluid_cache_matches(&r->fluid_cache, &g->fluid, use_gpu);
+    int32_t slot;
+    if (hit) {
+        slot = r->fluid_cache.slot;
+    } else {
+        slot = r->fluid_tex_slot;
+        r->fluid_cache = (FluidUploadCache){
+            .valid = !borrow_open,
+            .field_ptr = &g->fluid,
+            .steps = g->fluid.steps,
+            .mutation_rev = g->fluid.mutation_rev,
+            .solid_rev = g->fluid.solid_rev,
+            .pristine = fluid_is_pristine(&g->fluid),
+            .dims_key = RENDER_FLUID_DIMS_KEY,
+            .max_dye = g->fluid.cfg.max_dye,
+            .gpu_path = use_gpu,
+            .slot = slot,
+        };
+        r->fluid_tex_slot ^= 1;
+    }
+
+    if (use_gpu) {
+        draw_fluid_gpu(r, g, slot, !hit);
+    } else {
+        draw_fluid_cpu(r, g, slot, !hit);
+    }
 }

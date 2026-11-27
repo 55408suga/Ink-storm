@@ -264,6 +264,125 @@ static void test_polyline_plan_with_more_segments_than_samples_reaches_the_tail(
     TEST_ASSERT_TRUE(plan[254].seg >= 295);
 }
 
+static void test_rain_phase_advances_continuously_across_long_duration(void)
+{
+    const float dt = 1.0f / 60.0f;
+    float px = 0.0f;
+    float py = 0.0f;
+    float prev_x[44];
+    float prev_y[44];
+    for (int i = 0; i < 44; ++i) {
+        render_rain_streak_pos(i, px, py, &prev_x[i], &prev_y[i]);
+    }
+    const float expect_dx = dt * 60.0f * 0.45f;
+    const float expect_dy = dt * 60.0f;
+    for (int t = 0; t < 600; ++t) {
+        render_rain_advance(&px, &py, dt);
+        int wrapped = 0;
+        for (int i = 0; i < 44; ++i) {
+            float x = 0.0f;
+            float y = 0.0f;
+            render_rain_streak_pos(i, px, py, &x, &y);
+            const float dx = x - prev_x[i];
+            const float dy = y - prev_y[i];
+            const bool dx_ok = fabsf(dx - expect_dx) < 0.05f ||
+                               fabsf(dx - (expect_dx - RENDER_RAIN_PERIOD_X)) < 0.05f;
+            const bool dy_ok = fabsf(dy - expect_dy) < 0.05f ||
+                               fabsf(dy - (expect_dy - RENDER_RAIN_PERIOD_Y)) < 0.05f;
+            TEST_ASSERT_TRUE(dx_ok);
+            TEST_ASSERT_TRUE(dy_ok);
+            if (fabsf(dx - expect_dx) >= 0.05f || fabsf(dy - expect_dy) >= 0.05f) {
+                ++wrapped;
+            }
+            prev_x[i] = x;
+            prev_y[i] = y;
+        }
+        /* No synchronized reset of all 44 streaks on any tick (even past 5s). */
+        TEST_ASSERT_TRUE(wrapped < 10);
+    }
+}
+
+static void test_fluid_upload_cache_matches_and_invalidates(void)
+{
+    FluidUploadCache cache = {0};
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache = (FluidUploadCache){
+        .valid = true,
+        .field_ptr = f,
+        .steps = f->steps,
+        .mutation_rev = f->mutation_rev,
+        .solid_rev = f->solid_rev,
+        .pristine = fluid_is_pristine(f),
+        .dims_key = RENDER_FLUID_DIMS_KEY,
+        .max_dye = f->cfg.max_dye,
+        .gpu_path = true,
+    };
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, false));
+
+    cache.dims_key ^= 1u;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.dims_key = RENDER_FLUID_DIMS_KEY;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    f->steps += 1u;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    f->steps -= 1u;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    const uint64_t solid_rev_before = f->solid_rev;
+    fluid_set_solid_rect(f, 320.0f, 240.0f, 32.0f, 32.0f, true);
+    TEST_ASSERT_TRUE(f->solid_rev > solid_rev_before);
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.solid_rev = f->solid_rev;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    const float dye[FLUID_MAX_CHANNELS] = {0.5f, 0.0f, 0.0f, 0.0f};
+    fluid_splat(f, 320.0f, 240.0f, 3.0f, 0.0f, 0.0f, dye);
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.pristine = fluid_is_pristine(f);
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    /* An open fluid_channel_mut() borrow must bypass upload caching even after syncing
+     * mutation_rev, so later writes through the retained pointer can never serve stale textures. */
+    float *ink_mut = fluid_channel_mut(f, 0);
+    TEST_ASSERT_NOT_NULL(ink_mut);
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    ink_mut[40 * FLUID_W + 40] = 1.25f;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+
+    /* Ending a scoped mutable borrow bumps mutation_rev and allows paused frames to cache. */
+    const uint64_t rev_before_end = f->mutation_rev;
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_TRUE(f->mutation_rev > rev_before_end);
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    /* Stepping the fluid also closes an unclosed mutable borrow and allows caching again. */
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(f, 0));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    fluid_step(f, 1.0f / 60.0f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+    cache.steps = f->steps;
+    cache.mutation_rev = f->mutation_rev;
+    TEST_ASSERT_TRUE(render_fluid_cache_matches(&cache, f, true));
+
+    f->cfg.max_dye += 1.0f;
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+    f->cfg.max_dye -= 1.0f;
+    fluid_init(f, NULL);
+    TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -279,5 +398,7 @@ int main(void)
     RUN_TEST(test_cpu_glow_is_premultiplied_and_blends_fire_with_storm);
     RUN_TEST(test_polyline_plan_gives_each_segment_its_length_share);
     RUN_TEST(test_polyline_plan_with_more_segments_than_samples_reaches_the_tail);
+    RUN_TEST(test_rain_phase_advances_continuously_across_long_duration);
+    RUN_TEST(test_fluid_upload_cache_matches_and_invalidates);
     return UNITY_END();
 }

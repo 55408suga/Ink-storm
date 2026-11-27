@@ -156,6 +156,9 @@ static AudioVoice *allocate_voice(AudioState *audio, AudioVoiceKind kind, uint64
     memset(v, 0, sizeof *v);
     v->kind = kind;
     v->active = true;
+    if (slot + 1 > audio->voice_high_water) {
+        audio->voice_high_water = slot + 1;
+    }
     v->start_sample = start_sample;
     v->birth_seq = ++audio->voice_seq;
     v->env = 1.0f;
@@ -627,13 +630,24 @@ float audio_voices_step(AudioState *audio, uint64_t sample_idx, float nz)
 {
     start_due_voices(audio, sample_idx);
     float mix = 0.0f;
-    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+    int32_t hw = audio->voice_high_water;
+    if (hw > AUDIO_MAX_VOICES) {
+        hw = AUDIO_MAX_VOICES;
+    }
+    int32_t last_active = -1;
+    for (int i = 0; i < hw; ++i) {
         AudioVoice *v = &audio->voices[i];
-        if (!v->active || sample_idx < v->start_sample) {
+        if (!v->active) {
             continue;
         }
-        mix += step_single_voice(audio, v, nz);
+        if (sample_idx >= v->start_sample) {
+            mix += step_single_voice(audio, v, nz);
+        }
+        if (v->active) {
+            last_active = i;
+        }
     }
+    audio->voice_high_water = last_active + 1;
 
     return mix + audio_brush_step(audio);
 }

@@ -4,5 +4,7 @@
 #include "game.h"
 
 void elements_step(GameState *g);
+void elements_step_post_solve(GameState *g);
+void elements_step_idle_cooldowns(GameState *g);
 
 #endif

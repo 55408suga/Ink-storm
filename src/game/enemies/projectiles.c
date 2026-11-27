@@ -103,8 +103,26 @@ static void block_with_barrier(GameState *g, float px, float py)
                              });
 }
 
+static void ensure_enemy_cache(const GameState *g, uint32_t hw, EntityId ids[ECS_MAX_ENTITIES],
+                               uint32_t *count, bool *built)
+{
+    if (*built) {
+        return;
+    }
+    uint32_t n = 0;
+    for (uint32_t j = 0; j < hw; ++j) {
+        const EntityId eid = ecs_entity_at(&g->ecs, j);
+        if (eid.index != ECS_INVALID_INDEX &&
+            ecs_has_mask(&g->ecs, eid, COMP_ENEMY | COMP_TRANSFORM)) {
+            ids[n++] = eid;
+        }
+    }
+    *count = n;
+    *built = true;
+}
+
 static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float ox, float oy,
-                                       uint32_t hw)
+                                       const EntityId *enemy_ids, uint32_t enemy_count)
 {
     int32_t max_targets = g->internal.mods.thunder_proj_targets;
     if (max_targets < 1) {
@@ -122,14 +140,14 @@ static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float o
         float bx = 0.0f;
         float by = 0.0f;
 
-        for (uint32_t j = 0; j < hw; ++j) {
-            const EntityId cand = ecs_entity_at(&g->ecs, j);
+        for (uint32_t k = 0; k < enemy_count; ++k) {
+            const EntityId cand = enemy_ids[k];
             if (cand.index == ECS_INVALID_INDEX || cand.index == hit_enemy.index) {
                 continue;
             }
             bool used = false;
-            for (int32_t k = 0; k < hit_n; ++k) {
-                if (already_hit[k] == cand.index) {
+            for (int32_t m = 0; m < hit_n; ++m) {
+                if (already_hit[m] == cand.index) {
                     used = true;
                     break;
                 }
@@ -176,136 +194,15 @@ static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float o
     }
 }
 
-static bool is_interior_solid_cell(const FluidState *f, int cx, int cy)
+static bool is_outer_border_cell(int cx, int cy)
 {
-    if (cx < 1 || cx > FLUID_W - 2 || cy < 1 || cy > FLUID_H - 2) {
-        return false;
-    }
-    const uint8_t *solid = fluid_solid_const(f);
-    return solid != NULL && solid[cy * FLUID_W + cx] != 0u;
+    return cx <= 0 || cx >= FLUID_W - 1 || cy <= 0 || cy >= FLUID_H - 1;
 }
 
 static bool is_in_outer_border(float x, float y)
 {
     return x < FLUID_CELL_PX || x >= (float)INK_SCREEN_W - FLUID_CELL_PX || y < FLUID_CELL_PX ||
            y >= (float)INK_SCREEN_H - FLUID_CELL_PX;
-}
-
-/* Exact 2D Amanatides & Woo DDA over the fluid grid cells so shallow diagonal grazes against
- * interior solid corners cannot skip between fixed sample points. Grid boundaries match
- * fluid_is_solid (cell (cx, cy) covers [cx * FLUID_CELL_PX, (cx + 1) * FLUID_CELL_PX)). */
-static bool proj_trace_solid_dda(const FluidState *f, float prev_x, float prev_y, float end_x,
-                                 float end_y, float *out_solid_x, float *out_solid_y,
-                                 float *out_safe_x, float *out_safe_y)
-{
-    *out_solid_x = end_x;
-    *out_solid_y = end_y;
-    *out_safe_x = prev_x;
-    *out_safe_y = prev_y;
-    if (!isfinite(prev_x) || !isfinite(prev_y) || !isfinite(end_x) || !isfinite(end_y)) {
-        return false;
-    }
-
-    const double inv_cell = 1.0 / (double)FLUID_CELL_PX;
-    const double gx0 = (double)prev_x * inv_cell;
-    const double gy0 = (double)prev_y * inv_cell;
-    const double gx1 = (double)end_x * inv_cell;
-    const double gy1 = (double)end_y * inv_cell;
-    const double dgx = gx1 - gx0;
-    const double dgy = gy1 - gy0;
-    int cx = (int)floor(gx0);
-    int cy = (int)floor(gy0);
-    const int end_cx = (int)floor(gx1);
-    const int end_cy = (int)floor(gy1);
-
-    if (is_interior_solid_cell(f, cx, cy)) {
-        *out_solid_x = ((float)cx + 0.5f) * FLUID_CELL_PX;
-        *out_solid_y = ((float)cy + 0.5f) * FLUID_CELL_PX;
-        return true;
-    }
-
-    const int step_x = dgx > 0.0 ? 1 : (dgx < 0.0 ? -1 : 0);
-    const int step_y = dgy > 0.0 ? 1 : (dgy < 0.0 ? -1 : 0);
-    const double t_delta_x = step_x != 0 ? fabs(1.0 / dgx) : 0.0;
-    const double t_delta_y = step_y != 0 ? fabs(1.0 / dgy) : 0.0;
-    double t_max_x = 0.0;
-    if (step_x > 0) {
-        t_max_x = ((double)(cx + 1) - gx0) / dgx;
-    } else if (step_x < 0) {
-        t_max_x = ((double)cx - gx0) / dgx;
-    }
-    double t_max_y = 0.0;
-    if (step_y > 0) {
-        t_max_y = ((double)(cy + 1) - gy0) / dgy;
-    } else if (step_y < 0) {
-        t_max_y = ((double)cy - gy0) / dgy;
-    }
-
-    const float step_dx = end_x - prev_x;
-    const float step_dy = end_y - prev_y;
-    double t_prev = 0.0;
-
-    while (cx != end_cx || cy != end_cy) {
-        const bool can_x = (cx != end_cx);
-        const bool can_y = (cy != end_cy);
-        double t_enter = 1.0;
-        bool step_both = false;
-        bool take_x = false;
-        if (can_x && (!can_y || t_max_x < t_max_y)) {
-            t_enter = t_max_x;
-            take_x = true;
-        } else if (can_y && (!can_x || t_max_y < t_max_x)) {
-            t_enter = t_max_y;
-        } else {
-            t_enter = t_max_x;
-            step_both = true;
-        }
-
-        const float t_mid = ink_clampf((float)(0.5 * (t_prev + t_enter)), 0.0f, 1.0f);
-        const float mx = prev_x + step_dx * t_mid;
-        const float my = prev_y + step_dy * t_mid;
-        if (!is_in_outer_border(mx, my) && !fluid_is_solid(f, mx, my)) {
-            *out_safe_x = mx;
-            *out_safe_y = my;
-        }
-
-        if (step_both) {
-            /* Exact vertex crossing: match fluid_is_solid at the vertex and block diagonal
-             * squeezing between two corner-adjacent solid cells. */
-            const int vx_cell = step_x > 0 ? cx + 1 : cx;
-            const int vy_cell = step_y > 0 ? cy + 1 : cy;
-            if (is_interior_solid_cell(f, vx_cell, vy_cell)) {
-                *out_solid_x = ((float)vx_cell + 0.5f) * FLUID_CELL_PX;
-                *out_solid_y = ((float)vy_cell + 0.5f) * FLUID_CELL_PX;
-                return true;
-            }
-            if (is_interior_solid_cell(f, cx + step_x, cy) &&
-                is_interior_solid_cell(f, cx, cy + step_y)) {
-                *out_solid_x = ((float)(cx + step_x) + 0.5f) * FLUID_CELL_PX;
-                *out_solid_y = ((float)cy + 0.5f) * FLUID_CELL_PX;
-                return true;
-            }
-            cx += step_x;
-            cy += step_y;
-            t_max_x += t_delta_x;
-            t_max_y += t_delta_y;
-        } else if (take_x) {
-            cx += step_x;
-            t_max_x += t_delta_x;
-        } else {
-            cy += step_y;
-            t_max_y += t_delta_y;
-        }
-
-        t_prev = t_enter;
-        if (is_interior_solid_cell(f, cx, cy)) {
-            *out_solid_x = ((float)cx + 0.5f) * FLUID_CELL_PX;
-            *out_solid_y = ((float)cy + 0.5f) * FLUID_CELL_PX;
-            return true;
-        }
-    }
-
-    return false;
 }
 
 void projectiles_step(GameState *g)
@@ -317,6 +214,9 @@ void projectiles_step(GameState *g)
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
     const float shrine_proj_r = g->shrine_count > 0 ? g->shrines[0].hit_radius_proj : 32.0f;
     const uint32_t hw = g->ecs.high_water;
+    EntityId enemy_ids[ECS_MAX_ENTITIES];
+    uint32_t enemy_count = 0;
+    bool enemy_cache_built = false;
 
     for (uint32_t i = 0; i < hw; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
@@ -425,10 +325,11 @@ void projectiles_step(GameState *g)
         }
 
         if (proj->deflected) {
+            ensure_enemy_cache(g, hw, enemy_ids, &enemy_count, &enemy_cache_built);
             float best_score = 1e12f;
             EntityId best = {ECS_INVALID_INDEX, 0};
-            for (uint32_t j = 0; j < hw; ++j) {
-                const EntityId eid = ecs_entity_at(&g->ecs, j);
+            for (uint32_t k = 0; k < enemy_count; ++k) {
+                const EntityId eid = enemy_ids[k];
                 if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid) ||
                     proj_already_hit(proj, eid)) {
                     continue;
@@ -490,31 +391,25 @@ void projectiles_step(GameState *g)
         const float end_y = prev_y + vel->vy * INK_FIXED_DT;
         tr->facing = atan2f(vel->vy, vel->vx);
 
-        float solid_x = end_x;
-        float solid_y = end_y;
-        float safe_x = prev_x;
-        float safe_y = prev_y;
-        const bool hit_solid = proj_trace_solid_dda(&g->fluid, prev_x, prev_y, end_x, end_y,
-                                                    &solid_x, &solid_y, &safe_x, &safe_y);
-        tr->x = hit_solid ? solid_x : end_x;
-        tr->y = hit_solid ? solid_y : end_y;
+        const FluidRayHit ray = fluid_trace_solid_segment(&g->fluid, prev_x, prev_y, end_x, end_y);
+        const bool hit_outer_cell = ray.hit && is_outer_border_cell(ray.cell_x, ray.cell_y);
+        const bool hit_interior_solid = ray.hit && !hit_outer_cell;
+        const bool hit_outer = hit_outer_cell || (!ray.hit && is_in_outer_border(end_x, end_y));
 
-        const bool hit_outer = !hit_solid && is_in_outer_border(tr->x, tr->y);
-
-        if (proj->kind == PROJ_BOUNCE_ORB && (hit_outer || hit_solid)) {
+        if (proj->kind == PROJ_BOUNCE_ORB && (hit_outer || hit_interior_solid)) {
             if (proj->bounces_left > 0) {
                 --proj->bounces_left;
-                float nx = 0.0f;
-                float ny = 0.0f;
-                if (hit_outer) {
-                    if (tr->x < FLUID_CELL_PX) {
+                float nx = ray.hit ? ray.nx : 0.0f;
+                float ny = ray.hit ? ray.ny : 0.0f;
+                if (!ray.hit && hit_outer) {
+                    if (end_x < FLUID_CELL_PX) {
                         nx += 1.0f;
-                    } else if (tr->x >= (float)INK_SCREEN_W - FLUID_CELL_PX) {
+                    } else if (end_x >= (float)INK_SCREEN_W - FLUID_CELL_PX) {
                         nx -= 1.0f;
                     }
-                    if (tr->y < FLUID_CELL_PX) {
+                    if (end_y < FLUID_CELL_PX) {
                         ny += 1.0f;
-                    } else if (tr->y >= (float)INK_SCREEN_H - FLUID_CELL_PX) {
+                    } else if (end_y >= (float)INK_SCREEN_H - FLUID_CELL_PX) {
                         ny -= 1.0f;
                     }
                     const float nlen = hypotf(nx, ny);
@@ -522,7 +417,8 @@ void projectiles_step(GameState *g)
                         nx /= nlen;
                         ny /= nlen;
                     }
-                } else if (!fluid_solid_normal(&g->fluid, tr->x, tr->y, &nx, &ny)) {
+                }
+                if (nx == 0.0f && ny == 0.0f) {
                     nx = -vel->vx / target_sp;
                     ny = -vel->vy / target_sp;
                 }
@@ -531,6 +427,8 @@ void projectiles_step(GameState *g)
                     vel->vx -= 2.0f * vn * nx;
                     vel->vy -= 2.0f * vn * ny;
                 }
+                const float safe_x = ray.hit ? ray.hit_x : prev_x;
+                const float safe_y = ray.hit ? ray.hit_y : prev_y;
                 tr->x = ink_clampf(safe_x, FLUID_CELL_PX + 1.0f,
                                    (float)INK_SCREEN_W - FLUID_CELL_PX - 1.0f);
                 tr->y = ink_clampf(safe_y, FLUID_CELL_PX + 1.0f,
@@ -540,9 +438,12 @@ void projectiles_step(GameState *g)
                 ecs_destroy(&g->ecs, id);
                 continue;
             }
-        } else if (hit_solid) {
+        } else if (hit_interior_solid) {
             ecs_destroy(&g->ecs, id);
             continue;
+        } else {
+            tr->x = end_x;
+            tr->y = end_y;
         }
 
         if (proj->kind == PROJ_FIREBALL || proj->burning) {
@@ -576,8 +477,9 @@ void projectiles_step(GameState *g)
         }
 
         if (proj->deflected) {
-            for (uint32_t j = 0; j < hw; ++j) {
-                const EntityId eid = ecs_entity_at(&g->ecs, j);
+            ensure_enemy_cache(g, hw, enemy_ids, &enemy_count, &enemy_cache_built);
+            for (uint32_t k = 0; k < enemy_count; ++k) {
+                const EntityId eid = enemy_ids[k];
                 if (eid.index == ECS_INVALID_INDEX || !game_enemy_is_targetable(g, eid)) {
                     continue;
                 }
@@ -612,7 +514,7 @@ void projectiles_step(GameState *g)
                         fluid_splat(&g->fluid, hit_x, hit_y, 3.2f, 0.0f, 0.0f, k_burn_hit);
                     }
                     if (proj->electrified || is_storm_proj_kind(proj->kind)) {
-                        trigger_electrified_bounce(g, eid, hit_x, hit_y, hw);
+                        trigger_electrified_bounce(g, eid, hit_x, hit_y, enemy_ids, enemy_count);
                     }
 
                     if (proj->pierce > 0) {

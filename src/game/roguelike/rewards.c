@@ -108,6 +108,22 @@ static void generate_upgrade_offer(GameState *g, const int32_t *exclude, int32_t
             break;
         }
 
+        /* On reroll, reserve slot 0 for an unseen candidate when any eligible unseen card exists so
+         * the slot-2 diversity fallback can never reproduce the exact prior 3-card set. */
+        if (slot == 0 && exclude != NULL && n_exclude > 0) {
+            UpgradeId unseen[UPG_COUNT];
+            int32_t unseen_count = 0;
+            for (int32_t i = 0; i < pool_count; ++i) {
+                if (!id_in_list(exclude, n_exclude, (int32_t)pool[i])) {
+                    unseen[unseen_count++] = pool[i];
+                }
+            }
+            if (unseen_count > 0) {
+                copy_pool(pool, unseen, unseen_count);
+                pool_count = unseen_count;
+            }
+        }
+
         /* 2.2: First offer of the run restricts slot 0 to recommended axes if non-empty. */
         if (is_first && slot == 0) {
             UpgradeId filtered[UPG_COUNT];
@@ -123,7 +139,9 @@ static void generate_upgrade_offer(GameState *g, const int32_t *exclude, int32_t
             }
         }
 
-        /* 2.3: Slot 2 avoids repeating the same axis if slots 0 and 1 share an axis. */
+        /* 2.3: Slot 2 avoids repeating the same axis if slots 0 and 1 share an axis.
+         * On reroll, if all fresh candidates share that axis, reintroduce eligible prior cards
+         * on another axis to uphold the two-axis diversity contract. */
         if (slot == 2) {
             const UpgradeAxis axis0 = game_upgrade_axis((UpgradeId)offer->choice_ids[0]);
             const UpgradeAxis axis1 = game_upgrade_axis((UpgradeId)offer->choice_ids[1]);
@@ -133,6 +151,29 @@ static void generate_upgrade_offer(GameState *g, const int32_t *exclude, int32_t
                 for (int32_t i = 0; i < pool_count; ++i) {
                     if (game_upgrade_axis(pool[i]) != axis0) {
                         filtered[filtered_count++] = pool[i];
+                    }
+                }
+                if (filtered_count == 0 && exclude != NULL && n_exclude > 0) {
+                    for (int32_t k = 0; k < n_exclude; ++k) {
+                        const int32_t id = exclude[k];
+                        if (id < 0 || id >= (int32_t)UPG_COUNT) {
+                            continue;
+                        }
+                        const UpgradeId uid = (UpgradeId)id;
+                        if (!upgrade_offerable(g, uid) || game_upgrade_axis(uid) == axis0 ||
+                            already_chosen(offer->choice_ids, offer->choice_count, uid)) {
+                            continue;
+                        }
+                        bool dup = false;
+                        for (int32_t f = 0; f < filtered_count; ++f) {
+                            if (filtered[f] == uid) {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup) {
+                            filtered[filtered_count++] = uid;
+                        }
                     }
                 }
                 if (filtered_count > 0) {

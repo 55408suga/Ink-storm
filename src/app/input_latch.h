@@ -22,6 +22,7 @@ typedef struct {
 typedef struct {
     float prev_x, prev_y;
     float cur_x, cur_y;
+    float hitstop_dx, hitstop_dy;
     bool left_down;
     bool paint_suppressed;
     bool cyclone_pending;
@@ -39,6 +40,9 @@ void input_latch_anchor(InputLatch *l, float x, float y);
 void input_latch_feed(InputLatch *l, const RawInput *raw);
 BrushInput input_latch_take_tick(InputLatch *l);
 BrushInput input_latch_take_subtick(InputLatch *l, int32_t remaining_ticks);
+BrushInput input_latch_take_subtick_for_game(InputLatch *l, int32_t remaining_ticks,
+                                             const GameState *g);
+void input_latch_clear_skills(InputLatch *l);
 GameCommand input_latch_take_command(InputLatch *l, RunPhase phase);
 bool input_latch_take_confirm(InputLatch *l);
 

@@ -1361,6 +1361,199 @@ static void test_tengu_phase2_transition_preserves_telegraph_warning(void)
     game_destroy(g);
 }
 
+static void test_nue_threshold_invuln_freezes_warned_stop_and_phase2_overlaps_two_trails(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_NUE);
+    const EntityId nue = g->run.boss_id;
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+    HealthComp *hp = game_health_mut(g, nue);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Put Nue in warned stop state, then cross Phase 2 threshold (<= 50% HP). */
+    en->ai_state = 1;
+    en->windup = 0.30f;
+    en->fire_cd = 0.40f;
+    (void)combat_apply_damage(g, nue, 360, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(1, bs->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, hp->invuln_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.65f, en->windup);
+    TEST_ASSERT_TRUE(en->fire_cd >= 0.75f - 1e-4f);
+
+    /* During 1.5s invuln, windup & fire_cd stay frozen and Nue never dashes. */
+    const float frozen_windup = en->windup;
+    const float frozen_cd = en->fire_cd;
+    for (int t = 0; t < 60; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, frozen_windup, en->windup);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, frozen_cd, en->fire_cd);
+    }
+
+    /* Let invuln finish on a clean field (no escort lantern reactions) and run through consecutive
+     * Phase 2 dashes: two trails overlap live for ~1.5s (~90 ticks) after the second dash starts.
+     */
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && id.index != nue.index) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    fluid_reset(&g->fluid);
+    game_status_mut(g, nue)->ink_mark_t = 0.0f;
+    game_status_mut(g, nue)->knockback_t = 0.0f;
+    int overlap_ticks = 0;
+    for (int t = 0; t < 480; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        if (g->internal.nue_trail_t[0] > 0.0f && g->internal.nue_trail_t[1] > 0.0f) {
+            ++overlap_ticks;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT32(75, overlap_ticks);
+    game_destroy(g);
+}
+
+static void test_bounce_orb_reflects_off_torii_west_face_near_corner(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, 0);
+    clear_enemies_and_projs(g);
+    fluid_reset(&g->fluid);
+
+    /* Act 2 west torii pillar [376, 392) x [320, 336). */
+    const EntityId orb =
+        game_debug_spawn_projectile(g, PROJ_BOUNCE_ORB, 375.0f, 327.0f, 60.0f, -220.0f);
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, orb));
+    TEST_ASSERT_EQUAL_INT32(1, game_proj(g, orb)->bounces_left);
+    TEST_ASSERT_TRUE(game_velocity(g, orb)->vx < 0.0f);
+    TEST_ASSERT_TRUE(game_transform(g, orb)->x < 376.0f);
+    game_destroy(g);
+}
+
+static void test_ryu_coil_orbits_full_shrine_ring_below_y510(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_RYU);
+    const EntityId ryu = g->run.boss_id;
+    g->internal.spawn_cd = 999.0f;
+    game_boss_mut(g, ryu)->phase_idx = 1;
+    game_health_mut(g, ryu)->invuln_t = 0.0f;
+    game_enemy_mut(g, ryu)->fire_cd = 99.0f;
+    g->internal.ryu_coil_t = 2.0f;
+
+    float max_y = 0.0f;
+    float sum_r = 0.0f;
+    int samples = 0;
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    for (int t = 0; t < 115; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        const TransformComp *tr = game_transform(g, ryu);
+        TEST_ASSERT_NOT_NULL(tr);
+        if (tr->y > max_y) {
+            max_y = tr->y;
+        }
+        if (t >= 20 && g->internal.ryu_coil_t > 0.0f) {
+            sum_r += hypotf(tr->x - sx, tr->y - sy);
+            ++samples;
+        }
+    }
+    TEST_ASSERT_TRUE(max_y > 540.0f);
+    TEST_ASSERT_TRUE(max_y <= (float)INK_SCREEN_H - 96.0f + 1e-3f);
+    TEST_ASSERT_TRUE(samples > 50);
+    TEST_ASSERT_FLOAT_WITHIN(25.0f, 240.0f, sum_r / (float)samples);
+
+    /* Exiting coil while deep below y=510 must glide back smoothly with no vertical snap. */
+    g->internal.ryu_coil_t = 2.0f;
+    for (int t = 0; t < 180; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_enemy_mut(g, ryu)->fire_cd = 99.0f;
+        game_step(g, NULL, NULL);
+        if (game_transform(g, ryu)->y > 550.0f) {
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE(game_transform(g, ryu)->y > 550.0f);
+    g->internal.ryu_coil_t = 0.0f;
+    float prev_x = game_transform(g, ryu)->x;
+    float prev_y = game_transform(g, ryu)->y;
+    float max_exit_jump = 0.0f;
+    bool returned_to_band = false;
+    for (int t = 0; t < 240; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_enemy_mut(g, ryu)->fire_cd = 99.0f;
+        game_step(g, NULL, NULL);
+        const TransformComp *tr = game_transform(g, ryu);
+        const float jump = hypotf(tr->x - prev_x, tr->y - prev_y);
+        if (jump > max_exit_jump) {
+            max_exit_jump = jump;
+        }
+        if (t == 0) {
+            /* Must glide from y > 550 instead of snapping immediately to y = 510. */
+            TEST_ASSERT_TRUE(tr->y > 530.0f);
+        }
+        if (tr->y <= 510.0f) {
+            returned_to_band = true;
+        }
+        prev_x = tr->x;
+        prev_y = tr->y;
+    }
+    TEST_ASSERT_TRUE(max_exit_jump < 20.0f);
+    TEST_ASSERT_TRUE(returned_to_band);
+    game_destroy(g);
+}
+
+static void test_tengu_patrol_oscillator_wraps_smoothly_both_sides_of_shrine(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+    const EntityId tengu = g->run.boss_id;
+    g->internal.spawn_cd = 999.0f;
+    game_enemy_mut(g, tengu)->fire_cd = 999.0f;
+
+    const float sx = g->shrines[0].x;
+    float min_x = sx;
+    float max_x = sx;
+    float prev_x = game_transform(g, tengu)->x;
+    float prev_y = game_transform(g, tengu)->y;
+    float max_step = 0.0f;
+    for (int t = 0; t < 600; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_enemy_mut(g, tengu)->fire_cd = 999.0f;
+        game_step(g, NULL, NULL);
+        const TransformComp *tr = game_transform(g, tengu);
+        if (tr->x < min_x) {
+            min_x = tr->x;
+        }
+        if (tr->x > max_x) {
+            max_x = tr->x;
+        }
+        const float step = hypotf(tr->x - prev_x, tr->y - prev_y);
+        if (step > max_step) {
+            max_step = step;
+        }
+        prev_x = tr->x;
+        prev_y = tr->y;
+    }
+    TEST_ASSERT_TRUE(min_x < sx - 130.0f);
+    TEST_ASSERT_TRUE(max_x > sx + 130.0f);
+    TEST_ASSERT_TRUE(max_step < 10.0f);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1375,5 +1568,9 @@ int main(void)
     RUN_TEST(test_endless_loop_scaling_all_six_items);
     RUN_TEST(test_wave_quotas_ramp_across_waves_and_acts);
     RUN_TEST(test_tengu_phase2_transition_preserves_telegraph_warning);
+    RUN_TEST(test_nue_threshold_invuln_freezes_warned_stop_and_phase2_overlaps_two_trails);
+    RUN_TEST(test_bounce_orb_reflects_off_torii_west_face_near_corner);
+    RUN_TEST(test_ryu_coil_orbits_full_shrine_ring_below_y510);
+    RUN_TEST(test_tengu_patrol_oscillator_wraps_smoothly_both_sides_of_shrine);
     return UNITY_END();
 }

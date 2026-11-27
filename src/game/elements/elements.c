@@ -86,12 +86,15 @@ static int reaction_block_index(float px, float py)
     return by * GAME_THUNDERBURST_BLOCKS_X + bx;
 }
 
-static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks)
+static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks, bool *storm_dirty)
 {
     float *ink_ch = fluid_channel_mut(&g->fluid, 0);
     float *fire_ch = fluid_channel_mut(&g->fluid, 1);
     float *storm_ch = fluid_channel_mut(&g->fluid, 2);
     if (ink_ch == NULL || fire_ch == NULL || storm_ch == NULL) {
+        if (ink_ch != NULL || fire_ch != NULL || storm_ch != NULL) {
+            fluid_end_mut_borrow(&g->fluid);
+        }
         return 0;
     }
 
@@ -154,6 +157,7 @@ static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks)
             peak_storm = storm > peak_storm ? storm : peak_storm;
         }
     }
+    fluid_end_mut_borrow(&g->fluid);
     peaks->fire = peak_fire;
     peaks->storm = peak_storm;
 
@@ -177,6 +181,9 @@ static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks)
         /* Reaction hooks may inject fire or storm, so the peaks no longer bound the field. */
         peaks->fire = FLT_MAX;
         peaks->storm = FLT_MAX;
+        if (storm_dirty != NULL) {
+            *storm_dirty = true;
+        }
     }
     return storm_cells;
 }
@@ -191,10 +198,11 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
     if (peaks.fire <= thresh || peaks.storm <= thresh) {
         return -1;
     }
-    float *ink_ch = fluid_channel_mut(&g->fluid, 0);
-    float *fire_ch = fluid_channel_mut(&g->fluid, 1);
-    float *storm_ch = fluid_channel_mut(&g->fluid, 2);
-    if (ink_ch == NULL || fire_ch == NULL || storm_ch == NULL) {
+    const float *ink_scan = fluid_channel_const(&g->fluid, 0);
+    const float *fire_scan = fluid_channel_const(&g->fluid, 1);
+    const float *storm_scan = fluid_channel_const(&g->fluid, 2);
+    if (ink_scan == NULL || fire_scan == NULL || storm_scan == NULL ||
+        g->fluid.cfg.active_channels < 3) {
         return -1;
     }
 
@@ -212,9 +220,9 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
             if (solid[idx] != 0) {
                 continue;
             }
-            const float ink = ink_ch[idx];
-            const float fire = fire_ch[idx];
-            const float storm = storm_ch[idx];
+            const float ink = ink_scan[idx];
+            const float fire = fire_scan[idx];
+            const float storm = storm_scan[idx];
             if (!isfinite(ink) || !isfinite(fire) || !isfinite(storm)) {
                 continue;
             }
@@ -374,29 +382,37 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
     if (gy1 > FLUID_H - 2) {
         gy1 = FLUID_H - 2;
     }
-    for (int gy = gy0; gy <= gy1; ++gy) {
-        const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
-        const float dy = cell_y - cy_px;
-        const int row = gy * FLUID_W;
-        for (int gx = gx0; gx <= gx1; ++gx) {
-            const int idx = row + gx;
-            if (solid[idx] != 0) {
-                continue;
-            }
-            const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
-            const float dx = cell_x - cx_px;
-            if (dx * dx + dy * dy <= dye_rad_px2) {
-                if (isfinite(ink_ch[idx])) {
-                    ink_ch[idx] *= 0.5f;
+    float *ink_ch = fluid_channel_mut(&g->fluid, 0);
+    float *fire_ch = fluid_channel_mut(&g->fluid, 1);
+    float *storm_ch = fluid_channel_mut(&g->fluid, 2);
+    if (ink_ch != NULL && fire_ch != NULL && storm_ch != NULL) {
+        for (int gy = gy0; gy <= gy1; ++gy) {
+            const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
+            const float dy = cell_y - cy_px;
+            const int row = gy * FLUID_W;
+            for (int gx = gx0; gx <= gx1; ++gx) {
+                const int idx = row + gx;
+                if (solid[idx] != 0) {
+                    continue;
                 }
-                if (isfinite(fire_ch[idx])) {
-                    fire_ch[idx] *= 0.2f;
-                }
-                if (isfinite(storm_ch[idx])) {
-                    storm_ch[idx] *= 0.2f;
+                const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
+                const float dx = cell_x - cx_px;
+                if (dx * dx + dy * dy <= dye_rad_px2) {
+                    if (isfinite(ink_ch[idx])) {
+                        ink_ch[idx] *= 0.5f;
+                    }
+                    if (isfinite(fire_ch[idx])) {
+                        fire_ch[idx] *= 0.2f;
+                    }
+                    if (isfinite(storm_ch[idx])) {
+                        storm_ch[idx] *= 0.2f;
+                    }
                 }
             }
         }
+    }
+    if (ink_ch != NULL || fire_ch != NULL || storm_ch != NULL) {
+        fluid_end_mut_borrow(&g->fluid);
     }
 
     g->internal.cataclysm_cd =
@@ -420,16 +436,16 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
     return best_b;
 }
 
-static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, ElementPeaks peaks)
+static bool elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, ElementPeaks peaks)
 {
     const float thresh = g->internal.mods.thunderburst_thresh;
     if (peaks.fire <= thresh || peaks.storm <= thresh) {
-        return;
+        return false;
     }
-    float *fire_ch = fluid_channel_mut(&g->fluid, 1);
-    float *storm_ch = fluid_channel_mut(&g->fluid, 2);
-    if (fire_ch == NULL || storm_ch == NULL) {
-        return;
+    const float *fire_scan = fluid_channel_const(&g->fluid, 1);
+    const float *storm_scan = fluid_channel_const(&g->fluid, 2);
+    if (fire_scan == NULL || storm_scan == NULL || g->fluid.cfg.active_channels < 3) {
+        return false;
     }
 
     const uint8_t *solid = g->fluid.solid;
@@ -449,8 +465,8 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
             if (solid[idx] != 0) {
                 continue;
             }
-            const float fire = fire_ch[idx];
-            const float storm = storm_ch[idx];
+            const float fire = fire_scan[idx];
+            const float storm = storm_scan[idx];
             if (!isfinite(fire) || !isfinite(storm)) {
                 continue;
             }
@@ -562,26 +578,33 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
         if (gy1 > FLUID_H - 2) {
             gy1 = FLUID_H - 2;
         }
-        for (int gy = gy0; gy <= gy1; ++gy) {
-            const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
-            const float dy = cell_y - cy_px;
-            const int row = gy * FLUID_W;
-            for (int gx = gx0; gx <= gx1; ++gx) {
-                const int idx = row + gx;
-                if (solid[idx] != 0) {
-                    continue;
-                }
-                const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
-                const float dx = cell_x - cx_px;
-                if (dx * dx + dy * dy <= dye_rad_px2) {
-                    if (isfinite(fire_ch[idx])) {
-                        fire_ch[idx] *= 0.3f;
+        float *fire_ch = fluid_channel_mut(&g->fluid, 1);
+        float *storm_ch = fluid_channel_mut(&g->fluid, 2);
+        if (fire_ch != NULL && storm_ch != NULL) {
+            for (int gy = gy0; gy <= gy1; ++gy) {
+                const float cell_y = ((float)gy + 0.5f) * FLUID_CELL_PX;
+                const float dy = cell_y - cy_px;
+                const int row = gy * FLUID_W;
+                for (int gx = gx0; gx <= gx1; ++gx) {
+                    const int idx = row + gx;
+                    if (solid[idx] != 0) {
+                        continue;
                     }
-                    if (isfinite(storm_ch[idx])) {
-                        storm_ch[idx] *= 0.2f;
+                    const float cell_x = ((float)gx + 0.5f) * FLUID_CELL_PX;
+                    const float dx = cell_x - cx_px;
+                    if (dx * dx + dy * dy <= dye_rad_px2) {
+                        if (isfinite(fire_ch[idx])) {
+                            fire_ch[idx] *= 0.3f;
+                        }
+                        if (isfinite(storm_ch[idx])) {
+                            storm_ch[idx] *= 0.2f;
+                        }
                     }
                 }
             }
+        }
+        if (fire_ch != NULL || storm_ch != NULL) {
+            fluid_end_mut_borrow(&g->fluid);
         }
 
         g->internal.thunderburst_block_cd[b] = 0.8f;
@@ -608,9 +631,37 @@ static void elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
                                  });
         upgrades_fire_on_reaction(g, REACT_THUNDERBURST, cx_px, cy_px, (float)count);
     }
+    return top_n > 0;
 }
 
-static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
+static bool has_min_storm_cells(const FluidState *f, int32_t min_cells)
+{
+    const float *storm_ch = fluid_channel_const(f, 2);
+    if (storm_ch == NULL) {
+        return false;
+    }
+    const uint8_t *solid = f->solid;
+    int32_t count = 0;
+    for (int y = 1; y < FLUID_H - 1; ++y) {
+        const int row = y * FLUID_W;
+        for (int x = 1; x < FLUID_W - 1; ++x) {
+            const int idx = row + x;
+            if (solid[idx] != 0) {
+                continue;
+            }
+            const float v = storm_ch[idx];
+            if (isfinite(v) && v > 0.24f) {
+                ++count;
+                if (count >= min_cells) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool storm_dirty)
 {
     const uint32_t hw = g->ecs.high_water;
     for (uint32_t i = 0; i < hw; ++i) {
@@ -665,9 +716,13 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
                 (game_is_boss_enemy(en->def_id) || game_is_boss_part(en->def_id)) ? 0.55f : 0.36f;
             if (st->burn_acc + 1e-4f >= interval) {
                 st->burn_acc = 0.0f;
+                const uint64_t fluid_rev_before = g->fluid.mutation_rev;
                 (void)combat_apply_damage_f(g, id, g->internal.mods.burn_base_dmg,
                                             DMG_FIRE | DMG_REACTION, fu * FLUID_CELL_PX * 0.2f,
                                             fv * FLUID_CELL_PX * 0.2f);
+                if (g->fluid.mutation_rev != fluid_rev_before) {
+                    storm_dirty = true;
+                }
             }
         } else if (st->burn_acc > 0.0f) {
             st->burn_acc -= INK_FIXED_DT * 0.5f;
@@ -677,7 +732,15 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells)
         }
     }
 
-    if ((float)storm_cells < 10.0f * GAME_CELL_COUNT_SCALE || g->internal.storm_zap_cd > 0.0f) {
+    if (g->internal.storm_zap_cd > 0.0f) {
+        return;
+    }
+    const int32_t min_storm_cells = (int32_t)ceilf(10.0f * GAME_CELL_COUNT_SCALE);
+    if (storm_dirty) {
+        if (!has_min_storm_cells(&g->fluid, min_storm_cells)) {
+            return;
+        }
+    } else if (storm_cells < min_storm_cells) {
         return;
     }
 
@@ -879,7 +942,7 @@ static void elements_stage5_projectiles(GameState *g)
     }
 }
 
-void elements_step(GameState *g)
+void elements_step_idle_cooldowns(GameState *g)
 {
     if (g == NULL) {
         return;
@@ -891,36 +954,56 @@ void elements_step(GameState *g)
     for (int32_t b = 0; b < GAME_THUNDERBURST_BLOCKS; ++b) {
         decay_cd(&g->internal.thunderburst_block_cd[b]);
     }
+    g->internal.blazing_active = false;
+}
+
+static void elements_step_impl(GameState *g, bool use_solver_peaks)
+{
+    if (g == NULL) {
+        return;
+    }
+    elements_step_idle_cooldowns(g);
 
     /* Stage 1: cell reactions (Blazing Inkstorm + Tempest Lightning growth). Its rules need fire or
      * storm above 0.14 and stages 2-3 compare the same peaks with their own thresholds, so quiet
-     * frames skip the full-grid scans without changing any result. */
-    const float *fire_ch = fluid_channel_const(&g->fluid, 1);
-    const float *storm_ch = fluid_channel_const(&g->fluid, 2);
-    ElementPeaks peaks = {
-        .fire = fire_ch != NULL ? channel_peak(fire_ch) : 0.0f,
-        .storm = storm_ch != NULL ? channel_peak(storm_ch) : 0.0f,
-    };
-    int32_t storm_cells = 0;
-    if (peaks.fire > 0.14f || peaks.storm > 0.14f) {
-        storm_cells = elements_stage1_cells(g, &peaks);
+     * frames skip the full-grid scans without changing any result. Immediate post-solve callers
+     * reuse the solver's fresh max_dye peaks instead of re-scanning 2x14,400 floats. */
+    ElementPeaks peaks = {0.0f, 0.0f};
+    if (use_solver_peaks) {
+        peaks.fire = g->fluid.cfg.active_channels > 1 ? g->fluid.stats.max_dye[1] : 0.0f;
+        peaks.storm = g->fluid.cfg.active_channels > 2 ? g->fluid.stats.max_dye[2] : 0.0f;
     } else {
-        g->internal.blazing_active = false;
+        const float *fire_ch = fluid_channel_const(&g->fluid, 1);
+        const float *storm_ch = fluid_channel_const(&g->fluid, 2);
+        peaks.fire = fire_ch != NULL ? channel_peak(fire_ch) : 0.0f;
+        peaks.storm = storm_ch != NULL ? channel_peak(storm_ch) : 0.0f;
+    }
+    int32_t storm_cells = 0;
+    bool storm_dirty = false;
+    if (peaks.fire > 0.14f || peaks.storm > 0.14f) {
+        storm_cells = elements_stage1_cells(g, &peaks, &storm_dirty);
     }
 
     /* Stage 2: Cataclysm (ink x fire x storm, 64px block, global 2.0s CD). */
     const int32_t cataclysm_block = elements_stage2_cataclysm(g, peaks);
     if (cataclysm_block >= 0) {
-        /* Cataclysm damage and hooks may inject fire or storm before the thunderburst scan. */
+        /* Cataclysm damage and hooks may inject or consume fire/storm before later stages. */
         peaks = (ElementPeaks){.fire = FLT_MAX, .storm = FLT_MAX};
+        storm_dirty = true;
     }
 
     /* Stage 3: Thunderburst (fire x storm, 64px block, max 3/tick, excludes cataclysm block). */
-    elements_stage3_thunderburst(g, cataclysm_block, peaks);
+    if (elements_stage3_thunderburst(g, cataclysm_block, peaks)) {
+        storm_dirty = true;
+    }
 
     /* Stage 4: enemy statuses, burn ticks, and Tempest Lightning chains. */
-    elements_stage4_enemies(g, storm_cells);
+    elements_stage4_enemies(g, storm_cells, storm_dirty);
 
     /* Stage 5: projectile elemental upgrades and pre-deflect storm acceleration. */
     elements_stage5_projectiles(g);
 }
+
+void elements_step(GameState *g) { elements_step_impl(g, false); }
+
+void elements_step_post_solve(GameState *g) { elements_step_impl(g, true); }

@@ -58,4 +58,29 @@ typedef struct {
 int render_polyline_plan(const float *seg_len, int segs, int cap, RenderPolySample *out);
 int render_polyline_segment_steps(float seg_len); /* 予算に余裕があるときの区間あたり点数 */
 
+/* 第 3 幕雨アニメーションの独立周期（1340px 水平 / 800px 垂直で途切れなく循環） */
+#define RENDER_RAIN_PERIOD_X ((float)INK_SCREEN_W + 60.0f)
+#define RENDER_RAIN_PERIOD_Y ((float)INK_SCREEN_H + 80.0f)
+void render_rain_advance(float *phase_x, float *phase_y, float dt);
+void render_rain_streak_pos(int streak_idx, float phase_x, float phase_y, float *out_x,
+                            float *out_y);
+
+/* 流体テクスチャ転送キャッシュ（静止・ポーズ・未描画ロビーで再符号化と転送を省く） */
+#define RENDER_FLUID_DIMS_KEY (((uint32_t)FLUID_W << 16) | (uint32_t)FLUID_H)
+
+typedef struct {
+    bool valid;
+    const FluidState *field_ptr;
+    uint64_t steps;
+    uint64_t mutation_rev;
+    uint64_t solid_rev;
+    bool pristine;
+    uint32_t dims_key;
+    float max_dye;
+    bool gpu_path;
+    int32_t slot;
+} FluidUploadCache;
+
+bool render_fluid_cache_matches(const FluidUploadCache *cache, const FluidState *f, bool gpu_path);
+
 #endif

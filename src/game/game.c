@@ -133,12 +133,26 @@ bool game_aftermath_reaches_victory(const GameState *g)
     return reached_main_victory || reached_endless_cap;
 }
 
+static void step_pending_impulses(GameState *g)
+{
+    int32_t count = g->pending_impulse_count;
+    if (count > GAME_MAX_PENDING_IMPULSE) {
+        count = GAME_MAX_PENDING_IMPULSE;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        const PendingImpulse *imp = &g->pending_impulses[i];
+        fluid_add_radial_impulse(&g->fluid, imp->x, imp->y, imp->rad_cells, imp->peak_speed);
+    }
+    g->pending_impulse_count = 0;
+}
+
 /* Chain and Surge timers stay frozen here: the purification window is not player time. */
 static void step_aftermath(GameState *g)
 {
     g->player.painting = false;
     g->player.stroke_speed = 0.0f;
 
+    step_pending_impulses(g);
     fluid_step(&g->fluid, INK_FIXED_DT);
     fluid_sanitize_channels(&g->fluid);
     step_dissolving_entities(g);
@@ -210,19 +224,6 @@ static void finish_wave_if_won(GameState *g)
                                  });
         combat_begin_wave_aftermath(g);
     }
-}
-
-static void step_pending_impulses(GameState *g)
-{
-    int32_t count = g->pending_impulse_count;
-    if (count > GAME_MAX_PENDING_IMPULSE) {
-        count = GAME_MAX_PENDING_IMPULSE;
-    }
-    for (int32_t i = 0; i < count; ++i) {
-        const PendingImpulse *imp = &g->pending_impulses[i];
-        fluid_add_radial_impulse(&g->fluid, imp->x, imp->y, imp->rad_cells, imp->peak_speed);
-    }
-    g->pending_impulse_count = 0;
 }
 
 GameState *game_create(const RunConfig *cfg)
@@ -341,9 +342,13 @@ void game_step_sandbox(GameState *g, const BrushInput *in)
     const BrushInput *valid_in = bounded_brush_input(in, &bounded);
     step_pending_impulses(g);
     player_skills_step(g, valid_in);
-    fluid_step(&g->fluid, INK_FIXED_DT);
-    elements_step(g);
-    fluid_sanitize_channels(&g->fluid);
+    if (!fluid_is_pristine(&g->fluid)) {
+        fluid_step(&g->fluid, INK_FIXED_DT);
+        elements_step_post_solve(g);
+        fluid_sanitize_channels(&g->fluid);
+    } else {
+        elements_step_idle_cooldowns(g);
+    }
     ecs_flush_destroy(&g->ecs);
     g->phase_t += INK_FIXED_DT;
     ++g->ticks;
@@ -417,7 +422,7 @@ void game_step(GameState *g, const BrushInput *in, const GameCommand *cmd)
     fluid_step(&g->fluid, INK_FIXED_DT);
 
     /* Step 5: Elemental reactions & channel sanitization. */
-    elements_step(g);
+    elements_step_post_solve(g);
     fluid_sanitize_channels(&g->fluid);
 
     /* Step 6: Stage gimmicks & wave reinforcement spawns. */

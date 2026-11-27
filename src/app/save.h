@@ -34,10 +34,13 @@ bool save_persist_meta(const char *path, bool enabled, const MetaState *meta, bo
                        const SaveIoOps *ops);
 bool save_retry_if_dirty(const char *path, bool enabled, const MetaState *meta, bool *dirty,
                          const SaveIoOps *ops);
+bool save_resolve_and_settle_run(MetaState *meta, GameState *game,
+                                 MetaSettleBreakdown *out_breakdown);
 bool save_finish_run_on_exit(const char *path, bool enabled, MetaState *meta, bool *dirty,
                              GameState *game, bool active_run, MetaSettleBreakdown *out_breakdown,
                              const SaveIoOps *ops);
 #define SAVE_BACKUP_SLOTS 10
+#define SAVE_MAX_BACKUP_BYTES (64 * 1024)
 
 typedef enum {
     SAVE_BACKUP_CREATED = 0,

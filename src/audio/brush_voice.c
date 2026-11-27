@@ -83,6 +83,17 @@ static AudioSvfOut brush_svf(AudioState *a, BrushSvfSlot slot, float in, float h
     return audio_svf_step(&a->brush_svf[slot], in, hz, q);
 }
 
+void audio_brush_init_coeffs(AudioState *a)
+{
+    if (a == NULL) {
+        return;
+    }
+    a->brush_hp_coeffs[0] = audio_svf_make_coeffs(k_brush_tones[BRUSH_STYLE_HEAVY].hp_hz, 0.71f);
+    a->brush_hp_coeffs[1] = audio_svf_make_coeffs(k_brush_tones[BRUSH_STYLE_EMBER].hp_hz, 0.71f);
+    a->brush_hp_coeffs[2] = audio_svf_make_coeffs(k_brush_tones[BRUSH_STYLE_QUILL].hp_hz, 0.71f);
+    a->brush_hp_coeffs[3] = audio_svf_make_coeffs(460.0f, 0.71f);
+}
+
 void audio_brush_reset_dsp(AudioState *a)
 {
     memset(a->brush_pink, 0, sizeof a->brush_pink);
@@ -229,16 +240,20 @@ float audio_brush_step(AudioState *a)
     }
 
     float level = (0.25f + 0.75f * powf(spd, 0.9f)) * a->brush_env * tone->level;
-    float hp_hz = tone->hp_hz;
+    int hp_idx = (a->brush_style >= 0 && a->brush_style < BRUSH_STYLE_COUNT) ? a->brush_style
+                                                                             : BRUSH_STYLE_EMBER;
     if (dry) {
         const float flutter = 0.80f + 0.20f * brush_walk(a, BWALK_FLUTTER, 11.0f + 5.0f * spd);
         level *= 0.75f * ink_clampf(flutter, 0.5f, 1.0f);
-        hp_hz = 460.0f;
+        hp_idx = 3;
     }
 
+    const AudioSvfCoeffs hp_c = a->brush_hp_coeffs[hp_idx].a1 > 0.0f
+                                    ? a->brush_hp_coeffs[hp_idx]
+                                    : audio_svf_make_coeffs(dry ? 460.0f : tone->hp_hz, 0.71f);
     float mix = src * level;
-    mix = brush_svf(a, BSVF_HP1, mix, hp_hz, 0.71f).hp;
-    mix = brush_svf(a, BSVF_HP2, mix, hp_hz, 0.71f).hp;
+    mix = audio_svf_step_coeffs(&a->brush_svf[BSVF_HP1], mix, hp_c).hp;
+    mix = audio_svf_step_coeffs(&a->brush_svf[BSVF_HP2], mix, hp_c).hp;
     if (a->brush_surge_env > k_brush_silent) {
         mix += brush_surge_veil(a, spd, pink_b) * a->brush_env;
     }

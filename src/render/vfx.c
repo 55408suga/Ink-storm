@@ -194,6 +194,10 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
         r->vfx_rng = 1;
     }
     r->vfx_time = 0.0f;
+    r->rain_phase_x = 0.0f;
+    r->rain_phase_y = 0.0f;
+    render_invalidate_fluid_cache(r);
+    r->guide_cache.valid = false;
     r->shake_t = 0.0f;
     r->shake_amp = 0.0f;
     r->flash_t = 0.0f;
@@ -567,6 +571,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
         return;
     }
     r->vfx_time += dt;
+    render_rain_advance(&r->rain_phase_x, &r->rain_phase_y, dt);
 
     if (r->shake_t > 0.0f) {
         r->shake_t = fmaxf(0.0f, r->shake_t - dt);
