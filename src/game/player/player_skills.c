@@ -1,6 +1,7 @@
 #include "player/player_skills.h"
 
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "roguelike/upgrades.h"
 
 #include <math.h>
@@ -275,6 +276,9 @@ static void execute_gale(GameState *g, float origin_x, float origin_y, float bas
                     if (st->knockback_t < kb_t) {
                         st->knockback_t = kb_t;
                     }
+                    hit_enemy[id.index] = 1u;
+                } else if (en != NULL && en->def_id == ENEMY_BOSS_TENGU && dot > 0.35f) {
+                    boss_break_add_stagger(g, id, 8.0f);
                     hit_enemy[id.index] = 1u;
                 }
             } else if (ecs_has_mask(&g->ecs, id, COMP_PROJ) && d < 230.0 && dot > 0.25f) {

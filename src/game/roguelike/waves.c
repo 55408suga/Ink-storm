@@ -345,6 +345,7 @@ static void clear_ryu_body(GameState *g)
         g->ryu_body.orb_ids[i] = (EntityId){ECS_INVALID_INDEX, 0};
     }
     g->ryu_body.active_orb_slot = -1;
+    g->internal.ryu_ward_ping_cd = 0.0f;
 }
 
 static uint8_t clamp_reroll_lv(const RunConfig *cfg)
@@ -668,6 +669,7 @@ void waves_prepare_act(GameState *g)
     g->internal.ryu_coil_t = 0.0f;
     g->internal.ryu_coil_angle = 0.0f;
     g->internal.ryu_coil_active = false;
+    g->internal.ryu_ward_ping_cd = 0.0f;
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
     clear_transient_field_state(g);
@@ -723,6 +725,7 @@ void waves_start_wave(GameState *g, int32_t wave_index)
     g->internal.ryu_coil_t = 0.0f;
     g->internal.ryu_coil_angle = 0.0f;
     g->internal.ryu_coil_active = false;
+    g->internal.ryu_ward_ping_cd = 0.0f;
     clear_transient_field_state(g);
 
     g->player.ink = g->player.ink_max;

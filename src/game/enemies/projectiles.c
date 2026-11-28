@@ -253,8 +253,27 @@ void projectiles_step(GameState *g)
         }
 
         const float coupling = vel->fluid_coupling > 0.0f ? vel->fluid_coupling : 1.0f;
-        vel->vx += fu_px * 5.0f * coupling * INK_FIXED_DT;
-        vel->vy += fv_px * 5.0f * coupling * INK_FIXED_DT;
+        float add_fx = fu_px;
+        float add_fy = fv_px;
+        if (!proj->deflected) {
+            const float cur_sp = hypotf(vel->vx, vel->vy);
+            if (cur_sp > 1e-6f) {
+                const float ux = vel->vx / cur_sp;
+                const float uy = vel->vy / cur_sp;
+                const float f_par = fu_px * ux + fv_px * uy;
+                if (f_par > 0.0f) {
+                    /* A fluid moving slower than an incoming projectile cannot tailwind-boost it
+                     * (prevents fireballs/storm orbs from self-accelerating on their own wake),
+                     * while crosswinds, headwinds, and faster gusts apply in full. */
+                    const float eff_par = fmaxf(0.0f, f_par - cur_sp);
+                    const float drop = f_par - eff_par;
+                    add_fx -= ux * drop;
+                    add_fy -= uy * drop;
+                }
+            }
+        }
+        vel->vx += add_fx * 5.0f * coupling * INK_FIXED_DT;
+        vel->vy += add_fy * 5.0f * coupling * INK_FIXED_DT;
 
         const float tcx = sx - tr->x;
         const float tcy = sy - tr->y;
@@ -370,7 +389,7 @@ void projectiles_step(GameState *g)
         }
 
         psp = hypotf(vel->vx, vel->vy);
-        const float base_max_sp = proj->burning ? 640.0f : (proj->deflected ? 550.0f : 365.0f);
+        const float base_max_sp = proj->deflected ? (proj->burning ? 640.0f : 550.0f) : 365.0f;
         const float max_sp = proj->deflected
                                  ? (base_max_sp * g->internal.mods.deflected_max_speed_mul)
                                  : base_max_sp;
@@ -477,6 +496,33 @@ void projectiles_step(GameState *g)
         }
 
         if (proj->deflected) {
+            /* Phase 1 warded Ryu head emits a rate-limited ping while letting shots pass through
+             * to orbs behind it. */
+            const EntityId ryu_head = g->ryu_body.head_id;
+            if (ryu_head.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, ryu_head) &&
+                g->internal.ryu_ward_ping_cd <= 0.0f) {
+                const BossComp *rboss = game_boss(g, ryu_head);
+                const TransformComp *rtr = game_transform(g, ryu_head);
+                if (rboss != NULL && rtr != NULL && rboss->phase_idx == 0) {
+                    const float rx = rtr->x - tr->x;
+                    const float ry = rtr->y - tr->y;
+                    if (rx * rx + ry * ry < 46.0f * 46.0f) {
+                        const uint8_t m = g->ryu_body.orb_broken_mask;
+                        const int32_t broken =
+                            (int32_t)((m & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u));
+                        const int32_t rem = GAME_RYU_ORB_COUNT - broken;
+                        (void)game_push_event(g, (GameEvent){
+                                                     .type = EV_BOSS_WARD,
+                                                     .x = tr->x,
+                                                     .y = tr->y,
+                                                     .value = rem > 0 ? rem : 0,
+                                                     .flags = 0,
+                                                 });
+                        g->internal.ryu_ward_ping_cd = 0.5f;
+                    }
+                }
+            }
+
             ensure_enemy_cache(g, hw, enemy_ids, &enemy_count, &enemy_cache_built);
             for (uint32_t k = 0; k < enemy_count; ++k) {
                 const EntityId eid = enemy_ids[k];

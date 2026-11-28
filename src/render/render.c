@@ -127,7 +127,7 @@ static void draw_world_layers(RenderState *r, const GameState *g, const UiView *
         /* 4. Terrain above the ink it parts (Act 2 torii & rocks, Act 3 rocks & spirit pillars) */
         render_paper_draw_terrain(r, g, act);
         /* 5 & 6. Ink orbs, projectiles, shrines, enemies, boss */
-        render_draw_entities(r, g, act);
+        render_draw_entities(r, g, act, ui != NULL && ui->reduce_flash);
         /* 7. World VFX & Act 3 rain / wind telegraph */
         render_vfx_draw_world(r, g, ui);
         render_paper_draw_weather(r, g, act);
@@ -165,6 +165,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
         if (ui->showcase_page <= 2) {
             render_draw_clear_banner(r);
             render_vfx_draw_ui(r, g);
+            render_draw_shrine_hp_bar(r, g, ui);
             render_draw_hud(r, g, ui);
             render_draw_banners(r, g, ui);
         } else if (ui->showcase_page == 3) {
@@ -196,6 +197,7 @@ static void draw_ui_layers(RenderState *r, const GameState *g, const UiView *ui)
     default:
         render_draw_clear_banner(r);
         render_vfx_draw_ui(r, g);
+        render_draw_shrine_hp_bar(r, g, ui);
         render_draw_hud(r, g, ui);
         render_draw_banners(r, g, ui);
         render_draw_hint_strip(r, g, ui);

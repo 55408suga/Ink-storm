@@ -221,6 +221,7 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->ryu_trail_n = 0;
     r->ryu_trail_id = (EntityId){ECS_INVALID_INDEX, 0};
     r->ryu_awaken_t = 0.0f;
+    r->ryu_ward_flash_t = 0.0f;
     r->prev_nue_id = (EntityId){ECS_INVALID_INDEX, 0};
     memset(r->prev_proj_bounces, 0, sizeof r->prev_proj_bounces);
     memset(r->prev_proj_gen, 0, sizeof r->prev_proj_gen);
@@ -368,7 +369,7 @@ void render_consume_events(RenderState *r, const GameState *g)
             break;
         case EV_BOSS_ENTER:
             if (fx_budget_allows(r, ev->type)) {
-                r->boss_banner_t = 2.0f;
+                r->boss_banner_t = RENDER_BOSS_BANNER_SECONDS;
                 r->boss_banner_id = (EnemyDefId)ev->value;
             }
             add_shake(r, 5.0f, 0.24f);
@@ -398,6 +399,25 @@ void render_consume_events(RenderState *r, const GameState *g)
             add_shake(r, 5.0f, 0.20f);
             break;
         }
+        case EV_BOSS_BREAK:
+            if (ev->value == (int32_t)BOSS_BREAK_EV_START) {
+                push_callout(r, TEXT_CALLOUT_BOSS_BREAK, 0, ev->x, ev->y - 44.0f, PAL_KIN, true,
+                             1.25f);
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 16, 250.0f, 9.5f, 0.55f, PAL_KIN_HOT,
+                            true);
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 10, 180.0f, 6.5f, 0.45f, PAL_KIN, false);
+                add_shake(r, 6.0f, 0.22f);
+            } else if (ev->value == (int32_t)BOSS_BREAK_EV_EXTEND) {
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 8, 160.0f, 6.5f, 0.36f, PAL_AO_HOT, false);
+            } else if (ev->value == (int32_t)BOSS_BREAK_EV_FLINCH) {
+                spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 10, 190.0f, 7.5f, 0.40f, PAL_KIN_HOT,
+                            false);
+            }
+            break;
+        case EV_BOSS_WARD:
+            r->ryu_ward_flash_t = 0.25f;
+            spawn_burst(r, ev->x, ev->y, 0.0f, 0.0f, 6, 130.0f, 5.5f, 0.25f, PAL_SUMI_DARK, false);
+            break;
         case EV_WAVE_CLEAR:
             if (!fx_budget_allows(r, ev->type)) {
                 break;
@@ -592,6 +612,9 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
     if (r->ryu_awaken_t > 0.0f) {
         r->ryu_awaken_t = fmaxf(0.0f, r->ryu_awaken_t - dt);
     }
+    if (r->ryu_ward_flash_t > 0.0f) {
+        r->ryu_ward_flash_t = fmaxf(0.0f, r->ryu_ward_flash_t - dt);
+    }
     for (int s = 0; s < SKILL_COUNT; ++s) {
         if (r->skill_deny_t[s] > 0.0f) {
             r->skill_deny_t[s] = fmaxf(0.0f, r->skill_deny_t[s] - dt);
@@ -627,7 +650,7 @@ void render_update_vfx(RenderState *r, const GameState *g, float dt)
 
     if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && vfx_enemy_intro_shown_in(g->phase)) {
         r->intro_t += dt;
-        if (r->intro_t >= 2.0f) {
+        if (r->intro_t >= RENDER_ENEMY_INTRO_SECONDS) {
             r->intro_head = (r->intro_head + 1) % RENDER_MAX_INTRO_QUEUE;
             r->intro_count--;
             r->intro_t = 0.0f;

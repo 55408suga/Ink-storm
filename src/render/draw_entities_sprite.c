@@ -766,13 +766,14 @@ static void draw_nue(RenderState *r, const TransformComp *tr, const EnemyComp *e
                               .seed = seed + 31u},
                (InkTone){.color = PAL_AO_HOT, .alpha = 0.95f * p->body_a}, 1.0f);
 
-    const float eye_a = (crouched ? 0.6f : 1.0f) * p->body_a;
+    const float eye_a = p->body_a;
+    const PaletteId eye_pal = crouched ? PAL_KIN : PAL_AO_HOT;
     const float eye_size = 4.8f * rad / 40.0f;
     const SpriteAnchorId eyes[2] = {SPR_ANCHOR_EYE_L, SPR_ANCHOR_EYE_R};
     for (int k = 0; k < 2; ++k) {
         SpriteUv uv;
         if (sprite_anchor(p->def, eyes[k], &uv)) {
-            render_draw_eye_brush(r, plan_point(p, uv), eye_size, PAL_AO_HOT, eye_a);
+            render_draw_eye_brush(r, plan_point(p, uv), eye_size, eye_pal, eye_a);
         }
     }
     render_draw_nue_telegraph(r, tr, boss, seed);

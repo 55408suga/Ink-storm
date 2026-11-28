@@ -49,6 +49,13 @@ static void test_text_table_content_mappings(void)
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_epithet(ENEMY_ARCHER));
     TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_epithet(ENEMY_DEF_COUNT));
 
+    /* All boss counterplay cues */
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_cue(VFX_BOSS_CUE_NONE));
+    for (int cue = (int)VFX_BOSS_CUE_NONE + 1; cue < (int)VFX_BOSS_CUE_COUNT; ++cue) {
+        TEST_ASSERT_NOT_EQUAL(TEXT_NONE, text_boss_cue((VfxBossCue)cue));
+    }
+    TEST_ASSERT_EQUAL_INT(TEXT_NONE, text_boss_cue(VFX_BOSS_CUE_COUNT));
+
     /* All 28 upgrades x Lv1..3 (verify distinct IDs for P2 upgrades 24..27) */
     TEST_ASSERT_EQUAL_INT(28, UPG_COUNT);
     for (int id = 0; id < (int)UPG_COUNT; ++id) {
@@ -277,6 +284,22 @@ static void test_night_parade_scroll_mentions_dragon_orb_exception(void)
     TEST_ASSERT_NOT_NULL(strstr(en, "Dragon Orb"));
 }
 
+static void test_ryu_flinch_cue_text_points_to_remaining_orbs_and_x1_25(void)
+{
+    const TextId tid = text_boss_cue(VFX_BOSS_CUE_RYU_FLINCH);
+    TEST_ASSERT_EQUAL_INT(TEXT_BOSS_CUE_RYU_FLINCH, tid);
+    TEST_ASSERT_NOT_EQUAL(TEXT_BOSS_CUE_BREAK, tid);
+
+    const char *ja = text_get(tid, true);
+    const char *en = text_get(tid, false);
+    TEST_ASSERT_NOT_NULL(strstr(ja, "\xE9\xBE\x8D\xE7\x8E\x89"));
+    TEST_ASSERT_NOT_NULL(strstr(ja, "1.25"));
+    TEST_ASSERT_NULL(strstr(ja, "1.5"));
+    TEST_ASSERT_NOT_NULL(strstr(en, "orb"));
+    TEST_ASSERT_NOT_NULL(strstr(en, "x1.25"));
+    TEST_ASSERT_NULL(strstr(en, "x1.5"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -286,5 +309,6 @@ int main(void)
     RUN_TEST(test_text_layout_fit_prefix_stops_on_codepoint_boundary);
     RUN_TEST(test_utf8_clip_never_splits_a_codepoint);
     RUN_TEST(test_night_parade_scroll_mentions_dragon_orb_exception);
+    RUN_TEST(test_ryu_flinch_cue_text_points_to_remaining_orbs_and_x1_25);
     return UNITY_END();
 }

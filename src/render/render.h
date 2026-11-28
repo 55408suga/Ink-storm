@@ -329,6 +329,7 @@ typedef struct {
     int32_t ryu_trail_n;
     EntityId ryu_trail_id;
     float ryu_awaken_t;
+    float ryu_ward_flash_t;
 
     /* Bounce orb & Nue dash tracking */
     int32_t prev_proj_bounces[ECS_MAX_ENTITIES];

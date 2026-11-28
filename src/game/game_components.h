@@ -64,6 +64,19 @@ typedef struct {
     EntityId parent_id;
     int32_t telegraph_pattern;
     float telegraph;
+    /* Stagger accumulation (0..threshold) and idle timer before decay */
+    float stagger;
+    float stagger_idle_t;
+    /* Active Break duration (> 0), post-break guard cooldown, and BossBreakKind */
+    float break_t;
+    float break_guard_t;
+    int32_t break_kind;
+    /* Tengu queued volley countdown and pattern after gust */
+    float volley_t;
+    int32_t volley_pattern;
+    /* Nue grounded window length and lightning-link extension granted this stop */
+    float window_total;
+    float window_bonus;
 } BossComp;
 
 typedef struct {

@@ -124,6 +124,15 @@ static uint64_t hash_components(const GameState *g)
             h = ink_hash_u32(h, c->parent_id.gen);
             h = hash_i32(h, c->telegraph_pattern);
             h = ink_hash_f32(h, c->telegraph);
+            h = ink_hash_f32(h, c->stagger);
+            h = ink_hash_f32(h, c->stagger_idle_t);
+            h = ink_hash_f32(h, c->break_t);
+            h = ink_hash_f32(h, c->break_guard_t);
+            h = hash_i32(h, c->break_kind);
+            h = ink_hash_f32(h, c->volley_t);
+            h = hash_i32(h, c->volley_pattern);
+            h = ink_hash_f32(h, c->window_total);
+            h = ink_hash_f32(h, c->window_bonus);
         }
         if ((mask & COMP_PROJ) != 0) {
             const ProjComp *c = &g->comps.proj[i];
@@ -441,6 +450,7 @@ static uint64_t hash_internal(const GameInternal *in)
     h = ink_hash_f32(h, in->ryu_coil_t);
     h = ink_hash_f32(h, in->ryu_coil_angle);
     h = hash_bool(h, in->ryu_coil_active);
+    h = ink_hash_f32(h, in->ryu_ward_ping_cd);
     h = ink_hash_f32(h, in->thunderfire_gem_cd);
     h = hash_bool(h, in->sandbox_infinite_ink);
     return h;

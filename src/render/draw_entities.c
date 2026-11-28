@@ -1,4 +1,5 @@
 #include "draw_entities_internal.h"
+#include "enemies/boss_break.h"
 #include "ink_prims.h"
 #include "render_internal.h"
 #include "sprites.h"
@@ -1048,10 +1049,11 @@ static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyCo
     ink_fill_poly(r, face, 6, pal_color_alpha(PAL_GOFUN, 0.94f * alpha));
     ink_outline_tone(r, face, 6, true, outline_w * 0.72f, k_shade_dir,
                      (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.96f * alpha}, seed + 24u);
+    const PaletteId eye_pal = paused ? PAL_KIN : PAL_AO_HOT;
     render_draw_eye_brush(r, (Vector2){cx - rad * 0.42f, cy - rad * 0.36f + crouch_y}, 4.8f,
-                          PAL_AO_HOT, alpha);
+                          eye_pal, alpha);
     render_draw_eye_brush(r, (Vector2){cx - rad * 0.08f, cy - rad * 0.36f + crouch_y}, 4.8f,
-                          PAL_AO_HOT, alpha);
+                          eye_pal, alpha);
 
     /* Crackling azure lightning arcs clinging to cloud */
     const Vector2 z1[4] = {
@@ -1779,7 +1781,291 @@ static void draw_gimmick_effects(RenderState *r, const GameState *g, uint64_t bo
     }
 }
 
-void render_draw_entities(RenderState *r, const GameState *g, int act_index)
+void render_draw_boss_stagger_arc(RenderState *r, const GameState *g, const TransformComp *tr,
+                                  const EnemyComp *en, const BossComp *boss, uint32_t seed)
+{
+    if (r == NULL || g == NULL || tr == NULL || en == NULL || boss == NULL) {
+        return;
+    }
+    const bool eligible =
+        (en->def_id == ENEMY_BOSS_TENGU) || (en->def_id == ENEMY_BOSS_RYU && boss->phase_idx >= 1);
+    if (!eligible || boss->stagger <= 0.0f || boss->break_t > 0.0f) {
+        return;
+    }
+    const float thresh = boss_break_threshold(g);
+    const float frac = thresh > 1e-4f ? ink_clampf(boss->stagger / thresh, 0.0f, 1.0f) : 0.0f;
+    if (frac <= 1e-4f) {
+        return;
+    }
+    const float rad = (tr->radius > 10.0f ? tr->radius : 36.0f) + 22.0f;
+    const Vector2 center = {tr->x, tr->y};
+    const float a0 = -k_ent_pi * 0.5f;
+    ink_arc_stroke(r, center, rad, a0, a0 + k_ent_two_pi,
+                   (BrushProfile){.w_max = 2.6f,
+                                  .w_min_ratio = 0.55f,
+                                  .entry = 0.05f,
+                                  .exit = 0.05f,
+                                  .dry = 0.15f,
+                                  .seed = seed + 301u},
+                   (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.30f});
+    ink_arc_stroke(r, center, rad, a0, a0 + frac * k_ent_two_pi,
+                   (BrushProfile){.w_max = 3.2f,
+                                  .w_min_ratio = 0.65f,
+                                  .entry = 0.08f,
+                                  .exit = 0.08f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 302u},
+                   (InkTone){.color = PAL_KIN, .alpha = 0.70f});
+}
+
+void render_draw_boss_break_ring(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                                 const BossComp *boss, bool reduce_flash, uint32_t seed)
+{
+    if (r == NULL || tr == NULL || en == NULL || boss == NULL || boss->break_t <= 0.0f) {
+        return;
+    }
+    const float rad = tr->radius > 10.0f ? tr->radius : 36.0f;
+    const float dur = boss_break_duration_for(en->def_id, (BossBreakKind)boss->break_kind);
+    const float frac = dur > 1e-4f ? ink_clampf(boss->break_t / dur, 0.0f, 1.0f) : 0.0f;
+    const float rot = reduce_flash ? 0.0f : (r->vfx_time * 1.2f);
+    const Vector2 center = {tr->x, tr->y};
+
+    /* Inner gold brush ring (r + 18) and outer sumi ring (r + 28). */
+    ink_arc_stroke(r, center, rad + 18.0f, rot, rot + k_ent_two_pi - 0.18f,
+                   (BrushProfile){.w_max = 3.2f,
+                                  .w_min_ratio = 0.55f,
+                                  .entry = 0.08f,
+                                  .exit = 0.12f,
+                                  .dry = 0.05f,
+                                  .seed = seed + 310u},
+                   (InkTone){.color = PAL_KIN_HOT, .alpha = 0.92f});
+    ink_arc_stroke(r, center, rad + 28.0f, -rot, -rot + k_ent_two_pi - 0.24f,
+                   (BrushProfile){.w_max = 2.4f,
+                                  .w_min_ratio = 0.45f,
+                                  .entry = 0.08f,
+                                  .exit = 0.14f,
+                                  .dry = 0.15f,
+                                  .seed = seed + 311u},
+                   (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.85f});
+
+    /* Closing remaining-duration arc between the two rings. */
+    if (frac > 0.01f) {
+        const float a0 = -k_ent_pi * 0.5f;
+        ink_arc_stroke(r, center, rad + 23.0f, a0, a0 + frac * k_ent_two_pi,
+                       (BrushProfile){.w_max = 4.0f,
+                                      .w_min_ratio = 0.70f,
+                                      .entry = 0.06f,
+                                      .exit = 0.06f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 312u},
+                       (InkTone){.color = PAL_KIN, .alpha = 0.94f});
+    }
+
+    /* 6 rotating radial ticks highlighting the Break state. */
+    for (int k = 0; k < 6; ++k) {
+        const float ang = rot + (float)k * (k_ent_two_pi / 6.0f);
+        const float ca = cosf(ang);
+        const float sa = sinf(ang);
+        const Vector2 tick[2] = {
+            {center.x + ca * (rad + 14.0f), center.y + sa * (rad + 14.0f)},
+            {center.x + ca * (rad + 33.0f), center.y + sa * (rad + 33.0f)},
+        };
+        ink_stroke(r, tick, 2,
+                   (BrushProfile){.w_max = 2.4f,
+                                  .w_min_ratio = 0.40f,
+                                  .entry = 0.12f,
+                                  .exit = 0.25f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 315u + (uint32_t)k},
+                   (InkTone){.color = PAL_KIN_HOT, .alpha = 0.90f}, 1.0f);
+    }
+}
+
+void render_draw_nue_grounded_ring(RenderState *r, const TransformComp *tr, const EnemyComp *en,
+                                   const BossComp *boss, const HealthComp *hp, uint32_t seed)
+{
+    if (r == NULL || tr == NULL || en == NULL || boss == NULL || hp == NULL) {
+        return;
+    }
+    if (en->def_id != ENEMY_BOSS_NUE || en->ai_state != 1 || hp->invuln_t > 0.0f) {
+        return;
+    }
+    const float rad = tr->radius > 10.0f ? tr->radius : 40.0f;
+    const Vector2 center = {tr->x, tr->y};
+
+    /* Grounded indigo-bright ring signaling slam vulnerability. */
+    ink_arc_stroke(r, center, rad + 16.0f, 0.0f, k_ent_two_pi - 0.12f,
+                   (BrushProfile){.w_max = 2.8f,
+                                  .w_min_ratio = 0.55f,
+                                  .entry = 0.08f,
+                                  .exit = 0.10f,
+                                  .dry = 0.05f,
+                                  .seed = seed + 330u},
+                   (InkTone){.color = PAL_AO_HOT, .alpha = 0.85f});
+
+    /* Remaining grounded window arc. */
+    if (boss->window_total > 1e-4f && en->fire_cd > 0.0f) {
+        const float frac = ink_clampf(en->fire_cd / boss->window_total, 0.0f, 1.0f);
+        const float a0 = -k_ent_pi * 0.5f;
+        ink_arc_stroke(r, center, rad + 21.0f, a0, a0 + frac * k_ent_two_pi,
+                       (BrushProfile){.w_max = 3.4f,
+                                      .w_min_ratio = 0.65f,
+                                      .entry = 0.06f,
+                                      .exit = 0.06f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 331u},
+                       (InkTone){.color = PAL_AO, .alpha = 0.88f});
+    }
+
+    /* 4 short grounding pin ticks beneath the body. */
+    static const float k_pin_angles[4] = {0.785398f, 1.308997f, 1.832596f, 2.356194f};
+    for (int k = 0; k < 4; ++k) {
+        const float ca = cosf(k_pin_angles[k]);
+        const float sa = sinf(k_pin_angles[k]);
+        const Vector2 pin[2] = {
+            {center.x + ca * (rad + 11.0f), center.y + sa * (rad + 11.0f)},
+            {center.x + ca * (rad + 25.0f), center.y + sa * (rad + 25.0f)},
+        };
+        ink_stroke(r, pin, 2,
+                   (BrushProfile){.w_max = 2.6f,
+                                  .w_min_ratio = 0.45f,
+                                  .entry = 0.10f,
+                                  .exit = 0.25f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 334u + (uint32_t)k},
+                   (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, 1.0f);
+    }
+}
+
+void render_draw_ryu_ward(RenderState *r, const GameState *g, const TransformComp *tr,
+                          const BossComp *boss, uint32_t seed)
+{
+    if (r == NULL || g == NULL || tr == NULL || boss == NULL || boss->phase_idx != 0) {
+        return;
+    }
+    const Vector2 center = {tr->x, tr->y};
+    const float ward_r = 62.0f;
+    const float alpha = r->ryu_ward_flash_t > 0.0f ? 0.95f : 0.55f;
+
+    /* 12-dash sumi ward circle indicating invulnerable Phase 1 head. */
+    for (int k = 0; k < 12; ++k) {
+        const float a0 = (float)k * (k_ent_two_pi / 12.0f);
+        ink_arc_stroke(r, center, ward_r, a0, a0 + 0.30f,
+                       (BrushProfile){.w_max = 2.8f,
+                                      .w_min_ratio = 0.55f,
+                                      .entry = 0.10f,
+                                      .exit = 0.12f,
+                                      .dry = 0.10f,
+                                      .seed = seed + 340u + (uint32_t)k},
+                       (InkTone){.color = PAL_SUMI_DARK, .alpha = alpha});
+    }
+
+    /* 3 seal dots at 120 deg in orb colors (alive filled, broken hollow). */
+    static const PaletteId k_seal_pal[GAME_RYU_ORB_COUNT] = {PAL_SHU, PAL_AO, PAL_GOFUN};
+    for (int k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
+        const float ang = -k_ent_pi * 0.5f + (float)k * (k_ent_two_pi / 3.0f);
+        const Vector2 sp = {center.x + cosf(ang) * ward_r, center.y + sinf(ang) * ward_r};
+        const bool broken = (g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)k)) != 0u;
+        if (broken) {
+            ink_arc_stroke(r, sp, 5.2f, 0.0f, k_ent_two_pi - 0.15f,
+                           (BrushProfile){.w_max = 1.8f,
+                                          .w_min_ratio = 0.50f,
+                                          .entry = 0.10f,
+                                          .exit = 0.10f,
+                                          .dry = 0.25f,
+                                          .seed = seed + 360u + (uint32_t)k},
+                           (InkTone){.color = PAL_SUMI_CLEAR, .alpha = 0.80f});
+        } else {
+            ink_teardrop(r, sp, (Vector2){0.0f, -1.0f}, 7.2f, 6.4f,
+                         pal_color_alpha(k_seal_pal[k], 0.94f));
+            ink_arc_stroke(r, sp, 5.6f, 0.0f, k_ent_two_pi,
+                           (BrushProfile){.w_max = 1.6f,
+                                          .w_min_ratio = 0.50f,
+                                          .entry = 0.10f,
+                                          .exit = 0.10f,
+                                          .dry = 0.0f,
+                                          .seed = seed + 365u + (uint32_t)k},
+                           (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.88f});
+        }
+    }
+}
+
+void render_draw_ryu_orb_target(RenderState *r, const GameState *g, const TransformComp *tr,
+                                const BossComp *boss, bool reduce_flash, uint32_t seed)
+{
+    if (r == NULL || g == NULL || tr == NULL || boss == NULL) {
+        return;
+    }
+    const Vector2 center = {tr->x, tr->y};
+    const bool is_active = (g->ryu_body.active_orb_slot == boss->part_id);
+    if (!is_active) {
+        ink_arc_stroke(r, center, 36.0f, 0.0f, k_ent_two_pi - 0.12f,
+                       (BrushProfile){.w_max = 2.2f,
+                                      .w_min_ratio = 0.50f,
+                                      .entry = 0.10f,
+                                      .exit = 0.10f,
+                                      .dry = 0.10f,
+                                      .seed = seed + 370u},
+                       (InkTone){.color = PAL_GOFUN, .alpha = 0.45f});
+        return;
+    }
+
+    ink_arc_stroke(r, center, 40.0f, 0.0f, k_ent_two_pi - 0.08f,
+                   (BrushProfile){.w_max = 3.0f,
+                                  .w_min_ratio = 0.60f,
+                                  .entry = 0.08f,
+                                  .exit = 0.08f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 372u},
+                   (InkTone){.color = PAL_KIN, .alpha = 0.90f});
+
+    /* 3 inward chevrons pulsing at 2 Hz toward the active Dragon Orb. */
+    const float pulse = reduce_flash ? 0.0f : (4.0f * sinf(k_ent_two_pi * 2.0f * r->vfx_time));
+    const float tip_r = 42.0f + pulse;
+    const float tail_r = 52.0f + pulse;
+    for (int k = 0; k < 3; ++k) {
+        const float ang = -k_ent_pi * 0.5f + (float)k * (k_ent_two_pi / 3.0f);
+        const float ca = cosf(ang);
+        const float sa = sinf(ang);
+        const float px = -sa;
+        const float py = ca;
+        const Vector2 chev[3] = {
+            {center.x + ca * tail_r + px * 6.5f, center.y + sa * tail_r + py * 6.5f},
+            {center.x + ca * tip_r, center.y + sa * tip_r},
+            {center.x + ca * tail_r - px * 6.5f, center.y + sa * tail_r - py * 6.5f},
+        };
+        ink_stroke(r, chev, 3,
+                   (BrushProfile){.w_max = 2.6f,
+                                  .w_min_ratio = 0.55f,
+                                  .entry = 0.10f,
+                                  .exit = 0.10f,
+                                  .dry = 0.0f,
+                                  .seed = seed + 375u + (uint32_t)k},
+                   (InkTone){.color = PAL_KIN_HOT, .alpha = 0.94f}, 1.0f);
+    }
+}
+
+static void draw_boss_signifiers(RenderState *r, const GameState *g, const TransformComp *tr,
+                                 const EnemyComp *en, const BossComp *boss, const HealthComp *hp,
+                                 bool reduce_flash, uint32_t seed)
+{
+    if (boss == NULL || en == NULL) {
+        return;
+    }
+    if (en->def_id == ENEMY_BOSS_TENGU) {
+        render_draw_boss_stagger_arc(r, g, tr, en, boss, seed);
+        render_draw_boss_break_ring(r, tr, en, boss, reduce_flash, seed);
+    } else if (en->def_id == ENEMY_BOSS_NUE) {
+        render_draw_nue_grounded_ring(r, tr, en, boss, hp, seed);
+        render_draw_boss_break_ring(r, tr, en, boss, reduce_flash, seed);
+    } else if (en->def_id == ENEMY_BOSS_RYU) {
+        render_draw_ryu_ward(r, g, tr, boss, seed);
+        render_draw_boss_stagger_arc(r, g, tr, en, boss, seed);
+        render_draw_boss_break_ring(r, tr, en, boss, reduce_flash, seed);
+    }
+}
+
+void render_draw_entities(RenderState *r, const GameState *g, int act_index, bool reduce_flash)
 {
     if (r == NULL || g == NULL) {
         return;
@@ -1859,6 +2145,8 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         }
         if (en->def_id != ENEMY_BOSS_RYU_ORB &&
             render_sprite_draw_enemy(r, g, id, primary_shrine, act_index)) {
+            draw_boss_signifiers(r, g, tr, en, game_boss(g, id), game_health(g, id), reduce_flash,
+                                 seed);
             draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
             continue;
         }
@@ -1904,6 +2192,8 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
             break;
         }
 
+        draw_boss_signifiers(r, g, tr, en, game_boss(g, id), game_health(g, id), reduce_flash,
+                             seed);
         draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
     }
 
@@ -1924,6 +2214,7 @@ void render_draw_entities(RenderState *r, const GameState *g, int act_index)
         if (!render_sprite_draw_enemy(r, g, id, primary_shrine, act_index)) {
             draw_boss_ryu_orb(r, tr, game_boss(g, id), seed, g->ticks, act_index, 1.0f);
         }
+        render_draw_ryu_orb_target(r, g, tr, game_boss(g, id), reduce_flash, seed);
         draw_status_overlays(r, tr, game_status(g, id), game_health(g, id), seed);
     }
 

@@ -147,6 +147,7 @@ typedef struct {
     float ryu_coil_t;
     float ryu_coil_angle;
     bool ryu_coil_active;
+    float ryu_ward_ping_cd;
 
     /* Phase 5-A fields */
     float thunderfire_gem_cd;

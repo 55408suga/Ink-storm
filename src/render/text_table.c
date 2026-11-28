@@ -54,8 +54,9 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_ENEMY_UMBRELLA_INTRO] = {.ja = "風斬りで壁や敵へ叩きつけよ",
                                    .en = "Slam into walls with Gale Burst"},
     [TEXT_ENEMY_BOSS_TENGU_NAME] = {.ja = "大天狗", .en = "O-Tengu"},
-    [TEXT_ENEMY_BOSS_TENGU_INTRO] = {.ja = "紅風を押し返し火球を奪え",
-                                     .en = "Push back crimson wind"},
+    [TEXT_ENEMY_BOSS_TENGU_INTRO] =
+        {.ja = "紅風が止んだら弾を返し、天狗を大隙へ崩せ",
+         .en = "When the gust fades, return its shots to break the Tengu"},
     [TEXT_ENEMY_LANTERN_STORM_NAME] = {.ja = "提灯妖・雷", .en = "Storm Lantern"},
     [TEXT_ENEMY_LANTERN_STORM_INTRO] = {.ja = "雷球を墨へ通し雷墨連鎖を起こせ",
                                         .en = "Guide storm orbs into ink for chain lightning"},
@@ -69,12 +70,11 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_ENEMY_INK_LEECH_INTRO] = {.ja = "墨を吸い膨らむ。炎上で焼き墨を奪い返せ",
                                     .en = "Absorbs ink to heal; burn it to burst ink back"},
     [TEXT_ENEMY_BOSS_NUE_NAME] = {.ja = "鵺", .en = "Nue"},
-    [TEXT_ENEMY_BOSS_NUE_INTRO] = {.ja = "雷帯を墨で繋ぎ、停止の隙に柱へ叩きつけよ",
-                                   .en = "Link lightning trails with ink; slam while paused"},
+    [TEXT_ENEMY_BOSS_NUE_INTRO] = {.ja = "着地の輪が出たら風斬りで柱へ叩きつけよ",
+                                   .en = "When Nue lands, Gale it into a pillar"},
     [TEXT_ENEMY_BOSS_RYU_NAME] = {.ja = "一筆龍", .en = "Ippitsu-Ryu"},
-    [TEXT_ENEMY_BOSS_RYU_INTRO] = {.ja = "三つの龍玉を凌ぎ、点睛後は三元共鳴で討て",
-                                   .en =
-                                       "Endure three orbs; finish with Cataclysm after awakening"},
+    [TEXT_ENEMY_BOSS_RYU_INTRO] = {.ja = "結界の龍玉を割り、点睛後は龍睛を射抜け",
+                                   .en = "Break the warded orbs, then strike the awakened eye"},
     [TEXT_ENEMY_OFUDA_FOX_NAME] = {.ja = "狐符", .en = "Ofuda Fox"},
     [TEXT_ENEMY_OFUDA_FOX_INTRO] = {.ja = "味方に結界を張り、追尾符を放つ",
                                     .en = "Wards allies with barriers and fires homing ofuda"},
@@ -84,6 +84,27 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_BOSS_TENGU_EPITHET] = {.ja = "紅風の大天狗", .en = "O-Tengu of the Crimson Wind"},
     [TEXT_BOSS_NUE_EPITHET] = {.ja = "雷雲の鵺", .en = "Nue of the Thunderclouds"},
     [TEXT_BOSS_RYU_EPITHET] = {.ja = "霊峰の龍脈", .en = "Dragon Vein of the Spirit Peak"},
+    [TEXT_BOSS_CUE_TENGU_P1] = {.ja = "紅風の後に矢が来る — 風が止んだら弾を返して崩せ",
+                                .en =
+                                    "Gust first, volley after - return shots to break its stance"},
+    [TEXT_BOSS_CUE_TENGU_P2] =
+        {.ja = "羽団扇の逆渦は渦印で打ち消し、返し弾で崩せ",
+         .en = "Cancel the reverse fan vortex with Cyclone, keep returning shots"},
+    [TEXT_BOSS_CUE_NUE_MOVING] = {.ja = "着地までに雷帯を墨で繋げ（停止が延びる）",
+                                  .en = "Link the lightning trail with ink - it pins Nue longer"},
+    [TEXT_BOSS_CUE_NUE_GROUNDED] = {.ja = "着地！ 風斬りで柱か壁へ叩きつけよ",
+                                    .en = "Grounded! Gale Nue into a pillar or wall"},
+    [TEXT_BOSS_CUE_RYU_P1] = {.ja = "本体は結界で無敵 — 光る龍玉を割れ",
+                              .en = "The head is warded - break the glowing Dragon Orb"},
+    [TEXT_BOSS_CUE_RYU_P2] = {.ja = "点睛：龍睛が弱点 — 偏向弾と三元共鳴で射抜け",
+                              .en =
+                                  "Eye awakened - hit the head with returned shots and Cataclysm"},
+    [TEXT_BOSS_CUE_RYU_P3] = {.ja = "昇龍：三元共鳴×2 — 龍巻きは渦印で打ち消せ",
+                              .en = "Ascension: Cataclysm x2 - cancel the coil with Cyclone"},
+    [TEXT_BOSS_CUE_RYU_FLINCH] = {.ja = "怯み！ 残る龍玉を狙え（被ダメ×1.25）",
+                                  .en = "FLINCH! Strike remaining orbs (x1.25 damage)"},
+    [TEXT_BOSS_CUE_BREAK] = {.ja = "大隙！ 今が攻め時（被ダメ×1.5）",
+                             .en = "BREAK! Strike now (x1.5 damage)"},
 
     [TEXT_CALLOUT_BLAZING] = {.ja = "紅蓮墨嵐！", .en = "Blazing Inkstorm!"},
     [TEXT_CALLOUT_TEMPEST] = {.ja = "雷墨連鎖", .en = "Tempest Lightning"},
@@ -94,6 +115,7 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_CALLOUT_SURGE] = {.ja = "墨昇華", .en = "Ink Surge"},
     [TEXT_CALLOUT_WAVE_CLEAR] = {.ja = "波を祓った", .en = "Wave Cleared"},
     [TEXT_CALLOUT_ACT_CLEAR] = {.ja = "幕を討った", .en = "Act Cleared"},
+    [TEXT_CALLOUT_BOSS_BREAK] = {.ja = "大隙！", .en = "BREAK!"},
 
     [TEXT_REWARD_TITLE] = {.ja = "墨の恩恵を選べ", .en = "Choose a Blessing"},
     [TEXT_REWARD_RELIC_TITLE] = {.ja = "大遺物を選べ", .en = "Choose a Great Relic"},
@@ -731,6 +753,32 @@ TextId text_boss_epithet(EnemyDefId id)
         return TEXT_BOSS_NUE_EPITHET;
     case ENEMY_BOSS_RYU:
         return TEXT_BOSS_RYU_EPITHET;
+    default:
+        return TEXT_NONE;
+    }
+}
+
+TextId text_boss_cue(VfxBossCue cue)
+{
+    switch (cue) {
+    case VFX_BOSS_CUE_TENGU_P1:
+        return TEXT_BOSS_CUE_TENGU_P1;
+    case VFX_BOSS_CUE_TENGU_P2:
+        return TEXT_BOSS_CUE_TENGU_P2;
+    case VFX_BOSS_CUE_NUE_MOVING:
+        return TEXT_BOSS_CUE_NUE_MOVING;
+    case VFX_BOSS_CUE_NUE_GROUNDED:
+        return TEXT_BOSS_CUE_NUE_GROUNDED;
+    case VFX_BOSS_CUE_RYU_P1:
+        return TEXT_BOSS_CUE_RYU_P1;
+    case VFX_BOSS_CUE_RYU_P2:
+        return TEXT_BOSS_CUE_RYU_P2;
+    case VFX_BOSS_CUE_RYU_P3:
+        return TEXT_BOSS_CUE_RYU_P3;
+    case VFX_BOSS_CUE_RYU_FLINCH:
+        return TEXT_BOSS_CUE_RYU_FLINCH;
+    case VFX_BOSS_CUE_BREAK:
+        return TEXT_BOSS_CUE_BREAK;
     default:
         return TEXT_NONE;
     }

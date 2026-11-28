@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "demo.h"
+#include "enemies/boss_break.h"
 #include "paths.h"
 #include "raylib.h"
 
@@ -247,7 +248,7 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
     g->shrine_count = 1;
     g->shrines[0].x = 112.0f;
     g->shrines[0].y = 326.0f;
-    g->shrines[0].hp = 9;
+    g->shrines[0].hp = heavy_ink_60pct ? 3 : 9;
     g->shrines[0].max_hp = 11;
 
     /* All 7 regular enemy types + 4 elite mutations */
@@ -292,13 +293,19 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
         }
     }
 
-    /* All 3 Act Bosses: O-Tengu, Nue (paused crouched), Ippitsu-Ryu */
+    /* All 3 Act Bosses: O-Tengu (stagger/break), Nue (grounded ring + gold eyes), Ryu (P1 ward) */
     const EntityId tengu = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 648.0f, 156.0f);
     BossComp *tbc = game_boss_mut(g, tengu);
     if (tbc != NULL) {
-        tbc->telegraph = 0.6f;
+        tbc->telegraph = heavy_ink_60pct ? 0.0f : 0.6f;
         tbc->gale_dx = 0.0f;
         tbc->gale_dy = 1.0f;
+        if (heavy_ink_60pct) {
+            tbc->break_t = 2.0f;
+            tbc->break_kind = (int32_t)BOSS_BREAK_STANCE;
+        } else {
+            tbc->stagger = 0.7f * boss_break_threshold(g);
+        }
     }
     if (game_health_mut(g, tengu) != NULL) {
         game_health_mut(g, tengu)->flash_t = 0.0f;
@@ -306,8 +313,13 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
 
     const EntityId nue = game_debug_spawn_enemy(g, ENEMY_BOSS_NUE, 845.0f, 162.0f);
     EnemyComp *nen = game_enemy_mut(g, nue);
+    BossComp *nbc = game_boss_mut(g, nue);
     if (nen != NULL) {
-        nen->ai_state = 1; /* Paused stance -> 1.3x thick outline */
+        nen->ai_state = 1;
+        nen->fire_cd = 1.4f;
+    }
+    if (nbc != NULL) {
+        nbc->window_total = 2.2f;
     }
     if (game_health_mut(g, nue) != NULL) {
         game_health_mut(g, nue)->flash_t = 0.0f;
@@ -317,7 +329,7 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
     BossComp *rbc = game_boss_mut(g, ryu);
     if (rbc != NULL) {
         rbc->part_id = 0;
-        rbc->phase_idx = 1; /* Awakened red eye */
+        rbc->phase_idx = 0;
     }
     if (game_health_mut(g, ryu) != NULL) {
         game_health_mut(g, ryu)->flash_t = 0.0f;

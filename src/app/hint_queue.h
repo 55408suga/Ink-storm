@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define HINT_SHOW_SECONDS 2.0f
+#define HINT_SHOW_SECONDS 4.0f
 
 typedef struct {
     HintId items[HINT_COUNT];

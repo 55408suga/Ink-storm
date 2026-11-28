@@ -25,6 +25,7 @@ static int voice_tier(const AudioVoice *v)
     case AUDIO_VOICE_ACT_CLEAR:
     case AUDIO_VOICE_SHRINE_GONG:
     case AUDIO_VOICE_BOSS_TAIKO:
+    case AUDIO_VOICE_BOSS_BREAK:
     case AUDIO_VOICE_CATACLYSM:
     case AUDIO_VOICE_GAME_OVER:
         return 3;
@@ -36,6 +37,7 @@ static int voice_tier(const AudioVoice *v)
     case AUDIO_VOICE_THUNDERBURST:
     case AUDIO_VOICE_ORB_DROP:
     case AUDIO_VOICE_SKILL_DENIED:
+    case AUDIO_VOICE_WARD_TAP:
     case AUDIO_VOICE_UI_CLICK:
         return 1;
     default:
@@ -55,6 +57,7 @@ static int voice_kind_cap(AudioVoiceKind kind)
     case AUDIO_VOICE_IGNITE_FLAME:
     case AUDIO_VOICE_STORM_ZAP:
     case AUDIO_VOICE_THUNDERBURST:
+    case AUDIO_VOICE_WARD_TAP:
     case AUDIO_VOICE_UI_CLICK:
         return 2;
     case AUDIO_VOICE_SKILL_DENIED:
@@ -604,6 +607,52 @@ static float step_single_voice(const AudioState *audio, AudioVoice *v, float nz)
         const float air = (v->lp - v->bp) * 0.85f * swell;
         out = (air + sinf(v->phase * k_two_pi) * 0.12f) * v->env * 0.44f;
         v->env *= 0.99970f;
+        break;
+    }
+    case AUDIO_VOICE_BOSS_BREAK: {
+        /* Acoustic hyoshigi wood clacks + soft 70 Hz taiko resonator (no pure-sine oscillator).
+         * param >= 0.75: full Break (double clack 90ms apart + taiko thump).
+         * param < 0.75: light extend clack (single strike at scaled gain). */
+        const float t = (float)v->age / sr;
+        const bool full_break = v->param >= 0.75f;
+        const float gain = (v->param > 0.0f && v->param <= 1.0f) ? v->param : 1.0f;
+        const float pink = audio_pink_step(&v->pink, nz);
+
+        const float c1 = audio_smoothstep(0.0f, 0.0012f, t) * expf(-t / 0.010f);
+        const float t2 = t - 0.090f;
+        const float c2 = (full_break && t2 >= 0.0f)
+                             ? (audio_smoothstep(0.0f, 0.0012f, t2) * expf(-t2 / 0.011f) * 0.92f)
+                             : 0.0f;
+        const float clack_exc = pink * (c1 + c2);
+        const float hi_wood = audio_svf_step(&v->svf[0], clack_exc, 1750.0f, 4.8f).bp * 0.58f +
+                              audio_svf_step(&v->svf[1], clack_exc, 2120.0f, 5.2f).bp * 0.36f;
+        const float lo_wood = audio_svf_step(&v->svf[2], clack_exc, 680.0f, 2.2f).bp * 0.42f;
+        const float clack = hi_wood + lo_wood;
+
+        float thump = 0.0f;
+        if (full_break) {
+            const float mallet =
+                audio_smoothstep(0.0f, 0.0015f, t) * expf(-t / 0.010f) * pink * 1.8f;
+            const float body = audio_svf_step(&v->svf[3], mallet, 70.0f, 7.5f).bp;
+            const float warm = audio_svf_step(&v->svf[4], body, 220.0f, 0.75f).lp;
+            thump = warm * expf(-t / 0.180f) * 1.15f;
+        }
+
+        out = (clack * 0.34f + thump * 0.36f) * gain;
+        const float max_t = full_break ? 0.55f : 0.14f;
+        v->env = t >= max_t ? 0.0f : expf(-t / (full_break ? 0.16f : 0.03f));
+        break;
+    }
+    case AUDIO_VOICE_WARD_TAP: {
+        /* Muted wooden ward tap (900 Hz band-pass noise resonator, no pure sine). */
+        const float t = (float)v->age / sr;
+        const float gain = (v->param > 0.0f && v->param <= 1.0f) ? v->param : 0.3f;
+        const float pink = audio_pink_step(&v->pink, nz);
+        const float tap_env = audio_smoothstep(0.0f, 0.0012f, t) * expf(-t / 0.013f);
+        const float wood = audio_svf_step(&v->svf[0], pink * tap_env, 900.0f, 4.2f).bp;
+        const float damp = audio_svf_step(&v->svf[1], wood, 1600.0f, 0.71f).lp;
+        out = damp * gain * 0.85f;
+        v->env = t >= 0.12f ? 0.0f : expf(-t / 0.025f);
         break;
     }
     default:

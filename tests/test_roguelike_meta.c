@@ -1877,7 +1877,7 @@ static void test_p2_relics_unlockable_and_mask(void)
         TEST_ASSERT_FLOAT_WITHIN(1.0f, 390.0f, game_velocity(g, oni_tb)->vx);
 
         /* Wall slam instant kills Kamaitachi; Stone Oni keeps its raw Heavy slam (80 + stun);
-         * stopped Nue takes 60 dmg. */
+         * stopped Nue takes 110 dmg + 1.6s stun. */
         clear_test_entities(g);
         const EntityId kama = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 48.0f, 200.0f);
         const EntityId oni_slam = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 48.0f, 340.0f);
@@ -1897,8 +1897,8 @@ static void test_p2_relics_unlockable_and_mask(void)
         TEST_ASSERT_EQUAL_INT32(10, game_health(g, oni_slam)->hp);
         TEST_ASSERT_TRUE(game_status(g, oni_slam)->stun_t >= 1.0f - 1e-5f);
         TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, nue));
-        TEST_ASSERT_EQUAL_INT32(640, game_health(g, nue)->hp);
-        TEST_ASSERT_TRUE(game_status(g, nue)->stun_t >= 1.0f - 1e-5f);
+        TEST_ASSERT_EQUAL_INT32(590, game_health(g, nue)->hp);
+        TEST_ASSERT_TRUE(game_status(g, nue)->stun_t >= 1.6f - 1e-5f);
         game_destroy(g);
     }
 

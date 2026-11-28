@@ -23,7 +23,7 @@
   - 日本語 UI/コールアウト文字列および表示文字列 ID（`text_id`）は `ink_game` に持たせない。定義テーブルも `text_id` を持たず、`ink_render` が内容 ID（`EnemyDefId`、`UpgradeId`、`UpgradeAxis` 等）から文字列表を引く。
   - **公開読み取り契約**: `GameState` の `internal`（`GameInternal`）以外のすべてのフィールドは `ink_render` / `ink_audio` / `app` が `const GameState *` 経由で読んでよい。`internal` は `ink_game` 専有とし、`ink_render` / `ink_audio` / `app` は参照しない。
   - **ヘッダの分割構成**:
-    - `game.h` → `fluid.h`, `ecs.h`, `meta.h`, `game_ids.h`, `game_events.h`, `game_components.h`, `game_internal.h`
+    - `game.h` → `fluid.h`, `ecs.h`, `meta.h`, `game_ids.h`, `game_events.h`, `game_components.h`, `game_internal.h`（ボス大隙共通モジュールは `src/game/enemies/boss_break.{h,c}` に配置）
     - `game_internal.h` → 自己完結（`<stdbool.h>`, `<stdint.h>`, `fluid.h`, `ecs.h`, `game_ids.h`, `game_events.h` のみ）
     - `audio.h` → `struct GameState` の前方宣言のみ（`game.h` を include しない）
     - `render.h` → `raylib.h`, `game.h`, `ui_view.h`, `sprite_rules.h`
@@ -330,7 +330,7 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 | `1ULL << 2` | `HealthComp` | `hp, max_hp, flash_t, invuln_t` |
 | `1ULL << 3` | `StatusComp` | `ink_mark_t, burn_acc, charge_t, knockback_t, stun_t, barrier_t` |
 | `1ULL << 4` | `EnemyComp` | `def_id, is_elite, elite_flags, phase, fire_cd, ai_state, absorbed_ink, windup` |
-| `1ULL << 5` | `BossComp` | `pattern, pattern_timer, phase_idx, gale_dx, gale_dy, gale_t, part_id, parent_id, telegraph_pattern, telegraph` |
+| `1ULL << 5` | `BossComp` | `pattern, pattern_timer, phase_idx, gale_dx, gale_dy, gale_t, part_id, parent_id, telegraph_pattern, telegraph, stagger, stagger_idle_t, break_t, break_guard_t, break_kind, volley_t, volley_pattern, window_total, window_bonus` |
 | `1ULL << 6` | `ProjComp` | `kind, deflected, burning, electrified, accelerated, pierce, bounces_left, age, trail[20], trail_n` |
 | `1ULL << 7` | `InkOrbComp` | `value, age` |
 | `1ULL << 8` | `GimmickComp` | `kind, elem_kind, timer, param_a, param_b`（第 3 幕霊柱・環境源等） |
@@ -348,7 +348,7 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 - `GameEvent events[GAME_MAX_EVENTS]`・`int32_t event_count`・`uint32_t dropped_events`
 - `PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`・`int32_t pending_impulse_count`
 - `RyuBodyState ryu_body`（多部位一筆龍の公開読み取り状態：`head_id`, `orb_ids[3]`, `orb_broken_mask`, `active_orb_slot`, 頭部軌跡リングバッファ `trail[GAME_RYU_TRAIL_CAP]` / `trail_head` / `trail_count`。`ink_render` が `internal` に触れずに胴の軌跡と龍玉破壊区間を描画するための公開契約）
-- `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離等を隔離し、描画・音・app は読まない）
+- `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離・`ryu_ward_ping_cd` 等を隔離し、描画・音・app は読まない）
 - 描画専用 VFX プール（`RenderState` 内）
 
 ---
@@ -418,6 +418,9 @@ typedef enum {
     EV_REWARD_REROLL,   /* value = 残りリロール回数 */
     EV_SKILL_DENIED,    /* value = SkillId（墨不足または CD 中） */
     EV_BOSS_PART_BREAK, /* value = part_id（0=炎玉, 1=雷玉, 2=風玉） */
+    EV_PURIFY,          /* 波/幕クリア時の墨還り浄化 */
+    EV_BOSS_BREAK,      /* value = BossBreakEvent（0=START, 1=END, 2=EXTEND, 3=FLINCH） */
+    EV_BOSS_WARD,       /* value = 残存龍玉数（一筆龍 P1 結界ピン） */
     EV_TYPE_COUNT
 } GameEventType;
 
@@ -453,6 +456,8 @@ typedef struct {
 | `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
 | `EV_BOSS_ENTER` / `EV_BOSS_PHASE` | ボスの位置 | — | `EnemyDefId` / 新フェーズ番号（多部位一筆龍：`2`=点睛、`3`=昇龍） | 0 |
 | `EV_BOSS_PART_BREAK` | 破壊された龍玉の座標 (px) | `0, 0` | `part_id`（`0`=炎玉, `1`=雷玉, `2`=風玉） | 致命打の `DMG_*` |
+| `EV_BOSS_BREAK` | ボスの位置 | `0, 0` | `BossBreakEvent`（`0`=START, `1`=END, `2`=EXTEND, `3`=FLINCH） | 0 |
+| `EV_BOSS_WARD` | 偏向弾の通過位置 | `0, 0` | 残存龍玉数（`1..3`） | 0 |
 | `EV_WAVE_CLEAR` / `EV_ACT_CLEAR` | 社の位置 / ボスの位置 | — | `wave_index` / `act_index` | 0 |
 | `EV_REWARD_PICK` | — | — | 強化札は `UpgradeId`、大遺物は `RelicId`、社修繕は -1、墨晶代替は獲得墨晶数（`10`/`30`） | 強化札=0、大遺物=`EVF_REWARD_RELIC`、修繕=`EVF_REWARD_REPAIR`、墨晶代替=`EVF_REWARD_CRYSTAL` |
 | `EV_HINT_TRIGGER` | 関連座標（なければ社の座標） | `0, 0` | `HintId`（`0..HINT_COUNT-1`） | 0 |

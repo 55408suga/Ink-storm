@@ -1,8 +1,10 @@
 #include "combat/damage.h"
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "enemies/enemy_defs.h"
 #include "enemies/projectiles.h"
 #include "game.h"
+#include "player/player_skills.h"
 #include "roguelike/relics.h"
 #include "roguelike/stage_gimmicks.h"
 #include "roguelike/waves.h"
@@ -689,12 +691,12 @@ static void test_boss_nue_and_boss_ryu(void)
     fluid_sample(&g->fluid, 910.0f, 190.0f, NULL, NULL, dye);
     TEST_ASSERT_TRUE(dye[2] > 0.2f);
 
-    /* Stopped (ai_state == 1): slamming into rock pillar deals 60 dmg + 1.0s stun. */
+    /* Stopped (ai_state == 1): slamming into rock pillar deals 110 dmg + 1.6s stun. */
     fluid_reset(&g->fluid);
     g->internal.nue_trail_t[0] = 0.0f;
     g->internal.nue_trail_t[1] = 0.0f;
     nen->ai_state = 1;
-    nen->fire_cd = 1.5f;
+    nen->fire_cd = 2.2f;
     ntr->x = 914.0f;
     ntr->y = 190.0f;
     nvel->vx = 360.0f;
@@ -705,8 +707,8 @@ static void test_boss_nue_and_boss_ryu(void)
     for (int t = 0; t < 4 && nhp->hp == hp_stop_before; ++t) {
         game_step(g, NULL, NULL);
     }
-    TEST_ASSERT_EQUAL_INT32(hp_stop_before - 60, nhp->hp);
-    TEST_ASSERT_TRUE(nst->stun_t >= 0.90f);
+    TEST_ASSERT_EQUAL_INT32(hp_stop_before - 110, nhp->hp);
+    TEST_ASSERT_TRUE(nst->stun_t >= 1.50f);
 
     /* Drop HP below 50% -> EV_BOSS_PHASE & phase_idx == 1. */
     g->event_count = 0;
@@ -846,10 +848,12 @@ static void test_boss_nue_and_boss_ryu(void)
         }
     }
     TEST_ASSERT_TRUE(saw_break0);
-    /* Next tick must not immediately fire from replacement orb; it counts down full warning. */
+    /* Next tick must not immediately fire from replacement orb; it counts down full warning
+     * (and holds during the 1.8s orb-break flinch). */
     game_step(g, NULL, NULL);
     TEST_ASSERT_EQUAL_INT32(1, g->ryu_body.active_orb_slot);
     TEST_ASSERT_TRUE(ren->fire_cd > 0.65f);
+    boss_break_end(g, ryu, false);
     ren->fire_cd = 0.01f;
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f, ren->fire_cd);
@@ -866,6 +870,7 @@ static void test_boss_nue_and_boss_ryu(void)
         }
     }
     TEST_ASSERT_TRUE(saw_break1);
+    boss_break_end(g, ryu, false);
     ren->fire_cd = 0.01f;
     game_step(g, NULL, NULL);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.2f * 0.85f * 0.85f, ren->fire_cd);
@@ -1223,10 +1228,17 @@ static void test_endless_loop_scaling_all_six_items(void)
     BossComp *tb = game_boss_mut(g, g->run.boss_id);
     EnemyComp *ten = game_enemy_mut(g, g->run.boss_id);
     tb->phase_idx = 1;
-    tb->pattern = 1; /* Fan Arrow (1.65 * 0.8 * 0.70 = 0.924 >= 0.70) */
+    /* Pattern B queues volley_t = 0.50s, so anti-overlap floor raises fire_cd to 0.50+0.60+0.10. */
+    tb->pattern = 1;
     ten->fire_cd = 0.01f;
     game_step(g, NULL, NULL);
-    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.65f * 0.8f * 0.70f, ten->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.20f, ten->fire_cd);
+    /* Pattern D (vortex, no volley) exposes the x0.70 endless CD floor directly: 2.0*0.8*0.70. */
+    tb->pattern = 3;
+    tb->volley_t = 0.0f;
+    ten->fire_cd = 0.01f;
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.0f * 0.8f * 0.70f, ten->fire_cd);
     TEST_ASSERT_TRUE(ten->fire_cd >= 0.70f);
 
     game_destroy(g);
@@ -1395,8 +1407,8 @@ static void test_nue_threshold_invuln_freezes_warned_stop_and_phase2_overlaps_tw
     }
 
     /* Let invuln finish on a clean field (no escort lantern reactions) and run through consecutive
-     * Phase 2 dashes: two trails overlap live for ~1.5s (~90 ticks) after the second dash starts.
-     */
+     * Phase 2 dashes: with the 2.2s grounded window + 0.5s telegraph against 3.5s trail lifetime,
+     * two trails overlap live for ~0.8s (~48 ticks) after the second dash starts. */
     for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
         const EntityId id = ecs_entity_at(&g->ecs, i);
         if (id.index != ECS_INVALID_INDEX && id.index != nue.index) {
@@ -1408,14 +1420,14 @@ static void test_nue_threshold_invuln_freezes_warned_stop_and_phase2_overlaps_tw
     game_status_mut(g, nue)->ink_mark_t = 0.0f;
     game_status_mut(g, nue)->knockback_t = 0.0f;
     int overlap_ticks = 0;
-    for (int t = 0; t < 480; ++t) {
+    for (int t = 0; t < 540; ++t) {
         g->shrines[0].hp = g->shrines[0].max_hp;
         game_step(g, NULL, NULL);
         if (g->internal.nue_trail_t[0] > 0.0f && g->internal.nue_trail_t[1] > 0.0f) {
             ++overlap_ticks;
         }
     }
-    TEST_ASSERT_GREATER_THAN_INT32(75, overlap_ticks);
+    TEST_ASSERT_GREATER_THAN_INT32(40, overlap_ticks);
     game_destroy(g);
 }
 
@@ -1709,6 +1721,793 @@ static void test_ryu_breath_in_spirit_pillar_spawns_all_six_shots_outside_solid(
     game_destroy(g);
 }
 
+static int32_t count_alive_mask(const GameState *g, uint64_t mask)
+{
+    int32_t count = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, mask)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static void test_tengu_volley_spawns_after_gust_ends_and_is_not_tailwind_boosted(void)
+{
+    for (int32_t pat = 0; pat < 3; ++pat) {
+        GameState *g = game_create(NULL);
+        TEST_ASSERT_NOT_NULL(g);
+        start_act_wave(g, 0, 0);
+        clear_enemies_and_projs(g);
+        fluid_reset(&g->fluid);
+        g->internal.spawn_cd = 999.0f;
+
+        const EntityId tengu = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 150.0f);
+        fluid_reset(&g->fluid);
+        EnemyComp *en = game_enemy_mut(g, tengu);
+        BossComp *bs = game_boss_mut(g, tengu);
+        bs->pattern = pat;
+        en->fire_cd = 0.001f;
+
+        /* Cast tick starts gust and queues volley, spawning zero projectiles immediately. */
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_EQUAL_INT32(0, count_alive_mask(g, COMP_PROJ));
+        TEST_ASSERT_TRUE(bs->gale_t > 0.0f);
+        TEST_ASSERT_TRUE(bs->volley_t > bs->gale_t);
+
+        bool saw_spawn = false;
+        float max_speed_near_shrine = 0.0f;
+        const float sx = g->shrines[0].x;
+        const float sy = g->shrines[0].y;
+        for (int t = 0; t < 240; ++t) {
+            g->shrines[0].hp = g->shrines[0].max_hp;
+            en->fire_cd = fmaxf(en->fire_cd, 5.0f);
+            game_step(g, NULL, NULL);
+            const int32_t projs = count_alive_mask(g, COMP_PROJ);
+            if (!saw_spawn && projs > 0) {
+                saw_spawn = true;
+                /* Gust must already be finished when projectiles spawn. */
+                TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->gale_t);
+            }
+            for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+                const EntityId pid = ecs_entity_at(&g->ecs, i);
+                if (pid.index == ECS_INVALID_INDEX || !ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+                    continue;
+                }
+                const TransformComp *ptr = game_transform(g, pid);
+                const VelocityComp *pvel = game_velocity(g, pid);
+                const ProjComp *pr = game_proj(g, pid);
+                if (ptr != NULL && pvel != NULL && pr != NULL && !pr->deflected) {
+                    const float dist = hypotf(ptr->x - sx, ptr->y - sy);
+                    if (dist <= 150.0f) {
+                        const float sp = hypotf(pvel->vx, pvel->vy);
+                        if (sp > max_speed_near_shrine) {
+                            max_speed_near_shrine = sp;
+                        }
+                    }
+                }
+            }
+        }
+        TEST_ASSERT_TRUE(saw_spawn);
+        TEST_ASSERT_TRUE(max_speed_near_shrine > 100.0f);
+        TEST_ASSERT_TRUE(max_speed_near_shrine <= 300.0f);
+        game_destroy(g);
+    }
+}
+
+static void test_tengu_gust_leaves_a_calm_zone_around_the_shrine(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, 0);
+    clear_enemies_and_projs(g);
+    fluid_reset(&g->fluid);
+    g->internal.spawn_cd = 999.0f;
+
+    const EntityId tengu = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 150.0f);
+    fluid_reset(&g->fluid);
+    EnemyComp *en = game_enemy_mut(g, tengu);
+    BossComp *bs = game_boss_mut(g, tengu);
+    bs->pattern = 2;
+    en->fire_cd = 0.001f;
+
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    float max_ring_speed_px = 0.0f;
+    for (int t = 0; t < 60; ++t) {
+        en->fire_cd = (t == 0) ? 0.001f : 99.0f;
+        game_step(g, NULL, NULL);
+        for (int k = 0; k < 8; ++k) {
+            const float ang = (float)k * (6.2831853f / 8.0f);
+            float u = 0.0f;
+            float v = 0.0f;
+            fluid_sample(&g->fluid, sx + cosf(ang) * 100.0f, sy + sinf(ang) * 100.0f, &u, &v, NULL);
+            const float sp_px = hypotf(u, v) * FLUID_CELL_PX;
+            if (sp_px > max_ring_speed_px) {
+                max_ring_speed_px = sp_px;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE(max_ring_speed_px < 20.0f);
+    game_destroy(g);
+}
+
+static void test_single_brush_stroke_deflects_tengu_volley_before_shrine(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, 0);
+    clear_enemies_and_projs(g);
+    fluid_reset(&g->fluid);
+    g->internal.spawn_cd = 999.0f;
+
+    const EntityId tengu = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 140.0f);
+    EnemyComp *en = game_enemy_mut(g, tengu);
+    BossComp *bs = game_boss_mut(g, tengu);
+    bs->pattern = 0;
+    en->fire_cd = 0.001f;
+    const int32_t hp0 = g->shrines[0].hp;
+
+    bool saw_fireballs = false;
+    int32_t deflected_count = 0;
+    int stroke_ticks = 0;
+    for (int t = 0; t < 160; ++t) {
+        if (t > 0) {
+            en->fire_cd = 99.0f;
+        }
+        /* Keep Tengu centered above the shrine so the volley lane is straight downward. */
+        game_transform_mut(g, tengu)->x = 640.0f;
+        game_transform_mut(g, tengu)->y = 140.0f;
+
+        BrushInput in = {.mx = 540.0f, .my = 200.0f, .pmx = 540.0f, .pmy = 200.0f, .paint = false};
+        if (count_alive_mask(g, COMP_PROJ) > 0) {
+            saw_fireballs = true;
+            if (stroke_ticks < 16) {
+                /* Single perpendicular sweep across the volley lane 160px above the shrine. */
+                const float x0 = 520.0f + (float)stroke_ticks * 16.0f;
+                const float x1 = x0 + 28.0f;
+                in = (BrushInput){.pmx = x0, .pmy = 200.0f, .mx = x1, .my = 200.0f, .paint = true};
+                ++stroke_ticks;
+            }
+        }
+        game_step(g, &in, NULL);
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId pid = ecs_entity_at(&g->ecs, i);
+            if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+                const ProjComp *pr = game_proj(g, pid);
+                if (pr != NULL && pr->deflected) {
+                    ++deflected_count;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE(saw_fireballs);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(2, deflected_count);
+    TEST_ASSERT_EQUAL_INT32(hp0, g->shrines[0].hp);
+    game_destroy(g);
+}
+
+static void test_tengu_returned_shots_build_stagger_into_a_2_8s_break(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+    const EntityId tengu = g->run.boss_id;
+    g->internal.spawn_cd = 999.0f;
+    clear_enemies_and_projs(g);
+    /* Respawn a clean Tengu for isolated orb/event counting. */
+    const EntityId boss = game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 160.0f);
+    BossComp *bs = game_boss_mut(g, boss);
+    EnemyComp *en = game_enemy_mut(g, boss);
+    g->event_count = 0;
+
+    const int32_t orbs_before = count_alive_mask(g, COMP_INK_ORB);
+    for (int k = 0; k < 5; ++k) {
+        (void)combat_apply_damage(g, boss, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0.0f, 0.0f);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.8f, bs->break_t);
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_STANCE, bs->break_kind);
+    TEST_ASSERT_EQUAL_INT32(orbs_before + 3, count_alive_mask(g, COMP_INK_ORB));
+
+    int start_events = 0;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_BOSS_BREAK && g->events[i].value == BOSS_BREAK_EV_START) {
+            ++start_events;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(1, start_events);
+
+    /* Next 20 base dmg hit during Break applies 30 dmg (x1.5). */
+    const int32_t dealt = combat_apply_damage(g, boss, 20, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(30, dealt);
+
+    /* Step through the entire 2.8s Break: no projectiles spawn, then END sets 3.0s guard. */
+    int end_events = 0;
+    en->fire_cd = 0.01f;
+    for (int t = 0; t < 175 && bs->break_t > 0.0f; ++t) {
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_EQUAL_INT32(0, count_alive_mask(g, COMP_PROJ));
+        for (int32_t i = 0; i < g->event_count; ++i) {
+            if (g->events[i].type == EV_BOSS_BREAK && g->events[i].value == BOSS_BREAK_EV_END) {
+                ++end_events;
+            }
+        }
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->break_t);
+    TEST_ASSERT_EQUAL_INT32(1, end_events);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 3.0f, bs->break_guard_t);
+
+    /* During guard, stagger gains are ignored. */
+    boss_break_add_stagger(g, boss, 50.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->stagger);
+    (void)tengu;
+    game_destroy(g);
+}
+
+static void test_tengu_phase_transition_ends_break_and_cancels_queued_volley(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    const EntityId tengu = g->run.boss_id;
+    BossComp *bs = game_boss_mut(g, tengu);
+    HealthComp *hp = game_health_mut(g, tengu);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Put Tengu in active Break + queued volley near 50% HP threshold. */
+    boss_break_start(g, tengu, BOSS_BREAK_STANCE, 2.8f, 0);
+    bs->volley_t = 0.6f;
+    bs->volley_pattern = 1;
+    hp->hp = hp->max_hp / 2 + 10;
+    g->event_count = 0;
+
+    (void)combat_apply_damage(g, tengu, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(1, bs->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, hp->invuln_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->break_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->stagger);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->volley_t);
+
+    bool saw_end = false;
+    bool saw_start = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_BOSS_BREAK) {
+            if (g->events[i].value == BOSS_BREAK_EV_END) {
+                saw_end = true;
+            } else if (g->events[i].value == BOSS_BREAK_EV_START) {
+                saw_start = true;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE(saw_end);
+    TEST_ASSERT_FALSE(saw_start);
+    game_destroy(g);
+}
+
+static void test_boss_stagger_threshold_scales_with_endless_loop_and_caps(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    g->run.act_index = 0;
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 100.0f, boss_break_threshold(g));
+    g->run.act_index = 2 * GAME_MAIN_ACT_COUNT;
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 130.0f, boss_break_threshold(g));
+    g->run.act_index = 10 * GAME_MAIN_ACT_COUNT;
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 145.0f, boss_break_threshold(g));
+
+    game_destroy(g);
+}
+
+static void test_nue_grounded_window_is_2_2s_with_1_6s_endless_floor(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    const EntityId nue = g->run.boss_id;
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Loop 0: grounded window = 2.2s. */
+    en->ai_state = 2;
+    en->fire_cd = 0.001f;
+    enemies_ai_step(g);
+    TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.2f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.2f, bs->window_total);
+
+    /* High Endless loop: floored at 1.6s. */
+    g->run.act_index = 10 * GAME_MAIN_ACT_COUNT + 1;
+    en->ai_state = 2;
+    en->fire_cd = 0.001f;
+    enemies_ai_step(g);
+    TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.6f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.6f, bs->window_total);
+
+    game_destroy(g);
+}
+
+static void test_nue_grounded_wall_slam_deals_110_stuns_1_6s_and_breaks_cancelling_windup(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    const EntityId nue = g->run.boss_id;
+    g->internal.spawn_cd = 999.0f;
+    TransformComp *tr = game_transform_mut(g, nue);
+    VelocityComp *vel = game_velocity_mut(g, nue);
+    HealthComp *hp = game_health_mut(g, nue);
+    StatusComp *st = game_status_mut(g, nue);
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+
+    tr->x = 48.0f;
+    tr->y = 360.0f;
+    en->ai_state = 1;
+    en->windup = 0.45f;
+    en->fire_cd = 1.8f;
+    bs->window_total = 2.2f;
+    const int32_t pat_before = bs->pattern;
+    const int32_t hp0 = hp->hp;
+    vel->vx = -360.0f;
+    vel->vy = 0.0f;
+    st->knockback_t = 0.9f;
+    const int32_t orbs_before = count_alive_mask(g, COMP_INK_ORB);
+
+    combat_physics_and_slams_step(g);
+    TEST_ASSERT_EQUAL_INT32(hp0 - 110, hp->hp);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.6f, st->stun_t);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.5f, bs->break_t);
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_SLAM, bs->break_kind);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, en->windup);
+    TEST_ASSERT_EQUAL_INT32(pat_before, bs->pattern);
+    TEST_ASSERT_EQUAL_INT32(orbs_before + 2, count_alive_mask(g, COMP_INK_ORB));
+
+    /* Slam damage is excluded from the x1.5 Break multiplier, whereas physical damage gets x1.5. */
+    TEST_ASSERT_EQUAL_INT32(110, combat_apply_damage(g, nue, 110, DMG_PHYSICAL | DMG_SLAM, 0, 0));
+    TEST_ASSERT_EQUAL_INT32(30, combat_apply_damage(g, nue, 20, DMG_PHYSICAL, 0, 0));
+
+    /* While Break is active (2.5s), fire_cd stays frozen even after stun expires. */
+    const float frozen_cd = en->fire_cd;
+    for (int t = 0; t < 140; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        if (bs->break_t > 0.0f) {
+            TEST_ASSERT_FLOAT_WITHIN(1e-4f, frozen_cd, en->fire_cd);
+            TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+        }
+    }
+    game_destroy(g);
+}
+
+static void test_nue_ink_linked_storm_zap_extends_grounded_window_by_0_4s_up_to_0_8s(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    const EntityId nue = g->run.boss_id;
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+    StatusComp *st = game_status_mut(g, nue);
+
+    en->ai_state = 1;
+    en->fire_cd = 2.2f;
+    bs->window_total = 2.2f;
+    bs->window_bonus = 0.0f;
+
+    /* Negative case: without ink_mark_t, storm zap does NOT extend the window. */
+    st->ink_mark_t = 0.0f;
+    g->event_count = 0;
+    (void)combat_apply_damage(g, nue, 20, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 2.2f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->window_bonus);
+
+    /* With ink_mark_t > 0: extends by +0.4s twice up to +0.8s cap, then stops. */
+    st->ink_mark_t = 3.0f;
+    g->event_count = 0;
+    (void)combat_apply_damage(g, nue, 20, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 2.6f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 2.6f, bs->window_total);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.4f, bs->window_bonus);
+    bool saw_extend = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_BOSS_BREAK && g->events[i].value == BOSS_BREAK_EV_EXTEND) {
+            saw_extend = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_extend);
+
+    (void)combat_apply_damage(g, nue, 20, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 3.0f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.8f, bs->window_bonus);
+
+    /* Third zap is capped at +0.8s total bonus. */
+    (void)combat_apply_damage(g, nue, 20, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 3.0f, en->fire_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.8f, bs->window_bonus);
+    game_destroy(g);
+}
+
+static void test_ryu_shielded_head_pings_ward_at_most_every_0_5s_and_shot_passes_through(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->ryu_body.head_id;
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, head));
+    const TransformComp *htr = game_transform(g, head);
+    const int32_t head_hp0 = game_health(g, head)->hp;
+    g->internal.spawn_cd = 999.0f;
+
+    /* Move orbs away so the deflected shot only overlaps the shielded head. */
+    for (int k = 0; k < GAME_RYU_ORB_COUNT; ++k) {
+        TransformComp *otr = game_transform_mut(g, g->ryu_body.orb_ids[k]);
+        if (otr != NULL) {
+            otr->x = 1100.0f;
+            otr->y = 500.0f;
+        }
+    }
+
+    const EntityId shot =
+        game_debug_spawn_projectile(g, PROJ_ARROW, htr->x - 10.0f, htr->y, 120.0f, 0.0f);
+    game_proj_mut(g, shot)->deflected = true;
+    g->event_count = 0;
+
+    projectiles_step(g);
+    TEST_ASSERT_TRUE(ecs_is_alive(&g->ecs, shot));
+    TEST_ASSERT_EQUAL_INT32(head_hp0, game_health(g, head)->hp);
+    int ward_pings = 0;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_BOSS_WARD) {
+            ++ward_pings;
+            TEST_ASSERT_EQUAL_INT32(3, g->events[i].value);
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(1, ward_pings);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.5f, g->internal.ryu_ward_ping_cd);
+
+    /* Second tick immediately after must NOT emit a second ping. */
+    g->event_count = 0;
+    projectiles_step(g);
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        TEST_ASSERT_NOT_EQUAL(EV_BOSS_WARD, g->events[i].type);
+    }
+
+    /* After 0.5s of Ryu steps, cd returns to 0 and another ping can fire. */
+    for (int t = 0; t < 31; ++t) {
+        boss_ryu_step(g, head);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->internal.ryu_ward_ping_cd);
+    game_destroy(g);
+}
+
+static void test_ryu_orb_break_flinches_1_8s_pausing_volleys_and_last_orb_awakens_instead(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->ryu_body.head_id;
+    BossComp *hb = game_boss_mut(g, head);
+    EnemyComp *hen = game_enemy_mut(g, head);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Break orb 0 -> head flinches for 1.8s, no guard, remaining orb takes x1.25. */
+    const EntityId orb0 = g->ryu_body.orb_ids[0];
+    const EntityId orb1 = g->ryu_body.orb_ids[1];
+    (void)combat_apply_damage(g, orb0, 5000, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.8f, hb->break_t);
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_FLINCH, hb->break_kind);
+    TEST_ASSERT_EQUAL_INT32(25, combat_apply_damage(g, orb1, 20, DMG_PHYSICAL, 0.0f, 0.0f));
+
+    /* During flinch, P1 volleys stay paused (no projectiles spawn). */
+    hen->fire_cd = 0.01f;
+    for (int t = 0; t < 30; ++t) {
+        g->shrines[0].hp = g->shrines[0].max_hp;
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_EQUAL_INT32(0, count_alive_mask(g, COMP_PROJ));
+    }
+
+    /* Break orb 1 and orb 2 -> Awakening wins (phase 1, invuln 1.5s, break ended). */
+    (void)combat_apply_damage(g, orb1, 5000, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+    const EntityId orb2 = g->ryu_body.orb_ids[2];
+    (void)combat_apply_damage(g, orb2, 5000, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+
+    TEST_ASSERT_EQUAL_INT32(1, hb->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, game_health(g, head)->invuln_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, hb->break_t);
+    game_destroy(g);
+}
+
+static void test_ryu_stagger_break_cancels_dragon_coil_and_cataclysm_totals_x2_5_in_ascension(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->ryu_body.head_id;
+    BossComp *hb = game_boss_mut(g, head);
+    HealthComp *hhp = game_health_mut(g, head);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Move directly into Ascension (Phase 3) with Dragon Coil active. */
+    g->ryu_body.orb_broken_mask = 0x7u;
+    hb->phase_idx = 2;
+    hhp->invuln_t = 0.0f;
+    hhp->hp = 1000;
+    hhp->max_hp = 2000;
+    g->internal.ryu_coil_t = 1.8f;
+    g->internal.ryu_coil_active = true;
+
+    /* 2x Cataclysm (+45 each = 90) + 1x Deflected (+14 = 104 >= 100) triggers Stance Break. */
+    (void)combat_apply_damage(g, head, 40, DMG_FIRE | DMG_STORM | DMG_CATACLYSM | DMG_REACTION, 0,
+                              0);
+    (void)combat_apply_damage(g, head, 40, DMG_FIRE | DMG_STORM | DMG_CATACLYSM | DMG_REACTION, 0,
+                              0);
+    (void)combat_apply_damage(g, head, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0, 0);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.5f, hb->break_t);
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_STANCE, hb->break_kind);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->internal.ryu_coil_t);
+    TEST_ASSERT_FALSE(g->internal.ryu_coil_active);
+
+    /* Ascension (x2.0) + Break Cataclysm exception (x1.25) = x2.5 total: 80 -> 200. */
+    const int32_t cata_dmg =
+        combat_apply_damage(g, head, 80, DMG_FIRE | DMG_STORM | DMG_CATACLYSM | DMG_REACTION, 0, 0);
+    TEST_ASSERT_EQUAL_INT32(200, cata_dmg);
+    game_destroy(g);
+}
+
+static void test_ryu_flinch_clears_surviving_orb_gale_and_cancels_pending_lightning_strikes(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->ryu_body.head_id;
+    BossComp *hb = game_boss_mut(g, head);
+    EnemyComp *hen = game_enemy_mut(g, head);
+    g->internal.spawn_cd = 999.0f;
+
+    const EntityId orb0 = g->ryu_body.orb_ids[0];
+    const EntityId orb1 = g->ryu_body.orb_ids[1];
+    const EntityId orb2 = g->ryu_body.orb_ids[2];
+    BossComp *ob0 = game_boss_mut(g, orb0);
+    BossComp *ob2 = game_boss_mut(g, orb2);
+    TEST_ASSERT_NOT_NULL(ob0);
+    TEST_ASSERT_NOT_NULL(ob2);
+
+    /* Let Storm Orb (slot 1) queue lightning strikes including one on the shrine. */
+    g->ryu_body.active_orb_slot = 1;
+    hen->fire_cd = 0.005f;
+    boss_ryu_step(g, head);
+
+    /* Remove the Storm Orb projectiles so only pending lightning telegraphs threaten the shrine. */
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId pid = ecs_entity_at(&g->ecs, i);
+        if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+            ecs_destroy(&g->ecs, pid);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    int32_t strikes_before = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId gid = ecs_entity_at(&g->ecs, i);
+        if (gid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, gid, COMP_GIMMICK)) {
+            const GimmickComp *gim = game_gimmick(g, gid);
+            if (gim != NULL && gim->kind == (int32_t)GIMMICK_LIGHTNING_STRIKE) {
+                ++strikes_before;
+            }
+        }
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, strikes_before);
+
+    /* Simulate surviving Fire and Wind Orbs mid-breath / mid-gust and clear ink from shrine. */
+    ob0->gale_t = 0.7f;
+    ob0->telegraph = 0.4f;
+    ob2->gale_t = 1.5f;
+    ob2->telegraph = 0.5f;
+    fluid_reset(&g->fluid);
+    const int32_t shrine_hp0 = g->shrines[0].hp;
+
+    /* Break Storm Orb while Fire and Wind Orbs survive -> flinch cancels active orb attacks. */
+    (void)combat_apply_damage(g, orb1, 5000, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_FLINCH, hb->break_kind);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.8f, hb->break_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob0->gale_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob0->telegraph);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob2->gale_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob2->telegraph);
+
+    int32_t strikes_after = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId gid = ecs_entity_at(&g->ecs, i);
+        if (gid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, gid, COMP_GIMMICK)) {
+            const GimmickComp *gim = game_gimmick(g, gid);
+            if (gim != NULL && gim->kind == (int32_t)GIMMICK_LIGHTNING_STRIKE) {
+                ++strikes_after;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(0, strikes_after);
+
+    /* Step past the 0.8s lightning fuse while flinched; shrine must take zero lightning damage. */
+    for (int t = 0; t < 60; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    TEST_ASSERT_EQUAL_INT32(shrine_hp0, g->shrines[0].hp);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob0->gale_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, ob2->gale_t);
+    game_destroy(g);
+}
+
+static void test_nue_wall_slam_during_invuln_bounces_without_stun_slam_event_or_hitstop(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    const EntityId nue = g->run.boss_id;
+    g->internal.spawn_cd = 999.0f;
+    TransformComp *tr = game_transform_mut(g, nue);
+    VelocityComp *vel = game_velocity_mut(g, nue);
+    HealthComp *hp = game_health_mut(g, nue);
+    StatusComp *st = game_status_mut(g, nue);
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+
+    /* Wall impact during phase invulnerability: bounce stays, no damage/stun/EV_SLAM/hitstop. */
+    tr->x = 48.0f;
+    tr->y = 360.0f;
+    en->ai_state = 1;
+    hp->invuln_t = 1.5f;
+    st->stun_t = 0.0f;
+    st->knockback_t = 0.9f;
+    vel->vx = -360.0f;
+    vel->vy = 0.0f;
+    g->hitstop_t = 0.0f;
+    g->event_count = 0;
+    const int32_t hp_invuln = hp->hp;
+
+    combat_physics_and_slams_step(g);
+    TEST_ASSERT_EQUAL_INT32(hp_invuln, hp->hp);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, st->stun_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, st->knockback_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->break_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, g->hitstop_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 144.0f, vel->vx);
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        TEST_ASSERT_NOT_EQUAL(EV_SLAM, g->events[i].type);
+    }
+
+    /* Slam crossing the 50% HP phase threshold lands damage/hitstop/EV_SLAM without 1.6s stun. */
+    tr->x = 48.0f;
+    tr->y = 360.0f;
+    en->ai_state = 1;
+    bs->phase_idx = 0;
+    hp->invuln_t = 0.0f;
+    hp->hp = hp->max_hp / 2 + 10;
+    const int32_t hp_phase = hp->hp;
+    st->stun_t = 0.0f;
+    st->knockback_t = 0.9f;
+    vel->vx = -360.0f;
+    vel->vy = 0.0f;
+    g->hitstop_t = 0.0f;
+    g->event_count = 0;
+
+    combat_physics_and_slams_step(g);
+    TEST_ASSERT_EQUAL_INT32(hp_phase - 110, hp->hp);
+    TEST_ASSERT_EQUAL_INT32(1, bs->phase_idx);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.5f, hp->invuln_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, st->stun_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, bs->break_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.05f, g->hitstop_t);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 144.0f, vel->vx);
+    bool saw_slam = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_SLAM) {
+            saw_slam = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_slam);
+    game_destroy(g);
+}
+
+static void test_ryu_awakening_break_cataclysm_gets_full_x1_5_while_ascension_gets_x2_5(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->ryu_body.head_id;
+    BossComp *hb = game_boss_mut(g, head);
+    HealthComp *hhp = game_health_mut(g, head);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Awakening (Phase 2) Break gets the full x1.5 multiplier even on Cataclysm: 40 -> 60. */
+    g->ryu_body.orb_broken_mask = 0x7u;
+    hb->phase_idx = 1;
+    hhp->invuln_t = 0.0f;
+    hhp->hp = 1400;
+    hhp->max_hp = 2000;
+    boss_break_start(g, head, BOSS_BREAK_STANCE, 2.5f, 0);
+
+    const uint32_t cata_flags = DMG_FIRE | DMG_STORM | DMG_CATACLYSM | DMG_REACTION;
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.5f, boss_break_damage_mul(g, head, cata_flags));
+    TEST_ASSERT_EQUAL_INT32(60, combat_apply_damage(g, head, 40, cata_flags, 0.0f, 0.0f));
+
+    /* Ascension (Phase 3) Break gates Cataclysm to x1.25 on top of x2.0 (total x2.5: 40 -> 100). */
+    hb->phase_idx = 2;
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.25f, boss_break_damage_mul(g, head, cata_flags));
+    TEST_ASSERT_EQUAL_INT32(100, combat_apply_damage(g, head, 40, cata_flags, 0.0f, 0.0f));
+    game_destroy(g);
+}
+
+static void test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_break(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7004));
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_act(g, 0);
+    for (int t = 0; t < 130 && g->phase == RUN_PHASE_ACT_TRANSITION; ++t) {
+        game_step(g, NULL, NULL);
+    }
+    game_debug_start_wave(g, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+
+    int32_t deflects = 0;
+    int32_t breaks = 0;
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    float max_undeflected_speed = 0.0f;
+
+    /* Pure autoplay with NO shrine hold and NO ink refill for up to 45s (2700 ticks). */
+    for (int t = 0; t < 2700 && g->phase == RUN_PHASE_PLAYING; ++t) {
+        const BrushInput in = game_autoplay_input(g);
+        game_step(g, &in, NULL);
+        for (int32_t i = 0; i < g->event_count; ++i) {
+            if (g->events[i].type == EV_DEFLECT) {
+                ++deflects;
+            } else if (g->events[i].type == EV_BOSS_BREAK &&
+                       g->events[i].value == BOSS_BREAK_EV_START) {
+                ++breaks;
+            }
+        }
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId pid = ecs_entity_at(&g->ecs, i);
+            if (pid.index == ECS_INVALID_INDEX || !ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+                continue;
+            }
+            const ProjComp *pr = game_proj(g, pid);
+            const TransformComp *ptr = game_transform(g, pid);
+            const VelocityComp *pvel = game_velocity(g, pid);
+            if (pr != NULL && ptr != NULL && pvel != NULL && !pr->deflected &&
+                hypotf(ptr->x - sx, ptr->y - sy) <= 150.0f) {
+                const float sp = hypotf(pvel->vx, pvel->vy);
+                if (sp > max_undeflected_speed) {
+                    max_undeflected_speed = sp;
+                }
+            }
+        }
+        if (breaks >= 1 && deflects >= 5) {
+            break;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT32(0, g->shrines[0].hp);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(5, deflects);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(1, breaks);
+    /* Undeflected shots never exceed the 365 px/s undeflected cap (never 640 px/s burning cap). */
+    TEST_ASSERT_TRUE(max_undeflected_speed <= 366.0f);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1729,5 +2528,21 @@ int main(void)
     RUN_TEST(test_tengu_patrol_oscillator_wraps_smoothly_both_sides_of_shrine);
     RUN_TEST(test_nue_stopped_telegraph_patterns_and_phase_transition);
     RUN_TEST(test_ryu_breath_in_spirit_pillar_spawns_all_six_shots_outside_solid);
+    RUN_TEST(test_tengu_volley_spawns_after_gust_ends_and_is_not_tailwind_boosted);
+    RUN_TEST(test_tengu_gust_leaves_a_calm_zone_around_the_shrine);
+    RUN_TEST(test_single_brush_stroke_deflects_tengu_volley_before_shrine);
+    RUN_TEST(test_tengu_returned_shots_build_stagger_into_a_2_8s_break);
+    RUN_TEST(test_tengu_phase_transition_ends_break_and_cancels_queued_volley);
+    RUN_TEST(test_boss_stagger_threshold_scales_with_endless_loop_and_caps);
+    RUN_TEST(test_nue_grounded_window_is_2_2s_with_1_6s_endless_floor);
+    RUN_TEST(test_nue_grounded_wall_slam_deals_110_stuns_1_6s_and_breaks_cancelling_windup);
+    RUN_TEST(test_nue_ink_linked_storm_zap_extends_grounded_window_by_0_4s_up_to_0_8s);
+    RUN_TEST(test_ryu_shielded_head_pings_ward_at_most_every_0_5s_and_shot_passes_through);
+    RUN_TEST(test_ryu_orb_break_flinches_1_8s_pausing_volleys_and_last_orb_awakens_instead);
+    RUN_TEST(test_ryu_stagger_break_cancels_dragon_coil_and_cataclysm_totals_x2_5_in_ascension);
+    RUN_TEST(test_ryu_flinch_clears_surviving_orb_gale_and_cancels_pending_lightning_strikes);
+    RUN_TEST(test_nue_wall_slam_during_invuln_bounces_without_stun_slam_event_or_hitstop);
+    RUN_TEST(test_ryu_awakening_break_cataclysm_gets_full_x1_5_while_ascension_gets_x2_5);
+    RUN_TEST(test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_break);
     return UNITY_END();
 }

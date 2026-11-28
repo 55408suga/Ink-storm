@@ -86,7 +86,7 @@ void render_draw_cached_text(const RenderState *r, const RenderCachedText *ct, P
                              float alpha);
 
 /* Entities (draw_entities.c) */
-void render_draw_entities(RenderState *r, const GameState *g, int act_index);
+void render_draw_entities(RenderState *r, const GameState *g, int act_index, bool reduce_flash);
 
 /* VFX (vfx.c) */
 void render_vfx_draw_world(RenderState *r, const GameState *g, const UiView *ui);
@@ -94,8 +94,13 @@ void render_vfx_draw_flash(RenderState *r, const UiView *ui);
 void render_vfx_draw_ui(RenderState *r, const GameState *g);
 Vector2 render_vfx_shake_offset(const RenderState *r, const UiView *ui);
 
+/* Banner & intro durations */
+#define RENDER_ENEMY_INTRO_SECONDS VFX_ENEMY_INTRO_SECONDS
+#define RENDER_BOSS_BANNER_SECONDS VFX_BOSS_BANNER_SECONDS
+
 /* HUD & UI (hud.c, ui_reward.c, ui_result.c, ui_banner.c, ui_lobby.c, ui_shop.c, ui_pause.c,
  * ui_settings.c, xray.c) */
+void render_draw_shrine_hp_bar(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *ui);
 void render_draw_reward_ui(RenderState *r, const GameState *g, const UiView *ui);

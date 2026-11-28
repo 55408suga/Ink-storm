@@ -59,7 +59,7 @@ BrushInput game_autoplay_input(const GameState *g)
     float fb_x = cx;
     float fb_y = cy;
 
-    float best_slam_d2 = 340.0f * 340.0f;
+    float best_slam_d2 = 520.0f * 520.0f;
     bool has_slam_target = false;
     float slam_x = cx;
     float slam_y = cy;
@@ -69,6 +69,7 @@ BrushInput game_autoplay_input(const GameState *g)
     float strike_y = cy;
 
     bool has_boss = false;
+    bool boss_in_break = false;
     float best_boss_d2 = 1e18f;
     float boss_x = cx;
     float boss_y = 140.0f;
@@ -150,14 +151,16 @@ BrushInput game_autoplay_input(const GameState *g)
             if (en == NULL) {
                 continue;
             }
-            const bool is_slam_cand = en->def_id == ENEMY_UMBRELLA ||
-                                      en->def_id == ENEMY_STONE_ONI ||
-                                      (en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1);
+            const bool is_grounded_nue =
+                (en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1 && en->fire_cd >= 0.6f);
+            const bool is_slam_cand =
+                en->def_id == ENEMY_UMBRELLA || en->def_id == ENEMY_STONE_ONI || is_grounded_nue;
             if (is_slam_cand) {
                 const float dx = tr->x - cx;
                 const float dy = tr->y - cy;
                 const float d2 = dx * dx + dy * dy;
-                if (d2 < best_slam_d2) {
+                const float limit_d2 = is_grounded_nue ? (520.0f * 520.0f) : (260.0f * 260.0f);
+                if (d2 < limit_d2 && d2 < best_slam_d2) {
                     best_slam_d2 = d2;
                     has_slam_target = true;
                     slam_x = tr->x;
@@ -171,8 +174,10 @@ BrushInput game_autoplay_input(const GameState *g)
                 const float dy = tr->y - cy;
                 const float d2 = (dx * dx + dy * dy) * (on_screen ? 1.0f : 16.0f);
                 if (d2 < best_boss_d2) {
+                    const BossComp *bc = game_boss(g, id);
                     best_boss_d2 = d2;
                     has_boss = true;
+                    boss_in_break = (bc != NULL && bc->break_t > 0.0f);
                     boss_x = tr->x;
                     boss_y = tr->y;
                 }
@@ -199,7 +204,7 @@ BrushInput game_autoplay_input(const GameState *g)
         tx = strike_x + cosf(t * 14.0f) * 16.0f;
         ty = strike_y + sinf(t * 14.0f) * 16.0f;
         want_paint = true;
-    } else if (has_slam_target && best_slam_d2 < 260.0f * 260.0f) {
+    } else if (has_slam_target) {
         const float dx = slam_x - cx;
         const float dy = slam_y - cy;
         const float d = hypotf(dx, dy);
@@ -226,6 +231,10 @@ BrushInput game_autoplay_input(const GameState *g)
             tx = proj_x;
             ty = proj_y;
         }
+        want_paint = true;
+    } else if (has_boss && boss_in_break) {
+        tx = boss_x + cosf(t * 5.0f) * 48.0f;
+        ty = boss_y + sinf(t * 5.0f) * 40.0f;
         want_paint = true;
     } else if (has_orb && g->player.ink < 82.0f) {
         tx = orb_x;
