@@ -1815,6 +1815,7 @@ static void test_tengu_gust_leaves_a_calm_zone_around_the_shrine(void)
     const float sx = g->shrines[0].x;
     const float sy = g->shrines[0].y;
     float max_ring_speed_px = 0.0f;
+    float max_outer_speed_px = 0.0f;
     for (int t = 0; t < 60; ++t) {
         en->fire_cd = (t == 0) ? 0.001f : 99.0f;
         game_step(g, NULL, NULL);
@@ -1828,8 +1829,21 @@ static void test_tengu_gust_leaves_a_calm_zone_around_the_shrine(void)
                 max_ring_speed_px = sp_px;
             }
         }
+        const TransformComp *ttr = game_transform(g, tengu);
+        if (ttr != NULL) {
+            for (int side = -1; side <= 1; side += 2) {
+                float u = 0.0f;
+                float v = 0.0f;
+                fluid_sample(&g->fluid, ttr->x + (float)side * 114.0f, ttr->y, &u, &v, NULL);
+                const float sp_px = hypotf(u, v) * FLUID_CELL_PX;
+                if (sp_px > max_outer_speed_px) {
+                    max_outer_speed_px = sp_px;
+                }
+            }
+        }
     }
     TEST_ASSERT_TRUE(max_ring_speed_px < 20.0f);
+    TEST_ASSERT_TRUE(max_outer_speed_px > 20.0f);
     game_destroy(g);
 }
 
@@ -1850,6 +1864,7 @@ static void test_single_brush_stroke_deflects_tengu_volley_before_shrine(void)
     const int32_t hp0 = g->shrines[0].hp;
 
     bool saw_fireballs = false;
+    EntityId deflected_ids[16];
     int32_t deflected_count = 0;
     int stroke_ticks = 0;
     for (int t = 0; t < 160; ++t) {
@@ -1877,7 +1892,18 @@ static void test_single_brush_stroke_deflects_tengu_volley_before_shrine(void)
             if (pid.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
                 const ProjComp *pr = game_proj(g, pid);
                 if (pr != NULL && pr->deflected) {
-                    ++deflected_count;
+                    bool seen = false;
+                    for (int32_t j = 0; j < deflected_count; ++j) {
+                        if (deflected_ids[j].index == pid.index &&
+                            deflected_ids[j].gen == pid.gen) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen && deflected_count <
+                                     (int32_t)(sizeof(deflected_ids) / sizeof(deflected_ids[0]))) {
+                        deflected_ids[deflected_count++] = pid;
+                    }
                 }
             }
         }
@@ -1983,6 +2009,45 @@ static void test_tengu_phase_transition_ends_break_and_cancels_queued_volley(voi
     }
     TEST_ASSERT_TRUE(saw_end);
     TEST_ASSERT_FALSE(saw_start);
+    game_destroy(g);
+}
+
+static void test_tengu_break_cancels_active_reverse_vortex(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    const EntityId tengu = g->run.boss_id;
+    EnemyComp *en = game_enemy_mut(g, tengu);
+    BossComp *bs = game_boss_mut(g, tengu);
+    HealthComp *hp = game_health_mut(g, tengu);
+    TEST_ASSERT_NOT_NULL(en);
+    TEST_ASSERT_NOT_NULL(bs);
+    TEST_ASSERT_NOT_NULL(hp);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Put Tengu in Phase 2 ready to trigger Pattern D (Reverse Vortex). */
+    bs->phase_idx = 1;
+    bs->pattern = 3;
+    hp->hp = hp->max_hp / 3;
+    hp->invuln_t = 0.0f;
+    en->fire_cd = 0.001f;
+
+    game_step(g, NULL, NULL);
+    TEST_ASSERT_TRUE(g->internal.boss_vortex_t > 0.0f);
+
+    /* Breaking Tengu clears the active reverse vortex immediately. */
+    boss_break_add_stagger(g, tengu, boss_break_threshold(g));
+    TEST_ASSERT_TRUE(bs->break_t > 0.0f);
+    TEST_ASSERT_TRUE(g->internal.boss_vortex_t == 0.0f);
+
+    /* Reverse vortex stays cleared across subsequent ticks while Tengu remains in Break. */
+    for (int t = 0; t < 30; ++t) {
+        game_step(g, NULL, NULL);
+        TEST_ASSERT_TRUE(bs->break_t > 0.0f);
+        TEST_ASSERT_TRUE(g->internal.boss_vortex_t == 0.0f);
+    }
+
     game_destroy(g);
 }
 
@@ -2451,7 +2516,7 @@ static void test_ryu_awakening_break_cataclysm_gets_full_x1_5_while_ascension_ge
 
 static void test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_break(void)
 {
-    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7004));
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7000));
     GameState *g = game_create(&cfg);
     TEST_ASSERT_NOT_NULL(g);
     game_debug_start_act(g, 0);
@@ -2533,6 +2598,7 @@ int main(void)
     RUN_TEST(test_single_brush_stroke_deflects_tengu_volley_before_shrine);
     RUN_TEST(test_tengu_returned_shots_build_stagger_into_a_2_8s_break);
     RUN_TEST(test_tengu_phase_transition_ends_break_and_cancels_queued_volley);
+    RUN_TEST(test_tengu_break_cancels_active_reverse_vortex);
     RUN_TEST(test_boss_stagger_threshold_scales_with_endless_loop_and_caps);
     RUN_TEST(test_nue_grounded_window_is_2_2s_with_1_6s_endless_floor);
     RUN_TEST(test_nue_grounded_wall_slam_deals_110_stuns_1_6s_and_breaks_cancelling_windup);

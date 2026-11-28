@@ -114,6 +114,7 @@ void boss_tengu_step(GameState *g, EntityId id)
         boss->telegraph = 0.0f;
         boss->gale_t = 0.0f;
         boss->volley_t = 0.0f;
+        g->internal.boss_vortex_t = 0.0f;
         en->fire_cd = fmaxf(en->fire_cd, 1.0f);
         return;
     }
@@ -138,6 +139,8 @@ void boss_tengu_step(GameState *g, EntityId id)
          * leaving a calm sanctuary (>= 120px) around the shrine and a neutral center volley lane.
          */
         static const float k_gale_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.14f, 0.0f, 0.0f};
+        const float k_gale_splat_cells = 3.6f;
+        const float k_gale_clear_px = 120.0f + k_gale_splat_cells * FLUID_CELL_PX;
         const float perp_x = -boss->gale_dy;
         const float perp_y = boss->gale_dx;
         for (int side = -1; side <= 1; side += 2) {
@@ -150,7 +153,7 @@ void boss_tengu_step(GameState *g, EntityId id)
                 const float py = tr->y + wy * dist;
                 const float sdx = px - sx;
                 const float sdy = py - sy;
-                if (sdx * sdx + sdy * sdy < 120.0f * 120.0f) {
+                if (sdx * sdx + sdy * sdy < k_gale_clear_px * k_gale_clear_px) {
                     continue;
                 }
                 float fu = 0.0f;
@@ -158,7 +161,7 @@ void boss_tengu_step(GameState *g, EntityId id)
                 fluid_sample(&g->fluid, px, py, &fu, &fv, NULL);
                 const float along = fu * wx + fv * wy;
                 const float add = fmaxf(0.0f, 18.0f - along) * 0.14f;
-                fluid_splat(&g->fluid, px, py, 3.6f, wx * add, wy * add, k_gale_dye);
+                fluid_splat(&g->fluid, px, py, k_gale_splat_cells, wx * add, wy * add, k_gale_dye);
             }
         }
     }

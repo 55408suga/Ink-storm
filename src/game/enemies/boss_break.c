@@ -49,7 +49,9 @@ void boss_break_start(GameState *g, EntityId boss_id, BossBreakKind kind, float 
     boss->gale_t = 0.0f;
     boss->volley_t = 0.0f;
 
-    if (en->def_id == ENEMY_BOSS_NUE) {
+    if (en->def_id == ENEMY_BOSS_TENGU) {
+        g->internal.boss_vortex_t = 0.0f;
+    } else if (en->def_id == ENEMY_BOSS_NUE) {
         en->windup = 0.0f;
     } else if (en->def_id == ENEMY_BOSS_RYU) {
         if (kind == BOSS_BREAK_STANCE) {
