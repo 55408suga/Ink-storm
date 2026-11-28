@@ -112,7 +112,7 @@ nix develop -c ./build/release/inkstorm --no-post --smoke-frames 5
 
 ## プロジェクト専用 Skill
 
-- 見た目・音の変更時のオフライン音付き動画 QA（`tools/qa_run.py`）、ビルド、静的解析、シェーダ検証、視覚・聴覚レビューに使用する。[inkstorm-verify-and-visual](.agents/skills/inkstorm-verify-and-visual/SKILL.md)
+- 変更時の影響起点 QA 設計、オフライン音付き動画 QA（`tools/qa_run.py`）、ビルド、静的解析、シェーダ検証、視覚・聴覚レビューに使用する。[inkstorm-verify-and-visual](.agents/skills/inkstorm-verify-and-visual/SKILL.md)
 - 流体、属性反応、格子境界、決定性や性能予算の変更に使用する。[inkstorm-fluid-sim](.agents/skills/inkstorm-fluid-sim/SKILL.md)
 - 敵、ボス、遺物、アップグレード、アビリティ、ウェーブの追加に使用する。[inkstorm-content-authoring](.agents/skills/inkstorm-content-authoring/SKILL.md)
 - PR の準備、CodeRabbit のコメント取得とトリアージに使用する。[inkstorm-pr-and-coderabbit](.agents/skills/inkstorm-pr-and-coderabbit/SKILL.md)
