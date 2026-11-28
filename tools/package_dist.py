@@ -51,7 +51,7 @@ def write_archive(archive_path):
         for path in sources + asset_files + dependencies:
             archive.write(path, path.relative_to(ROOT).as_posix())
         archive.write(ROOT / "tools" / "dist.mk", "Makefile")
-        archive.write(ROOT / "README.txt", "README.txt")
+        archive.write(ROOT / "README.md", "README.md")
 
 
 def verify_archive(archive_path, build_dir, raylib_dir):
