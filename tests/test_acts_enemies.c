@@ -1653,49 +1653,58 @@ static void test_ryu_breath_in_spirit_pillar_spawns_all_six_shots_outside_solid(
     }
     TEST_ASSERT_EQUAL_INT32(6, alive_shots);
 
-    /* Head at (632, 114.5) exits into free cell (78, 14) before re-entering solid (78, 15).
-     * Breath muzzle must stop at that first free point instead of skipping past the pillar. */
-    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
-        const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
-            ecs_destroy(&g->ecs, id);
-        }
-    }
-    ecs_flush_destroy(&g->ecs);
-    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 632.0f, 114.5f));
-    tr->x = 632.0f;
-    tr->y = 114.5f;
-    game_velocity_mut(g, head)->vx = 0.0f;
-    game_velocity_mut(g, head)->vy = 0.0f;
-    en->phase = 0;
-    bs->pattern = 0;
-    bs->pattern_timer = 10.0f;
-    en->fire_cd = 0.001f;
-
-    enemies_ai_step(g);
-    bool saw_first_free_shot = false;
-    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
-        const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
-            const TransformComp *ptr = game_transform(g, id);
-            TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, ptr->x, ptr->y));
-            if (ptr->x < 632.0f && ptr->y < 120.0f) {
-                saw_first_free_shot = true;
+    /* Head at (632, 114.5) and (632.1, 118.5) exits into free cell (78, 14) before re-entering
+     * solid (78, 15). Breath muzzle must stop at that first free point instead of skipping past
+     * the pillar, even when the open gap is narrower than 2px. */
+    static const float k_edge_pts[2][2] = {
+        {632.0f, 114.5f},
+        {632.1f, 118.5f},
+    };
+    for (int p = 0; p < 2; ++p) {
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                ecs_destroy(&g->ecs, id);
             }
         }
-    }
-    TEST_ASSERT_TRUE(saw_first_free_shot);
+        ecs_flush_destroy(&g->ecs);
+        const float px = k_edge_pts[p][0];
+        const float py = k_edge_pts[p][1];
+        TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, px, py));
+        tr->x = px;
+        tr->y = py;
+        game_velocity_mut(g, head)->vx = 0.0f;
+        game_velocity_mut(g, head)->vy = 0.0f;
+        en->phase = 0;
+        bs->pattern = 0;
+        bs->pattern_timer = 10.0f;
+        en->fire_cd = 0.001f;
 
-    projectiles_step(g);
-    ecs_flush_destroy(&g->ecs);
-    int32_t post_step_shots = 0;
-    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
-        const EntityId id = ecs_entity_at(&g->ecs, i);
-        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
-            ++post_step_shots;
+        enemies_ai_step(g);
+        bool saw_first_free_shot = false;
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                const TransformComp *ptr = game_transform(g, id);
+                TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, ptr->x, ptr->y));
+                if (ptr->x >= 624.0f && ptr->x < 632.0f && ptr->y >= 112.0f && ptr->y < 120.0f) {
+                    saw_first_free_shot = true;
+                }
+            }
         }
+        TEST_ASSERT_TRUE(saw_first_free_shot);
+
+        projectiles_step(g);
+        ecs_flush_destroy(&g->ecs);
+        int32_t post_step_shots = 0;
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                ++post_step_shots;
+            }
+        }
+        TEST_ASSERT_LESS_THAN_INT32(6, post_step_shots);
     }
-    TEST_ASSERT_LESS_THAN_INT32(6, post_step_shots);
     (void)ryu;
     game_destroy(g);
 }
