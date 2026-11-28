@@ -15,8 +15,8 @@ Release をビルドし、録画対象シーンを通しで操作する。録画
 
 ## 配布ソース zip と README
 
-1. `README.txt` のコンパイル手順、`RAYLIB_DIR` の上書き方法、操作説明を実物と照合する。
+1. `README.md` のコンパイル手順、`RAYLIB_DIR` の上書き方法、操作説明を実物と照合する。
 2. `nix develop -c python3 tools/package_dist.py` を実行する。禁止エントリ検査と、
    一時展開先のホスト `make`、`./inkstorm --headless-smoke` が通ったアーカイブを使う。
-3. `nix develop -c unzip -l dist/inkstorm-src.zip` でトップレベルの `Makefile` と `README.txt`、
+3. `nix develop -c unzip -l dist/inkstorm-src.zip` でトップレベルの `Makefile` と `README.md`、
    ソース、必要なアセット、登録済み依存を確認する。開発専用ファイルや動画を同梱しない。

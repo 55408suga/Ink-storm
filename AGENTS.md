@@ -97,7 +97,7 @@ nix develop -c ./build/release/inkstorm --no-post --smoke-frames 5
 - フルの ASan / UBSan + CTest、整形、静的解析、配布 zip 検証（`dist`）は GitHub Actions CI に委譲し、ローカルで毎回重複実行しない（CI 失敗時や該当ツール変更時のみローカルで再現する）。
 - push、PR 作成、レビュー返信はユーザーから許可された範囲で行う。
 - PR 作成直後は `@coderabbitai review` で CodeRabbit レビューを起動し、CI・コードレビュー・CodeRabbit の指摘確認と必要な修正を完了してからマージする（詳細手順は [inkstorm-pr-and-coderabbit](.agents/skills/inkstorm-pr-and-coderabbit/SKILL.md)）。
-- 配布ソース zip は `tools/package_dist.py` で生成する。ルートにはスタンドアロン用 `Makefile` と `README.txt` を置く。
+- 配布ソース zip は `tools/package_dist.py` で生成する。ルートにはスタンドアロン用 `Makefile` と `README.md` を置く。
 - `AGENTS.md`、`docs/`、`tests/`、`tools/`、`third_party/unity/`、`.agents/`、`.claude/` は開発専用。
 - AI 向け文書、CI 設定、CMake、Nix、テスト、録画やビルド成果物を配布 zip に混入させない。
 - 配布構成に影響する変更では、CI（または必要時のローカル `dist`）で展開先の `make` と `./inkstorm --headless-smoke` が通ることを確認する。
