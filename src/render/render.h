@@ -239,6 +239,7 @@ typedef struct {
     int32_t style; /* BrushStyleId for cyclone/gale/ripple, -1 for neutral */
     float x, y, dx, dy;
     float radius;
+    float spin;
     float age, life;
     uint32_t seed;
 } VfxStroke;

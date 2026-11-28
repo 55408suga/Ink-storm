@@ -5,10 +5,12 @@
 #include <math.h>
 #include <stddef.h>
 
-static void pick_vortex_target(const GameState *g, float ex, float ey, float *out_x, float *out_y)
+static void pick_vortex_target(const GameState *g, float ex, float ey, float *out_x, float *out_y,
+                               float *out_spin)
 {
     /* Prefer an active player cyclone so Kamaitachi actively disrupts player vortices. */
     float best_life = 0.0f;
+    float best_spin = 1.0f;
     bool found = false;
     float vx = ex;
     float vy = ey;
@@ -16,14 +18,17 @@ static void pick_vortex_target(const GameState *g, float ex, float ey, float *ou
         const ActiveCyclone *ac = &g->internal.cyclones[i];
         if (ac->active && ac->life > best_life && !fluid_is_solid(&g->fluid, ac->x, ac->y)) {
             best_life = ac->life;
+            best_spin = ac->spin < 0.0f ? -1.0f : 1.0f;
             vx = ac->x;
             vy = ac->y;
             found = true;
         }
     }
+    *out_spin = 1.0f;
     if (found) {
         *out_x = vx;
         *out_y = vy;
+        *out_spin = best_spin;
         return;
     }
 
@@ -151,7 +156,8 @@ void kamaitachi_step(GameState *g, EntityId id)
         en->absorbed_ink = 4.0f;
         float vx = tr->x;
         float vy = tr->y;
-        pick_vortex_target(g, tr->x, tr->y, &vx, &vy);
+        float target_spin = 1.0f;
+        pick_vortex_target(g, tr->x, tr->y, &vx, &vy, &target_spin);
         const EntityId vid = game_spawn_entity(g, COMP_TRANSFORM | COMP_GIMMICK);
         if (vid.index != ECS_INVALID_INDEX) {
             TransformComp *vtr = game_transform_mut(g, vid);
@@ -165,6 +171,7 @@ void kamaitachi_step(GameState *g, EntityId id)
                 vgim->kind = (int32_t)GIMMICK_KAMAITACHI_VORTEX;
                 vgim->elem_kind = (int32_t)GIMMICK_ELEM_NONE;
                 vgim->timer = 1.0f;
+                vgim->param_a = target_spin < 0.0f ? 1.0f : -1.0f;
             }
         }
     }

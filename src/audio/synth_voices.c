@@ -217,6 +217,7 @@ typedef struct {
     int style;
     bool dry;
     bool surge;
+    bool ccw;
 } SkillFlavor;
 
 /* param carries the caster's BrushStyleId plus AUDIO_SKILL_PARAM_* flags. */
@@ -227,6 +228,7 @@ static SkillFlavor skill_flavor(const AudioVoice *v)
         .style = bits & 3,
         .dry = (bits & AUDIO_SKILL_PARAM_DRY) != 0,
         .surge = (bits & AUDIO_SKILL_PARAM_SURGE) != 0,
+        .ccw = (bits & AUDIO_SKILL_PARAM_CCW) != 0,
     };
 }
 
@@ -258,7 +260,8 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
     const float sweep =
         audio_smoothstep(0.0f, 0.045f, t) * (1.0f - 0.45f * audio_smoothstep(0.06f, 0.95f, t));
     const float lift = 0.40f + 0.60f * sweep;
-    v->phase += (2.4f + 2.2f * sweep) / (float)AUDIO_SAMPLE_RATE;
+    const float spin_step = fl.ccw ? ((2.4f + 2.2f * sweep) * 0.85f) : (2.4f + 2.2f * sweep);
+    v->phase += spin_step / (float)AUDIO_SAMPLE_RATE;
     const float spin = sinf(v->phase * k_two_pi);
     const float spin2 = sinf(v->phase * k_two_pi + 1.7f);
 
@@ -276,8 +279,10 @@ static float cyclone_swirl_sample(const AudioState *audio, AudioVoice *v, float 
     }
 
     const float thin = fl.dry ? 1.35f : 1.0f;
-    const float lo = k_lo[style] * thin * (1.0f + 0.85f * lift) * (1.0f + 0.16f * spin);
-    const float hi = k_hi[style] * thin * (1.0f + 0.30f * lift) * (1.0f - 0.14f * spin2);
+    const float base_lo = fl.ccw ? (k_lo[style] * 0.92f) : k_lo[style];
+    const float base_hi = fl.ccw ? (k_hi[style] * 0.92f) : k_hi[style];
+    const float lo = base_lo * thin * (1.0f + 0.85f * lift) * (1.0f + 0.16f * spin);
+    const float hi = base_hi * thin * (1.0f + 0.30f * lift) * (1.0f - 0.14f * spin2);
     const float q = fl.dry ? 1.5f : 0.9f;
     float body = audio_svf_step(&v->svf[0], src, ink_clampf(lo, 220.0f, 1400.0f), q).bp * 0.95f +
                  audio_svf_step(&v->svf[1], src, ink_clampf(hi, 220.0f, 1400.0f), q).bp * 0.70f;

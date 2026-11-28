@@ -1672,6 +1672,235 @@ static void test_cli_snap_dir_accepts_exact_path_max_bound(void)
     TEST_ASSERT_FALSE(cli_parse(3, argv_bad, &opt));
 }
 
+static void test_latch_ccw_cyclone_priority_subtick_and_clear(void)
+{
+    InputLatch l;
+    input_latch_init(&l, 300.0f, 300.0f);
+
+    /* 1. CCW press becomes cyclone && cyclone_ccw. */
+    RawInput raw = make_raw(340.0f, 320.0f);
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput ccw_in = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(ccw_in.cyclone);
+    TEST_ASSERT_TRUE(ccw_in.cyclone_ccw);
+    const BrushInput next_in = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(next_in.cyclone);
+    TEST_ASSERT_FALSE(next_in.cyclone_ccw);
+
+    /* 2. Same-frame CW + CCW resolves to CW only and clears CCW pending (not queued). */
+    raw = make_raw(360.0f, 320.0f);
+    raw.cyclone_pressed = true;
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput both_in = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(both_in.cyclone);
+    TEST_ASSERT_FALSE(both_in.cyclone_ccw);
+    const BrushInput after_both = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(after_both.cyclone);
+    TEST_ASSERT_FALSE(after_both.cyclone_ccw);
+
+    /* 3. Catch-up sub-tick frame with CCW edge gives the whole motion to the CCW tick. */
+    input_latch_init(&l, 300.0f, 300.0f);
+    raw = make_raw(600.0f, 420.0f);
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput sub0 = input_latch_take_subtick(&l, 3);
+    TEST_ASSERT_TRUE(sub0.cyclone);
+    TEST_ASSERT_TRUE(sub0.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(600.0f, sub0.mx);
+    TEST_ASSERT_EQUAL_FLOAT(420.0f, sub0.my);
+    TEST_ASSERT_EQUAL_FLOAT(300.0f, sub0.pmx);
+    TEST_ASSERT_EQUAL_FLOAT(300.0f, sub0.pmy);
+    const BrushInput sub1 = input_latch_take_subtick(&l, 2);
+    TEST_ASSERT_FALSE(sub1.cyclone);
+    TEST_ASSERT_FALSE(sub1.cyclone_ccw);
+
+    /* 4. Reward phase suppresses and clears CCW; hitstop retains it until hitstop ends. */
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    g->phase = RUN_PHASE_REWARD;
+    raw = make_raw(620.0f, 430.0f);
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput rew_in = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(rew_in.cyclone);
+    TEST_ASSERT_FALSE(rew_in.cyclone_ccw);
+
+    g->phase = RUN_PHASE_PLAYING;
+    g->hitstop_t = 0.05f;
+    raw = make_raw(650.0f, 440.0f);
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    const BrushInput hs_in = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(hs_in.cyclone);
+    TEST_ASSERT_FALSE(hs_in.cyclone_ccw);
+    g->hitstop_t = 0.0f;
+    const BrushInput post_hs = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(post_hs.cyclone);
+    TEST_ASSERT_TRUE(post_hs.cyclone_ccw);
+
+    /* 5. input_latch_clear_skills clears CCW pending. */
+    raw = make_raw(660.0f, 440.0f);
+    raw.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &raw);
+    input_latch_clear_skills(&l);
+    const BrushInput cleared = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(cleared.cyclone);
+    TEST_ASSERT_FALSE(cleared.cyclone_ccw);
+
+    game_destroy(g);
+}
+
+static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void)
+{
+    /* (a) Same-frame simultaneous CW + CCW resolves to CW only at that frame's cursor. */
+    InputLatch l;
+    input_latch_init(&l, 100.0f, 100.0f);
+    RawInput same = make_raw(410.0f, 260.0f);
+    same.cyclone_pressed = true;
+    same.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &same);
+    const BrushInput s0 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(s0.cyclone);
+    TEST_ASSERT_FALSE(s0.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(410.0f, s0.mx);
+    TEST_ASSERT_EQUAL_FLOAT(260.0f, s0.my);
+    const BrushInput s1 = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(s1.cyclone);
+    TEST_ASSERT_FALSE(s1.cyclone_ccw);
+
+    /* (b) Distinct frames (no tick popped between them): CW at (x1, y1) then CCW at (x2, y2). */
+    input_latch_init(&l, 100.0f, 100.0f);
+    RawInput f1 = make_raw(220.0f, 180.0f);
+    f1.cyclone_pressed = true;
+    RawInput f2 = make_raw(540.0f, 390.0f);
+    f2.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &f1);
+    input_latch_feed(&l, &f2);
+
+    const BrushInput t1 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(t1.cyclone);
+    TEST_ASSERT_FALSE(t1.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(220.0f, t1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(180.0f, t1.my);
+
+    const BrushInput t2 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(t2.cyclone);
+    TEST_ASSERT_TRUE(t2.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(540.0f, t2.mx);
+    TEST_ASSERT_EQUAL_FLOAT(390.0f, t2.my);
+
+    const BrushInput t3 = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(t3.cyclone);
+    TEST_ASSERT_FALSE(t3.cyclone_ccw);
+
+    /* (c) Vice-versa: CCW on frame 1 at (x1, y1) then CW on frame 2 at (x2, y2). */
+    input_latch_init(&l, 100.0f, 100.0f);
+    RawInput r1 = make_raw(310.0f, 420.0f);
+    r1.cyclone_ccw_pressed = true;
+    RawInput r2 = make_raw(720.0f, 210.0f);
+    r2.cyclone_pressed = true;
+    input_latch_feed(&l, &r1);
+    input_latch_feed(&l, &r2);
+
+    const BrushInput rt1 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(rt1.cyclone);
+    TEST_ASSERT_TRUE(rt1.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(310.0f, rt1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(420.0f, rt1.my);
+
+    const BrushInput rt2 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(rt2.cyclone);
+    TEST_ASSERT_FALSE(rt2.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(720.0f, rt2.mx);
+    TEST_ASSERT_EQUAL_FLOAT(210.0f, rt2.my);
+
+    const BrushInput rt3 = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(rt3.cyclone);
+    TEST_ASSERT_FALSE(rt3.cyclone_ccw);
+
+    /* (d) Multi-frame hitstop: CW on hitstop frame 1 + CCW on hitstop frame 2 deliver both
+     * cyclones cleanly at their own coordinates on consecutive live ticks after hitstop ends. */
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    g->internal.spawn_cd = 999.0f;
+    g->player.ink = g->player.ink_max;
+    g->hitstop_t = 0.035f;
+
+    input_latch_init(&l, 400.0f, 300.0f);
+    RawInput hs1 = make_raw(480.0f, 260.0f);
+    hs1.cyclone_pressed = true;
+    input_latch_feed(&l, &hs1);
+    const BrushInput frozen1 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(frozen1.cyclone);
+    TEST_ASSERT_FALSE(frozen1.cyclone_ccw);
+    game_step(g, &frozen1, NULL);
+
+    RawInput hs2 = make_raw(680.0f, 340.0f);
+    hs2.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &hs2);
+    const BrushInput frozen2 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(frozen2.cyclone);
+    TEST_ASSERT_FALSE(frozen2.cyclone_ccw);
+    game_step(g, &frozen2, NULL);
+    for (int t = 0; t < 4 && g->hitstop_t > 0.0f; ++t) {
+        RawInput hold = make_raw(680.0f, 340.0f);
+        input_latch_feed(&l, &hold);
+        const BrushInput f = input_latch_take_subtick_for_game(&l, 1, g);
+        TEST_ASSERT_FALSE(f.cyclone);
+        game_step(g, &f, NULL);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->hitstop_t);
+
+    const BrushInput live1 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live1.cyclone);
+    TEST_ASSERT_FALSE(live1.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(480.0f, live1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(260.0f, live1.my);
+    game_step(g, &live1, NULL);
+    bool saw_cw = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_CYCLONE && (g->events[i].flags & EVF_CYCLONE_CCW) == 0u &&
+            fabsf(g->events[i].x - 480.0f) < 1.0f && fabsf(g->events[i].y - 260.0f) < 1.0f) {
+            saw_cw = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_cw);
+
+    const BrushInput live2 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live2.cyclone);
+    TEST_ASSERT_TRUE(live2.cyclone_ccw);
+    TEST_ASSERT_EQUAL_FLOAT(680.0f, live2.mx);
+    TEST_ASSERT_EQUAL_FLOAT(340.0f, live2.my);
+    game_step(g, &live2, NULL);
+    bool saw_ccw = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_CYCLONE && (g->events[i].flags & EVF_CYCLONE_CCW) != 0u &&
+            fabsf(g->events[i].x - 680.0f) < 1.0f && fabsf(g->events[i].y - 340.0f) < 1.0f) {
+            saw_ccw = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_ccw);
+
+    const BrushInput live3 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(live3.cyclone);
+    TEST_ASSERT_FALSE(live3.cyclone_ccw);
+
+    /* (e) Reward phase clears both pending CW and CCW in a single tick. */
+    g->phase = RUN_PHASE_REWARD;
+    input_latch_feed(&l, &f1);
+    input_latch_feed(&l, &f2);
+    const BrushInput rew = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_FALSE(rew.cyclone);
+    TEST_ASSERT_FALSE(rew.cyclone_ccw);
+    TEST_ASSERT_FALSE(l.cyclone_pending);
+    TEST_ASSERT_FALSE(l.cyclone_ccw_pending);
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1716,5 +1945,7 @@ int main(void)
     RUN_TEST(test_bgm_rapid_three_track_switch_tapers_both_outgoing_tracks);
     RUN_TEST(test_reward_keyboard_pick_with_held_lmb_suppresses_paint_and_selection_tick);
     RUN_TEST(test_cli_snap_dir_accepts_exact_path_max_bound);
+    RUN_TEST(test_latch_ccw_cyclone_priority_subtick_and_clear);
+    RUN_TEST(test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords);
     return UNITY_END();
 }

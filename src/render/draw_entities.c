@@ -1768,8 +1768,9 @@ static void draw_gimmick_effects(RenderState *r, const GameState *g, uint64_t bo
                        (InkTone){.color = PAL_SHU, .alpha = 0.94f}, 1.0f);
         } else if (gim->kind == GIMMICK_KAMAITACHI_VORTEX) {
             const float rad = tr->radius > 10.0f ? tr->radius : 72.0f;
-            const float spin = r->vfx_time * -6.0f;
-            ink_arc_stroke(r, (Vector2){tr->x, tr->y}, rad * 0.72f, spin, spin + 4.2f,
+            const float dir = gimmick_kamaitachi_spin_dir(gim);
+            const float spin = r->vfx_time * 6.0f * dir;
+            ink_arc_stroke(r, (Vector2){tr->x, tr->y}, rad * 0.72f, spin, spin - dir * 4.2f,
                            (BrushProfile){.w_max = 4.2f,
                                           .w_min_ratio = 0.25f,
                                           .entry = 0.15f,

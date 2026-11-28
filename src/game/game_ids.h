@@ -132,7 +132,7 @@ typedef enum {
     HINT_COUNT
 } HintId;
 
-typedef enum { SKILL_CYCLONE = 0, SKILL_GALE, SKILL_COUNT } SkillId;
+typedef enum { SKILL_CYCLONE = 0, SKILL_GALE, SKILL_CYCLONE_CCW, SKILL_COUNT } SkillId;
 
 #define DMG_PHYSICAL (UINT32_C(1) << 0)
 #define DMG_FIRE (UINT32_C(1) << 1)

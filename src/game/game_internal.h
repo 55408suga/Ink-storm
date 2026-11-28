@@ -104,6 +104,7 @@ typedef struct {
     float rad_cells;
     float life, max_life;
     float storm_sustain;
+    float spin;
 } ActiveCyclone;
 
 typedef struct {

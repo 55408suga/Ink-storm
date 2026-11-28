@@ -590,12 +590,81 @@ static void test_boss_break_determinism_and_event_tally(void)
     game_destroy(a);
 }
 
+static void test_ccw_cyclone_determinism_and_hash_sensitivity(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x4646));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    GameState *cw_only = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(cw_only);
+
+    game_debug_start_wave(a, 0);
+    game_debug_start_wave(b, 0);
+    game_debug_start_wave(cw_only, 0);
+
+    int ccw_events = 0;
+    int cw_events = 0;
+    for (int t = 0; t < 180; ++t) {
+        BrushInput in_ccw = {.pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f};
+        BrushInput in_cw = in_ccw;
+        if (t == 5 || t == 95) {
+            in_ccw = (BrushInput){.pmx = 580.0f,
+                                  .pmy = 360.0f,
+                                  .mx = 580.0f,
+                                  .my = 360.0f,
+                                  .cyclone = true,
+                                  .cyclone_ccw = true};
+            in_cw = in_ccw;
+            in_cw.cyclone_ccw = false;
+        } else if (t == 15) {
+            in_ccw = (BrushInput){
+                .pmx = 700.0f, .pmy = 360.0f, .mx = 700.0f, .my = 360.0f, .cyclone = true};
+            in_cw = in_ccw;
+        }
+        game_step(a, &in_ccw, NULL);
+        game_step(b, &in_ccw, NULL);
+        game_step(cw_only, &in_cw, NULL);
+
+        TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+        for (int32_t i = 0; i < a->event_count; ++i) {
+            if (a->events[i].type == EV_CYCLONE) {
+                if ((a->events[i].flags & EVF_CYCLONE_CCW) != 0) {
+                    ++ccw_events;
+                } else {
+                    ++cw_events;
+                }
+            }
+        }
+        if (t == 5) {
+            /* Right after CCW vs CW cast, spin, cyclone_ccw_cd, and fluid must all diverge. */
+            uint64_t sec_ccw[GAME_HASH_SECTION_COUNT];
+            uint64_t sec_cw[GAME_HASH_SECTION_COUNT];
+            game_hash_sections(a, sec_ccw);
+            game_hash_sections(cw_only, sec_cw);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_FLUID], sec_cw[GAME_HASH_FLUID]);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_RUN], sec_cw[GAME_HASH_RUN]);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_INTERNAL], sec_cw[GAME_HASH_INTERNAL]);
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT(2, ccw_events);
+    TEST_ASSERT_EQUAL_INT(1, cw_events);
+    TEST_ASSERT_NOT_EQUAL_UINT64(game_hash(a), game_hash(cw_only));
+
+    game_destroy(cw_only);
+    game_destroy(b);
+    game_destroy(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_full_run_determinism_sanity_and_settlement);
     RUN_TEST(test_campaign_plus_endless_loop_determinism_and_settlement);
     RUN_TEST(test_boss_break_determinism_and_event_tally);
+    RUN_TEST(test_ccw_cyclone_determinism_and_hash_sensitivity);
     RUN_TEST(test_different_seed_diverges);
     RUN_TEST(test_multi_tick_per_frame_event_tally);
     RUN_TEST(test_event_queue_overflow_and_reset);

@@ -47,6 +47,7 @@ typedef struct {
     bool lobby_paint;
     bool lobby_stroke_started;
     bool lobby_cyclone;
+    bool lobby_cyclone_ccw;
     bool lobby_gale;
     int32_t lobby_brush_step;
 } MenuInput;

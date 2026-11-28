@@ -342,13 +342,13 @@ EntityId ecs_entity_at(const EcsWorld *w, uint32_t index);
 - `FluidState fluid`（格子配列）
 - `EcsWorld ecs`・`GameComponents comps`
 - `RunConfig config`・`uint64_t rng`・`uint64_t ticks`・`RunPhase phase`・`float phase_t`・`float hitstop_t`
-- `PlayerState player`（墨・かすれ筆・筆先・CD・`gale_charges`/`gale_max_charges`・墨昇華）
+- `PlayerState player`（墨・上限 `GAME_BASE_INK_MAX = 120`・かすれ筆・筆先・CD `cyclone_cd`/`cyclone_ccw_cd`/`gale_cd`・`gale_charges`/`gale_max_charges`・墨昇華）
 - `ShrineState shrines[GAME_MAX_SHRINES]`・`int32_t shrine_count`（基本 1 基使用、複数化余白）
 - `RunProgress run`（幕・ウェーブ・ノルマ・`endless_loop`/`endless_acts_cleared`/`bonus_crystals`・撃破・スコア・チェイン・反応回数・リロール・`RewardOffer`（`repair_amount`/`crystal_reward` 含む）・所持アップグレード・所持大遺物 `relics[]` / `relic_count`・`boss_id`・`run_settled`）
 - `GameEvent events[GAME_MAX_EVENTS]`・`int32_t event_count`・`uint32_t dropped_events`
 - `PendingImpulse pending_impulses[GAME_MAX_PENDING_IMPULSE]`・`int32_t pending_impulse_count`
 - `RyuBodyState ryu_body`（多部位一筆龍の公開読み取り状態：`head_id`, `orb_ids[3]`, `orb_broken_mask`, `active_orb_slot`, 頭部軌跡リングバッファ `trail[GAME_RYU_TRAIL_CAP]` / `trail_head` / `trail_count`。`ink_render` が `internal` に触れずに胴の軌跡と龍玉破壊区間を描画するための公開契約）
-- `GameInternal internal`（`ink_game` 専有。`RunModifiers`・各種タイマー・累積距離・`ryu_ward_ping_cd` 等を隔離し、描画・音・app は読まない）
+- `GameInternal internal`（`ink_game` 専有。`RunModifiers`・`ActiveCyclone`（回転向き `spin` 含む）・各種タイマー・累積距離・`ryu_ward_ping_cd` 等を隔離し、描画・音・app は読まない）
 - 描画専用 VFX プール（`RenderState` 内）
 
 ---
@@ -431,6 +431,9 @@ typedef enum {
 #define EVF_REWARD_REPAIR  (UINT32_C(1) << 12)
 #define EVF_REWARD_RELIC   (UINT32_C(1) << 13)
 #define EVF_REWARD_CRYSTAL (UINT32_C(1) << 14)
+#define EVF_SHRINE_BLOCKED (UINT32_C(1) << 15)
+#define EVF_STORM_FLUID_TEMPEST (UINT32_C(1) << 16)
+#define EVF_CYCLONE_CCW    (UINT32_C(1) << 17)
 
 typedef struct {
     GameEventType type;
@@ -450,7 +453,7 @@ typedef struct {
 | `EV_STORM_ZAP` | 始点 | 終点 | ホップ番号（0 = 初撃） | 0 |
 | `EV_THUNDERBURST` | 爆雷ブロック（64px 四方）内の爆雷セル重心（px） | `radius_px`（`72 * rmul`）, `0` | ブロック内の爆雷セル数（`>= 6 × GAME_CELL_COUNT_SCALE`） | 0 |
 | `EV_CATACLYSM` | 共鳴ブロック（64px 四方）内の共鳴セル重心（px） | `96.0f`, `0` | ブロック内の共鳴セル数（`>= 8 × GAME_CELL_COUNT_SCALE`） | 0 |
-| `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 0 |
+| `EV_CYCLONE` / `EV_GALE` | 中心 / 始点 | — / 向き（単位） | 半径（px 整数）/ 0 | 逆渦印時は `EVF_CYCLONE_CCW` / 0 |
 | `EV_ORB_PICKUP` | 回収位置 | — | 墨玉の価値（10） | `EVF_ORB_AUTO`（自動回収時） |
 | `EV_SHRINE_HIT` | 社の位置 | 被弾元への向き（単位） | 被弾後の HP | 0 |
 | `EV_SURGE_START` | 筆先 | — | チェイン数 | 0（非発動→発動の瞬間のみ） |
@@ -465,13 +468,14 @@ typedef struct {
 | `EV_GAME_OVER` / `EV_VICTORY` | 社の位置 / — | — | 0 / `act_index` | `EVF_RUN_ABORTED` / 0 |
 | `EV_ENEMY_INTRO` | — | — | `EnemyDefId` | 0 |
 | `EV_REWARD_REROLL` | — | — | 残りリロール回数 | 0 |
-| `EV_SKILL_DENIED` | 筆先 | — | `SkillId` | 0 |
+| `EV_SKILL_DENIED` | 筆先 | — | `SkillId`（`SKILL_CYCLONE`, `SKILL_GALE`, `SKILL_CYCLONE_CCW`） | 0 |
 
 ### 7.2 コマンド入力（`app` / テスト → `ink_game`）
 ```c
 typedef struct {
     float mx, my, pmx, pmy;
     bool paint, cyclone, gale;
+    bool cyclone_ccw;
 } BrushInput;
 
 typedef enum {

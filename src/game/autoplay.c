@@ -40,7 +40,8 @@ BrushInput game_autoplay_input(const GameState *g)
     /* Scan active entities once for orbs, projectiles, slam targets, lightning strikes, and boss.
      */
     const uint32_t hw = g->ecs.high_water;
-    float best_orb_d2 = (ink_dip || g->player.ink < 55.0f) ? (620.0f * 620.0f) : (250.0f * 250.0f);
+    float best_orb_d2 = (ink_dip || g->player.ink < 0.55f * g->player.ink_max) ? (620.0f * 620.0f)
+                                                                               : (250.0f * 250.0f);
     bool has_orb = false;
     float orb_x = cx;
     float orb_y = cy;
@@ -55,9 +56,13 @@ BrushInput game_autoplay_input(const GameState *g)
     float urgent_d2 = 1e12f;
     float clx = cx;
     float cly = cy;
+    float cl_vx = 0.0f;
+    float cl_vy = 0.0f;
     bool fireball_near_ink = false;
     float fb_x = cx;
     float fb_y = cy;
+    float fb_vx = 0.0f;
+    float fb_vy = 0.0f;
 
     float best_slam_d2 = 520.0f * 520.0f;
     bool has_slam_target = false;
@@ -108,6 +113,8 @@ BrushInput game_autoplay_input(const GameState *g)
                     urgent_d2 = d2;
                     clx = tr->x;
                     cly = tr->y;
+                    cl_vx = vel->vx;
+                    cl_vy = vel->vy;
                 }
             }
             if (p->kind == PROJ_FIREBALL && !fireball_near_ink) {
@@ -117,6 +124,8 @@ BrushInput game_autoplay_input(const GameState *g)
                     fireball_near_ink = true;
                     fb_x = tr->x;
                     fb_y = tr->y;
+                    fb_vx = vel->vx;
+                    fb_vy = vel->vy;
                 }
             }
             const float prio = (p->kind == PROJ_FIREBALL || p->kind == PROJ_BOUNCE_ORB ||
@@ -236,7 +245,7 @@ BrushInput game_autoplay_input(const GameState *g)
         tx = boss_x + cosf(t * 5.0f) * 48.0f;
         ty = boss_y + sinf(t * 5.0f) * 40.0f;
         want_paint = true;
-    } else if (has_orb && g->player.ink < 82.0f) {
+    } else if (has_orb && g->player.ink < 0.82f * g->player.ink_max) {
         tx = orb_x;
         ty = orb_y;
         want_paint = false;
@@ -246,14 +255,24 @@ BrushInput game_autoplay_input(const GameState *g)
         want_paint = true;
     }
 
+    const bool cw_ready = g->player.cyclone_cd <= 0.0f;
+    const bool ccw_ready = g->player.cyclone_ccw_cd <= 0.0f;
+    const bool boss_counter_cw = g->internal.boss_vortex_t > 0.0f || g->internal.ryu_coil_t > 0.0f;
+    const bool other_cyc_cooling =
+        (g->player.cyclone_cd > 0.0f) || (g->player.cyclone_ccw_cd > 0.0f);
+    const float cyc_reserve = (other_cyc_cooling && !boss_counter_cw) ? 24.0f : 4.0f;
     bool want_cyclone = false;
     float cyc_tx = tx;
     float cyc_ty = ty;
-    if (g->player.cyclone_cd <= 0.0f && ink_avail >= cyc_cost + 4.0f) {
+    float cyc_vx = 0.0f;
+    float cyc_vy = 0.0f;
+    if ((cw_ready || (ccw_ready && !boss_counter_cw)) && ink_avail >= cyc_cost + cyc_reserve) {
         if (fireball_near_ink) {
             want_cyclone = true;
             cyc_tx = fb_x;
             cyc_ty = fb_y;
+            cyc_vx = fb_vx;
+            cyc_vy = fb_vy;
             tx = fb_x;
             ty = fb_y;
         } else if (close_proj_n >= 2 || urgent_d2 < 145.0f * 145.0f ||
@@ -263,6 +282,8 @@ BrushInput game_autoplay_input(const GameState *g)
             const float target_y = close_proj_n > 0 ? cly : proj_y;
             cyc_tx = target_x;
             cyc_ty = target_y;
+            cyc_vx = close_proj_n > 0 ? cl_vx : proj_vx;
+            cyc_vy = close_proj_n > 0 ? cl_vy : proj_vy;
             tx = target_x;
             ty = target_y;
         }
@@ -283,8 +304,31 @@ BrushInput game_autoplay_input(const GameState *g)
 
     if (want_cyclone) {
         const float cyc_rad_px = 15.5f * g->internal.mods.cyclone_radius_mul * FLUID_CELL_PX;
-        if (hypotf(next_mx - cyc_tx, next_my - cyc_ty) <= cyc_rad_px) {
+        bool overlap_active = false;
+        if (other_cyc_cooling && !boss_counter_cw) {
+            for (int32_t i = 0; i < GAME_MAX_ACTIVE_CYCLONES; ++i) {
+                const ActiveCyclone *ac = &g->internal.cyclones[i];
+                if (!ac->active) {
+                    continue;
+                }
+                const float r_px = ac->rad_cells * FLUID_CELL_PX;
+                if (hypotf(ac->x - next_mx, ac->y - next_my) < r_px * 1.25f) {
+                    overlap_active = true;
+                    break;
+                }
+            }
+        }
+        if (!overlap_active && hypotf(next_mx - cyc_tx, next_my - cyc_ty) <= cyc_rad_px) {
+            bool use_ccw = false;
+            if (!boss_counter_cw) {
+                const float sx = cx - cyc_tx;
+                const float sy = cy - cyc_ty;
+                const float cross = cyc_vx * sy - cyc_vy * sx;
+                const bool want_ccw = cross < 0.0f;
+                use_ccw = want_ccw ? ccw_ready : !cw_ready;
+            }
             in.cyclone = true;
+            in.cyclone_ccw = use_ccw;
             ink_avail -= cyc_cost;
         }
     }

@@ -7,6 +7,7 @@
 typedef struct {
     float mx, my, pmx, pmy;
     bool paint, cyclone, gale;
+    bool cyclone_ccw;
 } BrushInput;
 
 typedef enum {
@@ -73,6 +74,7 @@ typedef enum {
 #define EVF_REWARD_CRYSTAL (UINT32_C(1) << 14)
 #define EVF_SHRINE_BLOCKED (UINT32_C(1) << 15)
 #define EVF_STORM_FLUID_TEMPEST (UINT32_C(1) << 16)
+#define EVF_CYCLONE_CCW (UINT32_C(1) << 17)
 
 typedef struct {
     GameEventType type;

@@ -86,8 +86,8 @@ static void populate_p2_entities_showcase(GameState *g, RenderState *r, UiView *
     g->run.score = 42900;
     g->run.chain = 6;
     g->run.chain_t = 2.4f;
-    g->player.ink = 82.0f;
-    g->player.ink_max = 100.0f;
+    g->player.ink = 98.0f;
+    g->player.ink_max = GAME_BASE_INK_MAX;
     g->player.surge_t = 2.5f;
     g->player.cursor_x = 128.0f;
     g->player.cursor_y = 148.0f;
@@ -234,8 +234,8 @@ static void populate_entities_and_projectiles(GameState *g, RenderState *r, bool
     g->run.relics[0] = RELIC_VERMILION_INKSTONE;
     g->run.relics[1] = RELIC_THUNDER_DRUM;
     g->run.relic_count = 2;
-    g->player.ink = 76.0f;
-    g->player.ink_max = 100.0f;
+    g->player.ink = 91.0f;
+    g->player.ink_max = GAME_BASE_INK_MAX;
     g->player.surge_t = 2.4f;
     g->player.cursor_x = 120.0f;
     g->player.cursor_y = 148.0f;

@@ -675,7 +675,8 @@ void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *
     const float gale_cost = player_skills_gale_cost(g);
     const float cyc_shake =
         r->skill_deny_t[SKILL_CYCLONE] > 0.0f ? sinf(r->vfx_time * 80.0f) * 3.5f * cs : 0.0f;
-    const float cyc_x = c.x + (double_gale ? -14.0f : -11.0f) * cs + cyc_shake;
+    const float cyc_base_x = c.x + (double_gale ? -14.0f : -11.0f) * cs;
+    const float cyc_x = cyc_base_x + cyc_shake;
     const bool cyc_ready =
         render_skill_pip_ready(g->player.cyclone_cd <= 0.001f, g->player.ink, cyc_cost);
     const float cyc_fill = ink_clampf(1.0f - g->player.cyclone_cd / cyc_total, 0.0f, 1.0f);
@@ -685,6 +686,35 @@ void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *
     ink_teardrop(r, (Vector2){cyc_x, pip_y}, (Vector2){0.0f, -1.0f},
                  6.0f * cs * (0.45f + 0.55f * cyc_fill), 5.5f * cs * (0.45f + 0.55f * cyc_fill),
                  pal_color_alpha(cyc_pal, 0.92f));
+
+    /* Reverse (CCW) Cyclone mini-pip to the left of the CW pip */
+    const float ccw_shake =
+        r->skill_deny_t[SKILL_CYCLONE_CCW] > 0.0f ? sinf(r->vfx_time * 80.0f) * 3.5f * cs : 0.0f;
+    const float ccw_x = cyc_base_x - 16.0f * cs + ccw_shake;
+    const float ccw_y = pip_y + 2.0f * cs;
+    const bool ccw_ready =
+        render_skill_pip_ready(g->player.cyclone_ccw_cd <= 0.001f, g->player.ink, cyc_cost);
+    const float ccw_fill = ink_clampf(1.0f - g->player.cyclone_ccw_cd / cyc_total, 0.0f, 1.0f);
+    const PaletteId ccw_pal =
+        r->skill_deny_t[SKILL_CYCLONE_CCW] > 0.0f ? PAL_SHU : (ccw_ready ? PAL_AO : PAL_SUMI_CLEAR);
+    const float ccw_scale = 0.70f * (0.45f + 0.55f * ccw_fill);
+    ink_teardrop(r, (Vector2){ccw_x, ccw_y}, (Vector2){0.0f, -1.0f}, 6.0f * cs * ccw_scale,
+                 5.5f * cs * ccw_scale, pal_color_alpha(ccw_pal, 0.92f));
+    const float ccw_arc_r = 6.2f * cs;
+    const float ccw_a0 = 0.45f;
+    const float ccw_a1 = ccw_a0 - 4.1f;
+    ink_arc_stroke(r, (Vector2){ccw_x, ccw_y}, ccw_arc_r, ccw_a0, ccw_a1,
+                   (BrushProfile){.w_max = 1.6f * cs,
+                                  .w_min_ratio = 0.35f,
+                                  .entry = 0.12f,
+                                  .exit = 0.20f,
+                                  .dry = 0.0f,
+                                  .seed = 364u},
+                   (InkTone){.color = ccw_pal, .alpha = ccw_ready ? 0.90f : 0.50f});
+    const Vector2 ccw_tip = {ccw_x + cosf(ccw_a1) * ccw_arc_r, ccw_y + sinf(ccw_a1) * ccw_arc_r};
+    const Vector2 ccw_tan = {sinf(ccw_a1), -cosf(ccw_a1)};
+    ink_teardrop(r, ccw_tip, ccw_tan, 3.2f * cs, 2.2f * cs,
+                 pal_color_alpha(ccw_pal, ccw_ready ? 0.92f : 0.52f));
 
     /* Gale readiness pip(s) (right: 1 pip normal, 2 pips with Double Gale Lv3) */
     const float gale_shake =

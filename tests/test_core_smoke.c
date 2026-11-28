@@ -70,7 +70,7 @@ static void test_game_init_and_hash_contract(void)
     TEST_ASSERT_FLOAT_WITHIN(0.0f, 360.0f, g1->shrines[0].y);
     TEST_ASSERT_EQUAL_INT32(8, g1->shrines[0].hp);
     TEST_ASSERT_EQUAL_INT32(8, g1->shrines[0].max_hp);
-    TEST_ASSERT_FLOAT_WITHIN(0.0f, 100.0f, g1->player.ink);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, GAME_BASE_INK_MAX, g1->player.ink);
     TEST_ASSERT_EQUAL_INT32(1, g1->run.rerolls_left);
     TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, g1->run.boss_id.index);
 

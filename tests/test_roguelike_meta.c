@@ -806,8 +806,8 @@ static void test_run_modifiers_calculation(void)
     cfg.meta_upgrade_lv[META_UPG_INK_MAX] = 2;
     GameState *g_meta = game_create(&cfg);
     TEST_ASSERT_NOT_NULL(g_meta);
-    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g_meta->player.ink_max);
-    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g_meta->player.ink);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 140.0f, g_meta->player.ink_max);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 140.0f, g_meta->player.ink);
     game_destroy(g_meta);
 }
 
@@ -1057,7 +1057,7 @@ static void test_p1_upgrades_all_16(void)
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.00f, g->internal.mods.homing_steer_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1.20f, g->internal.mods.deflected_max_speed_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 4.50f, g->internal.mods.chain_grace);
-        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 145.0f, g->player.ink_max);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 165.0f, g->player.ink_max);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.60f, g->internal.mods.ink_mark_mul);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 6.0f, g->internal.mods.ink_mark_duration);
 
@@ -1281,7 +1281,7 @@ static void test_p1_relics_all_9(void)
         const EntityId e = game_debug_spawn_enemy(g, ENEMY_UMBRELLA, 400.0f, 300.0f);
         game_velocity_mut(g, e)->vx = 0.0f;
         game_velocity_mut(g, e)->vy = 0.0f;
-        g->player.ink = 100.0f;
+        g->player.ink = g->player.ink_max;
         g->player.aim_x = 1.0f;
         g->player.aim_y = 0.0f;
         g->event_count = 0;
@@ -1289,7 +1289,7 @@ static void test_p1_relics_all_9(void)
             .pmx = 300.0f, .pmy = 300.0f, .mx = 300.0f, .my = 300.0f, .gale = true};
         player_skills_step(g, &gin);
         TEST_ASSERT_EQUAL_INT(3, count_ev(g, EV_GALE));
-        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 78.0f, g->player.ink);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, GAME_BASE_INK_MAX - 22.0f, g->player.ink);
         /* Fan knockback keeps 0.78 of the shove: 560 * 0.78 * 1.0 * 1.25 = 546 px/s (applied ONCE).
          */
         TEST_ASSERT_FLOAT_WITHIN(1.0f, 546.0f, game_velocity(g, e)->vx);
@@ -1902,20 +1902,21 @@ static void test_p2_relics_unlockable_and_mask(void)
         game_destroy(g);
     }
 
-    /* 2. Endless Brush: regen x2.5, ink_max == 60 (clamped), lower bound 30.0f clamp. */
+    /* 2. Endless Brush: regen x2.5, ink_max == 80 (clamped), lower bound 30.0f clamp. */
     {
         GameState *g = game_create(NULL);
         TEST_ASSERT_NOT_NULL(g);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 100.0f, g->player.ink_max);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 100.0f, g->player.ink);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g->player.ink_max);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 120.0f, g->player.ink);
 
         TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_ENDLESS_BRUSH));
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 2.5f, g->internal.mods.ink_regen_mul);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 60.0f, g->player.ink_max);
-        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 60.0f, g->player.ink);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 80.0f, g->player.ink_max);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, 80.0f, g->player.ink);
         TEST_ASSERT_FALSE(g->player.dry);
 
-        /* Verify 30.0f lower clamp when ink_max_add drops below -70. */
+        /* Verify 30.0f lower clamp when ink_max_add drops below -90 (3 copies = -120). */
+        g->run.relics[g->run.relic_count++] = RELIC_ENDLESS_BRUSH;
         g->run.relics[g->run.relic_count++] = RELIC_ENDLESS_BRUSH;
         roguelike_recompute_modifiers(g);
         TEST_ASSERT_FLOAT_WITHIN(1e-5f, 30.0f, g->player.ink_max);
@@ -2185,7 +2186,7 @@ static void test_ink_economy_orb_chain_refund_and_surge_cost(void)
 
     const float stroke_plain = ink_spent_by_step(g, &stroke, 0.0f);
     const float stroke_surge = ink_spent_by_step(g, &stroke, 3.0f);
-    TEST_ASSERT_TRUE(stroke_plain > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, (0.12f + 40.0f * 0.020f) * 1.15f, stroke_plain);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, stroke_plain * 0.72f, stroke_surge);
 
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 26.0f, ink_spent_by_step(g, &cyclone, 0.0f));
@@ -2647,6 +2648,44 @@ static void test_autoplay_waits_for_cursor_to_reach_fireball_before_cyclone(void
     game_destroy(g);
 }
 
+static int count_wet_paint_ticks(BrushStyleId style)
+{
+    const RunConfig cfg = meta_run_config_preset(style, UINT64_C(77));
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, GAME_BASE_INK_MAX, g->player.ink_max);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, GAME_BASE_INK_MAX, g->player.ink);
+
+    int ticks = 0;
+    float x = 300.0f;
+    float dir = 1.0f;
+    while (!g->player.dry && ticks < 1000) {
+        if (x > 900.0f) {
+            dir = -1.0f;
+        } else if (x < 300.0f) {
+            dir = 1.0f;
+        }
+        const float nx = x + 10.0f * dir;
+        const BrushInput in = {.pmx = x, .pmy = 360.0f, .mx = nx, .my = 360.0f, .paint = true};
+        player_skills_step(g, &in);
+        x = nx;
+        ++ticks;
+    }
+    game_destroy(g);
+    return ticks;
+}
+
+static void test_stroke_cost_gives_4_5s_wet_paint_at_600px_s_for_heavy(void)
+{
+    const int heavy_ticks = count_wet_paint_ticks(BRUSH_STYLE_HEAVY);
+    const int quill_ticks = count_wet_paint_ticks(BRUSH_STYLE_QUILL);
+    TEST_ASSERT_TRUE(heavy_ticks >= 266 && heavy_ticks <= 278);
+    TEST_ASSERT_TRUE(quill_ticks >= 340 && quill_ticks <= 355);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2690,5 +2729,6 @@ int main(void)
     RUN_TEST(test_wave_spawn_picker_falls_back_to_perimeter_and_defers_when_full);
     RUN_TEST(test_thunder_drum_and_arrow_do_not_consume_tempest_hint);
     RUN_TEST(test_autoplay_waits_for_cursor_to_reach_fireball_before_cyclone);
+    RUN_TEST(test_stroke_cost_gives_4_5s_wet_paint_at_600px_s_for_heavy);
     return UNITY_END();
 }

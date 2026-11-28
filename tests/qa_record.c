@@ -768,6 +768,13 @@ static bool run_lobby_brush(QaSession *s)
         } else if (local == 125) {
             in = (BrushInput){
                 .mx = 520.0f, .my = 410.0f, .pmx = 520.0f, .pmy = 410.0f, .cyclone = true};
+        } else if (local == 135) {
+            in = (BrushInput){.mx = 760.0f,
+                              .my = 410.0f,
+                              .pmx = 760.0f,
+                              .pmy = 410.0f,
+                              .cyclone = true,
+                              .cyclone_ccw = true};
         } else if (local == 145) {
             in = (BrushInput){
                 .mx = 760.0f, .my = 340.0f, .pmx = 560.0f, .pmy = 460.0f, .gale = true};

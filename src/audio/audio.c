@@ -504,9 +504,13 @@ static void spawn_event_voices(AudioState *audio, const GameState *game, uint64_
         case EV_WIND_TELEGRAPH:
             audio_voice_spawn(audio, AUDIO_VOICE_WIND_HOWL, at_sample, 196.0f, 0.0f);
             break;
-        case EV_CYCLONE:
-            audio_voice_spawn(audio, AUDIO_VOICE_CYCLONE_SWIRL, at_sample, 145.0f, brush_param);
+        case EV_CYCLONE: {
+            const float cyc_param =
+                brush_param +
+                ((ev->flags & EVF_CYCLONE_CCW) != 0 ? (float)AUDIO_SKILL_PARAM_CCW : 0.0f);
+            audio_voice_spawn(audio, AUDIO_VOICE_CYCLONE_SWIRL, at_sample, 145.0f, cyc_param);
             break;
+        }
         case EV_GALE:
             audio_voice_spawn(audio, AUDIO_VOICE_GALE_SLASH, at_sample, 175.0f, brush_param);
             break;

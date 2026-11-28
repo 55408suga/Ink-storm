@@ -414,8 +414,9 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_LOBBY_BEST_ACT] = {.ja = "最高到達", .en = "Best Act"},
     [TEXT_LOBBY_BEST_SCORE] = {.ja = "最高スコア", .en = "Best Score"},
     [TEXT_LOBBY_CLEARS] = {.ja = "累計クリア", .en = "Clears"},
-    [TEXT_LOBBY_CANVAS_HINT] = {.ja = "左ドラッグで試し描き・右クリック/E 渦印・Space 風斬り",
-                                .en = "Drag: paint / RMB or E: Cyclone / Space: Gale"},
+    [TEXT_LOBBY_CANVAS_HINT] =
+        {.ja = "左ドラッグで試し描き・右クリック/E 渦印・Q/中ボタン 逆渦・Space 風斬り",
+         .en = "Drag: paint / RMB or E: Cyclone / Q or MMB: Reverse / Space: Gale"},
     [TEXT_LOBBY_TEST_BRUSH] = {.ja = "試し筆", .en = "Test Brush"},
     [TEXT_HUD_REMAINING] = {.ja = "あと", .en = "left"},
     [TEXT_REWARD_FALLBACK_SINGLE_HINT] = {.ja = "1 / 4 またはクリックで社を修繕",
@@ -552,11 +553,13 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_GUIDE_S1_B1] =
         {.ja = "和紙に墨を引き、筆の向きへ強い風を起こす。敵弾を逸らし墨で染める基本技。",
          .en = "Drag across the washi to lay ink and push currents that bend arrows and orbs."},
-    [TEXT_GUIDE_S1_H2] = {.ja = "右クリック / E：渦印（吸い寄せ）",
-                          .en = "Right-Click / E: Cyclone Seal"},
+    [TEXT_GUIDE_S1_H2] = {.ja = "右クリック / E：渦印　Q / 中ボタン：逆渦印",
+                          .en = "Right-Click / E: Cyclone  Q / MMB: Reverse"},
     [TEXT_GUIDE_S1_B2] =
-        {.ja = "カーソル位置に渦を刻み、周囲の敵・弾・火球を中央の墨へ一斉に引き寄せる。",
-         .en = "Carve a vortex at your cursor to pull enemies, shots, and fireballs into ink."},
+        {.ja = "カーソル位置に渦を刻み、周囲の敵・弾・火球を中央の墨へ引き寄せる。時計回りと反時計"
+               "回りを並べると間に噴流が生まれる。",
+         .en = "Carve a vortex to pull foes, shots, and fireballs into ink. Place both spins side "
+               "by side to fire a jet between them."},
     [TEXT_GUIDE_S1_H3] = {.ja = "Space：風斬り（強烈な吹き飛ばし）",
                           .en = "Space: Gale Burst (Knockback)"},
     [TEXT_GUIDE_S1_B3] =
@@ -572,6 +575,8 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_GUIDE_D1_DRY] = {.ja = "かすれ", .en = "Dry"},
     [TEXT_GUIDE_D1_KEY_CYC] = {.ja = "右クリック / E", .en = "RMB / E"},
     [TEXT_GUIDE_D1_CAP_CYC] = {.ja = "渦印（敵と弾を吸う）", .en = "Cyclone (Pulls Foes)"},
+    [TEXT_GUIDE_D1_KEY_CYC_REV] = {.ja = "Q / 中ボタン", .en = "Q / MMB"},
+    [TEXT_GUIDE_D1_CAP_CYC_REV] = {.ja = "逆渦印（反時計回り）", .en = "Reverse Cyclone (CCW)"},
     [TEXT_GUIDE_D1_KEY_GALE] = {.ja = "Space", .en = "Space"},
     [TEXT_GUIDE_D1_CAP_GALE] = {.ja = "風斬り（吹き飛ばし）", .en = "Gale (Knockback)"},
     [TEXT_GUIDE_S2_TITLE] = {.ja = "ダメージの入り方 — 弾返し ＆ 叩きつけ",

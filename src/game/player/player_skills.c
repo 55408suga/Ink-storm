@@ -11,6 +11,8 @@
 static const float k_surge_cost_mul = 0.72f;
 static const float k_cyclone_base_cost = 26.0f;
 static const float k_gale_base_cost = 16.0f;
+static const float k_stroke_base_cost = 0.12f;
+static const float k_stroke_dist_cost = 0.020f;
 
 static float decayed_timer(float t)
 {
@@ -94,7 +96,7 @@ float player_skills_next_tick_gale_cost(const GameState *g)
 }
 
 static void register_active_cyclone(GameState *g, float x, float y, float sustain_rad,
-                                    float duration, float storm_sustain)
+                                    float duration, float storm_sustain, float spin)
 {
     int32_t slot = 0;
     float min_life = g->internal.cyclones[0].life;
@@ -116,6 +118,7 @@ static void register_active_cyclone(GameState *g, float x, float y, float sustai
         .life = duration,
         .max_life = duration,
         .storm_sustain = storm_sustain,
+        .spin = spin,
     };
 }
 
@@ -133,16 +136,19 @@ static float mass_gale_multiplier(MassTier tier)
     }
 }
 
-static void cast_cyclone(GameState *g)
+static void cast_cyclone(GameState *g, float spin)
 {
     const RunModifiers *mods = &g->internal.mods;
+    const bool is_ccw = spin < 0.0f;
+    const float dir = is_ccw ? -1.0f : 1.0f;
+    float *cd = is_ccw ? &g->player.cyclone_ccw_cd : &g->player.cyclone_cd;
     const float cost = player_skills_cyclone_cost(g);
-    if (g->player.cyclone_cd > 0.0f || g->player.ink < cost) {
+    if (*cd > 0.0f || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
                                      .x = g->player.cursor_x,
                                      .y = g->player.cursor_y,
-                                     .value = (int32_t)SKILL_CYCLONE,
+                                     .value = (int32_t)(is_ccw ? SKILL_CYCLONE_CCW : SKILL_CYCLONE),
                                      .flags = 0,
                                  });
         return;
@@ -151,7 +157,7 @@ static void cast_cyclone(GameState *g)
     g->player.ink -= cost;
     g->player.dry = g->player.ink < 20.0f;
     player_skills_refill_sandbox_ink(g);
-    g->player.cyclone_cd = mods->cyclone_cd;
+    *cd = mods->cyclone_cd;
 
     const float rad_cells = 15.5f * mods->cyclone_radius_mul;
     const float duration = 0.72f + mods->cyclone_duration_add;
@@ -160,9 +166,9 @@ static void cast_cyclone(GameState *g)
     upgrades_fire_on_cyclone(g, g->player.cursor_x, g->player.cursor_y, &storm_add, &storm_sustain);
 
     const float dye[FLUID_MAX_CHANNELS] = {0.92f, 0.0f, storm_add, 0.0f};
-    fluid_swirl(&g->fluid, g->player.cursor_x, g->player.cursor_y, rad_cells, 54.0f, dye);
+    fluid_swirl(&g->fluid, g->player.cursor_x, g->player.cursor_y, rad_cells, 54.0f * dir, dye);
     register_active_cyclone(g, g->player.cursor_x, g->player.cursor_y,
-                            13.0f * mods->cyclone_radius_mul, duration, storm_sustain);
+                            13.0f * mods->cyclone_radius_mul, duration, storm_sustain, dir);
 
     /* Pull nearby (or all, with Ink Magnet Lv3) Ink Orbs into the vortex center. */
     const uint32_t hw = g->ecs.high_water;
@@ -197,7 +203,7 @@ static void cast_cyclone(GameState *g)
                                  .x = g->player.cursor_x,
                                  .y = g->player.cursor_y,
                                  .value = (int32_t)floorf(px_rad + 0.5f),
-                                 .flags = 0,
+                                 .flags = is_ccw ? EVF_CYCLONE_CCW : 0u,
                              });
 }
 
@@ -451,6 +457,7 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
     const RunModifiers *mods = &g->internal.mods;
 
     decay_timer(&g->player.cyclone_cd);
+    decay_timer(&g->player.cyclone_ccw_cd);
     if (g->player.gale_max_charges <= 0) {
         g->player.gale_max_charges = mods->gale_max_charges > 0 ? mods->gale_max_charges : 1;
     }
@@ -526,8 +533,8 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
 
         if (valid_in->paint) {
             g->player.idle_t = 0.0f;
-            const float raw_cost =
-                (0.16f + mdist * 0.028f) * player_skills_surge_cost_mul(g) * mods->stroke_cost_mul;
+            const float raw_cost = (k_stroke_base_cost + mdist * k_stroke_dist_cost) *
+                                   player_skills_surge_cost_mul(g) * mods->stroke_cost_mul;
             const bool free_ink = g->internal.sandbox_infinite_ink;
             const bool free_dry = mods->dry_zero_cost && g->player.ink < 20.0f;
             if (free_ink || g->player.ink > 0.5f || free_dry) {
@@ -606,7 +613,7 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
         }
 
         if (valid_in->cyclone) {
-            cast_cyclone(g);
+            cast_cyclone(g, valid_in->cyclone_ccw ? -1.0f : 1.0f);
         }
         if (valid_in->gale) {
             cast_gale(g);
@@ -623,7 +630,8 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
         ac->life -= INK_FIXED_DT;
         if (ac->life > ac->max_life * 0.45f) {
             const float sdye[FLUID_MAX_CHANNELS] = {0.14f, 0.0f, ac->storm_sustain, 0.0f};
-            fluid_swirl(&g->fluid, ac->x, ac->y, ac->rad_cells, 18.0f, sdye);
+            const float spin = ac->spin < 0.0f ? -1.0f : 1.0f;
+            fluid_swirl(&g->fluid, ac->x, ac->y, ac->rad_cells, 18.0f * spin, sdye);
         }
         if (ac->life <= 1e-4f) {
             ac->active = false;

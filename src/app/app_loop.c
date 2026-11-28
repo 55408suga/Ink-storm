@@ -778,6 +778,7 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                         .mouse_y = menu.mouse_y,
                         .left_down = menu.lobby_paint,
                         .cyclone_pressed = menu.lobby_cyclone,
+                        .cyclone_ccw_pressed = menu.lobby_cyclone_ccw,
                         .gale_pressed = menu.lobby_gale,
                         .pick_pressed = -1,
                     };

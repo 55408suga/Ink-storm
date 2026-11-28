@@ -926,7 +926,7 @@ void roguelike_recompute_modifiers(GameState *g)
     relics_apply_modifiers_mul(g, &mods);
 
     g->internal.mods = mods;
-    g->player.ink_max = fmaxf(30.0f, 100.0f + mods.ink_max_add);
+    g->player.ink_max = fmaxf(30.0f, GAME_BASE_INK_MAX + mods.ink_max_add);
     if (g->player.ink > g->player.ink_max) {
         g->player.ink = g->player.ink_max;
         g->player.dry = g->player.ink < 20.0f;
@@ -934,6 +934,7 @@ void roguelike_recompute_modifiers(GameState *g)
     g->player.cyclone_cd_total = mods.cyclone_cd;
     g->player.gale_cd_total = mods.gale_cd;
     g->player.cyclone_cd = fminf(g->player.cyclone_cd, mods.cyclone_cd);
+    g->player.cyclone_ccw_cd = fminf(g->player.cyclone_ccw_cd, mods.cyclone_cd);
     g->player.gale_cd = fminf(g->player.gale_cd, mods.gale_cd);
     const int32_t prev_max_charges = g->player.gale_max_charges;
     const int32_t new_max_charges = mods.gale_max_charges > 0 ? mods.gale_max_charges : 1;

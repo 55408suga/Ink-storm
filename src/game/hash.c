@@ -187,6 +187,7 @@ static uint64_t hash_run(const GameState *g)
     h = ink_hash_f32(h, p->stroke_speed);
     h = ink_hash_f32(h, p->idle_t);
     h = ink_hash_f32(h, p->cyclone_cd);
+    h = ink_hash_f32(h, p->cyclone_ccw_cd);
     h = ink_hash_f32(h, p->cyclone_cd_total);
     h = ink_hash_f32(h, p->gale_cd);
     h = ink_hash_f32(h, p->gale_cd_total);
@@ -396,6 +397,7 @@ static uint64_t hash_internal(const GameInternal *in)
         h = ink_hash_f32(h, c->life);
         h = ink_hash_f32(h, c->max_life);
         h = ink_hash_f32(h, c->storm_sustain);
+        h = ink_hash_f32(h, c->spin);
     }
 
     h = ink_hash_f32(h, in->ignite_callout_cd);

@@ -5,6 +5,7 @@
 #include "game_ids.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define PROJ_TRAIL_LEN 20
@@ -100,6 +101,11 @@ typedef struct {
     int32_t kind, elem_kind;
     float timer, param_a, param_b;
 } GimmickComp;
+
+static inline float gimmick_kamaitachi_spin_dir(const GimmickComp *gim)
+{
+    return (gim != NULL && gim->param_a > 0.0f) ? 1.0f : -1.0f;
+}
 
 typedef struct {
     TransformComp transform[ECS_MAX_ENTITIES];
