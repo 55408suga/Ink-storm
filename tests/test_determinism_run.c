@@ -396,24 +396,48 @@ static void test_invalid_inputs_and_extreme_coords(void)
     game_debug_start_wave(inf_g, 0);
     game_debug_start_wave(ext_g, 0);
 
+    GameState *cyc_nan_g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(cyc_nan_g);
+    game_debug_start_wave(cyc_nan_g, 0);
+
     const BrushInput nan_in = {
         .mx = NAN, .my = 100.0f, .pmx = 100.0f, .pmy = 100.0f, .paint = true};
     const BrushInput inf_in = {
         .mx = 100.0f, .my = INFINITY, .pmx = 100.0f, .pmy = 100.0f, .cyclone = true};
-    const BrushInput ext_in = {
-        .mx = 1e30f, .my = -1e30f, .pmx = -1e30f, .pmy = 1e30f, .paint = true, .gale = true};
+    const BrushInput cyc_nan_in = {.mx = 100.0f,
+                                   .my = 100.0f,
+                                   .pmx = 100.0f,
+                                   .pmy = 100.0f,
+                                   .cyclone = true,
+                                   .has_cyclone_pos = true,
+                                   .cyclone_x = NAN,
+                                   .cyclone_y = 100.0f};
+    const BrushInput ext_in = {.mx = 1e30f,
+                               .my = -1e30f,
+                               .pmx = -1e30f,
+                               .pmy = 1e30f,
+                               .paint = true,
+                               .cyclone = true,
+                               .gale = true,
+                               .has_cyclone_pos = true,
+                               .cyclone_x = 1e30f,
+                               .cyclone_y = -1e30f};
     const GameCommand bogus_cmd = {.type = (GameCommandType)99, .arg = 123};
 
     game_step(ref, NULL, NULL);
     game_step(nan_g, &nan_in, NULL);
     game_step(inf_g, &inf_in, NULL);
+    game_step(cyc_nan_g, &cyc_nan_in, NULL);
     TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(nan_g));
     TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(inf_g));
+    TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(cyc_nan_g));
 
     for (int t = 0; t < 10; ++t) {
         game_step(ext_g, &ext_in, &bogus_cmd);
         TEST_ASSERT_TRUE(fluid_validate_finite(&ext_g->fluid));
     }
+
+    game_destroy(cyc_nan_g);
 
     game_destroy(ext_g);
     game_destroy(inf_g);

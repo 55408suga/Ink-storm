@@ -219,8 +219,9 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->reward_anim_t = 0.0f;
     r->reward_reroll_t = 0.0f;
     r->last_reward_serial = 0;
-    r->skill_deny_t[0] = 0.0f;
-    r->skill_deny_t[1] = 0.0f;
+    for (int i = 0; i < SKILL_COUNT; ++i) {
+        r->skill_deny_t[i] = 0.0f;
+    }
     r->shrine_flicker_t = 0.0f;
     r->major_fx_active = 0;
     r->wind_telegraph_t = 0.0f;

@@ -136,7 +136,7 @@ static float mass_gale_multiplier(MassTier tier)
     }
 }
 
-static void cast_cyclone(GameState *g, float spin)
+static void cast_cyclone(GameState *g, float cx, float cy, float spin)
 {
     const RunModifiers *mods = &g->internal.mods;
     const bool is_ccw = spin < 0.0f;
@@ -146,8 +146,8 @@ static void cast_cyclone(GameState *g, float spin)
     if (*cd > 0.0f || g->player.ink < cost) {
         (void)game_push_event(g, (GameEvent){
                                      .type = EV_SKILL_DENIED,
-                                     .x = g->player.cursor_x,
-                                     .y = g->player.cursor_y,
+                                     .x = cx,
+                                     .y = cy,
                                      .value = (int32_t)(is_ccw ? SKILL_CYCLONE_CCW : SKILL_CYCLONE),
                                      .flags = 0,
                                  });
@@ -163,12 +163,12 @@ static void cast_cyclone(GameState *g, float spin)
     const float duration = 0.72f + mods->cyclone_duration_add;
     float storm_add = mods->cyclone_storm_add;
     float storm_sustain = mods->cyclone_storm_sustain;
-    upgrades_fire_on_cyclone(g, g->player.cursor_x, g->player.cursor_y, &storm_add, &storm_sustain);
+    upgrades_fire_on_cyclone(g, cx, cy, &storm_add, &storm_sustain);
 
     const float dye[FLUID_MAX_CHANNELS] = {0.92f, 0.0f, storm_add, 0.0f};
-    fluid_swirl(&g->fluid, g->player.cursor_x, g->player.cursor_y, rad_cells, 54.0f * dir, dye);
-    register_active_cyclone(g, g->player.cursor_x, g->player.cursor_y,
-                            13.0f * mods->cyclone_radius_mul, duration, storm_sustain, dir);
+    fluid_swirl(&g->fluid, cx, cy, rad_cells, 54.0f * dir, dye);
+    register_active_cyclone(g, cx, cy, 13.0f * mods->cyclone_radius_mul, duration, storm_sustain,
+                            dir);
 
     /* Pull nearby (or all, with Ink Magnet Lv3) Ink Orbs into the vortex center. */
     const uint32_t hw = g->ecs.high_water;
@@ -183,8 +183,8 @@ static void cast_cyclone(GameState *g, float spin)
         if (tr == NULL || vel == NULL || orb == NULL) {
             continue;
         }
-        const double dx = (double)g->player.cursor_x - (double)tr->x;
-        const double dy = (double)g->player.cursor_y - (double)tr->y;
+        const double dx = (double)cx - (double)tr->x;
+        const double dy = (double)cy - (double)tr->y;
         const double d = hypot(dx, dy);
         if (mods->cyclone_pulls_all_orbs) {
             if (d > 1e-6) {
@@ -200,8 +200,8 @@ static void cast_cyclone(GameState *g, float spin)
     const float px_rad = ink_clampf(rad_cells * FLUID_CELL_PX, 1.0f, 100000.0f);
     (void)game_push_event(g, (GameEvent){
                                  .type = EV_CYCLONE,
-                                 .x = g->player.cursor_x,
-                                 .y = g->player.cursor_y,
+                                 .x = cx,
+                                 .y = cy,
                                  .value = (int32_t)floorf(px_rad + 0.5f),
                                  .flags = is_ccw ? EVF_CYCLONE_CCW : 0u,
                              });
@@ -613,7 +613,15 @@ void player_skills_step(GameState *g, const BrushInput *valid_in)
         }
 
         if (valid_in->cyclone) {
-            cast_cyclone(g, valid_in->cyclone_ccw ? -1.0f : 1.0f);
+            const bool use_saved = valid_in->has_cyclone_pos && isfinite(valid_in->cyclone_x) &&
+                                   isfinite(valid_in->cyclone_y);
+            const float cx = use_saved ? ink_clampf(valid_in->cyclone_x, -(float)INK_SCREEN_W,
+                                                    2.0f * (float)INK_SCREEN_W)
+                                       : valid_in->mx;
+            const float cy = use_saved ? ink_clampf(valid_in->cyclone_y, -(float)INK_SCREEN_H,
+                                                    2.0f * (float)INK_SCREEN_H)
+                                       : valid_in->my;
+            cast_cyclone(g, cx, cy, valid_in->cyclone_ccw ? -1.0f : 1.0f);
         }
         if (valid_in->gale) {
             cast_gale(g);

@@ -1,9 +1,11 @@
 #include "enemies/boss_break.h"
+#include "render.h"
 #include "unity.h"
 #include "vfx_rules.h"
 
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 void setUp(void) {}
 
@@ -262,6 +264,35 @@ static void test_explanation_banner_durations_and_fade_curves(void)
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, vfx_boss_banner_alpha(NAN));
 }
 
+static void test_render_reset_vfx_clears_all_skill_deny_timers(void)
+{
+    RenderState *r = calloc(1, sizeof *r);
+    TEST_ASSERT_NOT_NULL(r);
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+
+    for (int s = 0; s < SKILL_COUNT; ++s) {
+        (void)game_push_event(g, (GameEvent){
+                                     .type = EV_SKILL_DENIED,
+                                     .value = s,
+                                 });
+    }
+    render_consume_events(r, g);
+    for (int s = 0; s < SKILL_COUNT; ++s) {
+        TEST_ASSERT_TRUE(r->skill_deny_t[s] > 0.0f);
+    }
+    TEST_ASSERT_TRUE(r->skill_deny_t[SKILL_CYCLONE_CCW] > 0.0f);
+
+    render_reset_vfx(r, UINT64_C(42));
+    for (int s = 0; s < SKILL_COUNT; ++s) {
+        TEST_ASSERT_EQUAL_FLOAT(0.0f, r->skill_deny_t[s]);
+    }
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, r->skill_deny_t[SKILL_CYCLONE_CCW]);
+
+    game_destroy(g);
+    free(r);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -274,5 +305,6 @@ int main(void)
     RUN_TEST(test_boss_cue_covers_every_boss_phase_and_break_and_hides_outside_boss_play);
     RUN_TEST(test_bottom_dock_lifts_cleanly_above_brush_badge_relics_and_showcase_badge);
     RUN_TEST(test_explanation_banner_durations_and_fade_curves);
+    RUN_TEST(test_render_reset_vfx_clears_all_skill_deny_timers);
     return UNITY_END();
 }

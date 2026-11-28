@@ -60,9 +60,7 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
         l->paint_suppressed = false;
     }
 
-    const bool want_cw = raw->cyclone_pressed;
-    const bool want_ccw = raw->cyclone_ccw_pressed && !want_cw;
-    if (want_cw) {
+    if (raw->cyclone_pressed) {
         if (!l->cyclone_pending) {
             l->cyclone_pending = true;
             if (!l->cyclone_ccw_pending) {
@@ -71,7 +69,7 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
         }
         l->cyclone_x = raw->mouse_x;
         l->cyclone_y = raw->mouse_y;
-    } else if (want_ccw) {
+    } else if (raw->cyclone_ccw_pressed) {
         if (!l->cyclone_ccw_pending) {
             l->cyclone_ccw_pending = true;
             if (!l->cyclone_pending) {
@@ -161,29 +159,6 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
     const bool has_skill_edge =
         !keep_skills && (l->cyclone_pending || l->cyclone_ccw_pending || l->gale_pending);
     if (remaining_ticks <= 1 || has_skill_edge) {
-        if (!keep_skills && (l->cyclone_pending || l->cyclone_ccw_pending)) {
-            const bool emit_ccw =
-                l->cyclone_ccw_pending && (!l->cyclone_pending || l->cyclone_ccw_first);
-            const float cx = emit_ccw ? l->cyclone_ccw_x : l->cyclone_x;
-            const float cy = emit_ccw ? l->cyclone_ccw_y : l->cyclone_y;
-            if (cx != l->cur_x || cy != l->cur_y) {
-                in.mx = cx;
-                in.my = cy;
-                in.pmx = cx;
-                in.pmy = cy;
-                in.paint = false;
-                in.cyclone = true;
-                in.cyclone_ccw = emit_ccw;
-                in.gale = false;
-                if (emit_ccw) {
-                    l->cyclone_ccw_pending = false;
-                    l->cyclone_ccw_first = false;
-                } else {
-                    l->cyclone_pending = false;
-                }
-                return in;
-            }
-        }
         in.mx = l->cur_x;
         in.my = l->cur_y;
         in.pmx = l->prev_x;
@@ -195,18 +170,23 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
             record_hitstop_motion(l, &in);
         } else {
             apply_hitstop_motion(l, &in);
-            const bool emit_ccw =
-                l->cyclone_ccw_pending && (!l->cyclone_pending || l->cyclone_ccw_first);
-            const bool emit_cw = l->cyclone_pending && !emit_ccw;
-            in.cyclone = emit_cw || emit_ccw;
-            in.cyclone_ccw = emit_ccw;
-            in.gale = l->gale_pending;
-            if (emit_ccw) {
+            if (l->cyclone_ccw_pending && (!l->cyclone_pending || l->cyclone_ccw_first)) {
+                in.cyclone = true;
+                in.cyclone_ccw = true;
+                in.has_cyclone_pos = true;
+                in.cyclone_x = l->cyclone_ccw_x;
+                in.cyclone_y = l->cyclone_ccw_y;
                 l->cyclone_ccw_pending = false;
                 l->cyclone_ccw_first = false;
-            } else if (emit_cw) {
+            } else if (l->cyclone_pending) {
+                in.cyclone = true;
+                in.cyclone_ccw = false;
+                in.has_cyclone_pos = true;
+                in.cyclone_x = l->cyclone_x;
+                in.cyclone_y = l->cyclone_y;
                 l->cyclone_pending = false;
             }
+            in.gale = l->gale_pending;
             l->gale_pending = false;
         }
         return in;
@@ -261,6 +241,7 @@ BrushInput input_latch_take_subtick_for_game(InputLatch *l, int32_t remaining_ti
         in.paint = false;
         in.cyclone = false;
         in.cyclone_ccw = false;
+        in.has_cyclone_pos = false;
         in.gale = false;
         return in;
     }

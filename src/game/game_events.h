@@ -8,6 +8,10 @@ typedef struct {
     float mx, my, pmx, pmy;
     bool paint, cyclone, gale;
     bool cyclone_ccw;
+    /* Optional saved coordinates for queued cyclone casts; when false, casts at (mx, my). */
+    bool has_cyclone_pos;
+    float cyclone_x;
+    float cyclone_y;
 } BrushInput;
 
 typedef enum {

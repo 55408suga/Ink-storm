@@ -25,8 +25,14 @@ static uint8_t clamp_meta_lv(const RunConfig *cfg, MetaUpgradeKind kind)
 
 static bool brush_input_is_finite(const BrushInput *in)
 {
-    return in != NULL && isfinite(in->mx) && isfinite(in->my) && isfinite(in->pmx) &&
-           isfinite(in->pmy);
+    if (in == NULL || !isfinite(in->mx) || !isfinite(in->my) || !isfinite(in->pmx) ||
+        !isfinite(in->pmy)) {
+        return false;
+    }
+    if (in->has_cyclone_pos && (!isfinite(in->cyclone_x) || !isfinite(in->cyclone_y))) {
+        return false;
+    }
+    return true;
 }
 
 /* Finite but huge coordinates (e.g. +-FLT_MAX from the API) would overflow stroke lengths into
@@ -45,6 +51,10 @@ static const BrushInput *bounded_brush_input(const BrushInput *in, BrushInput *o
     out->my = ink_clampf(in->my, lo_y, hi_y);
     out->pmx = ink_clampf(in->pmx, lo_x, hi_x);
     out->pmy = ink_clampf(in->pmy, lo_y, hi_y);
+    if (in->has_cyclone_pos) {
+        out->cyclone_x = ink_clampf(in->cyclone_x, lo_x, hi_x);
+        out->cyclone_y = ink_clampf(in->cyclone_y, lo_y, hi_y);
+    }
     return out;
 }
 

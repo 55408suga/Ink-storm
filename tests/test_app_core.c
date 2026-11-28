@@ -1764,64 +1764,96 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
     const BrushInput s0 = input_latch_take_tick(&l);
     TEST_ASSERT_TRUE(s0.cyclone);
     TEST_ASSERT_FALSE(s0.cyclone_ccw);
+    TEST_ASSERT_TRUE(s0.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(410.0f, s0.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(260.0f, s0.cyclone_y);
     TEST_ASSERT_EQUAL_FLOAT(410.0f, s0.mx);
     TEST_ASSERT_EQUAL_FLOAT(260.0f, s0.my);
     const BrushInput s1 = input_latch_take_tick(&l);
     TEST_ASSERT_FALSE(s1.cyclone);
     TEST_ASSERT_FALSE(s1.cyclone_ccw);
+    TEST_ASSERT_FALSE(s1.has_cyclone_pos);
 
-    /* (b) Distinct frames (no tick popped between them): CW at (x1, y1) then CCW at (x2, y2). */
+    /* (b) Distinct frames (no tick popped between them): CW at (x1, y1) then CCW at (x2, y2),
+     * keeping live paint and live cursor position intact while preserving both captured coords. */
     input_latch_init(&l, 100.0f, 100.0f);
     RawInput f1 = make_raw(220.0f, 180.0f);
+    f1.left_down = true;
     f1.cyclone_pressed = true;
     RawInput f2 = make_raw(540.0f, 390.0f);
+    f2.left_down = true;
     f2.cyclone_ccw_pressed = true;
     input_latch_feed(&l, &f1);
     input_latch_feed(&l, &f2);
 
     const BrushInput t1 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(t1.paint);
+    TEST_ASSERT_EQUAL_FLOAT(540.0f, t1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(390.0f, t1.my);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, t1.pmx);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, t1.pmy);
     TEST_ASSERT_TRUE(t1.cyclone);
     TEST_ASSERT_FALSE(t1.cyclone_ccw);
-    TEST_ASSERT_EQUAL_FLOAT(220.0f, t1.mx);
-    TEST_ASSERT_EQUAL_FLOAT(180.0f, t1.my);
+    TEST_ASSERT_TRUE(t1.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(220.0f, t1.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(180.0f, t1.cyclone_y);
 
     const BrushInput t2 = input_latch_take_tick(&l);
-    TEST_ASSERT_TRUE(t2.cyclone);
-    TEST_ASSERT_TRUE(t2.cyclone_ccw);
+    TEST_ASSERT_TRUE(t2.paint);
     TEST_ASSERT_EQUAL_FLOAT(540.0f, t2.mx);
     TEST_ASSERT_EQUAL_FLOAT(390.0f, t2.my);
+    TEST_ASSERT_TRUE(t2.cyclone);
+    TEST_ASSERT_TRUE(t2.cyclone_ccw);
+    TEST_ASSERT_TRUE(t2.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(540.0f, t2.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(390.0f, t2.cyclone_y);
 
     const BrushInput t3 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(t3.paint);
     TEST_ASSERT_FALSE(t3.cyclone);
     TEST_ASSERT_FALSE(t3.cyclone_ccw);
+    TEST_ASSERT_FALSE(t3.has_cyclone_pos);
 
     /* (c) Vice-versa: CCW on frame 1 at (x1, y1) then CW on frame 2 at (x2, y2). */
     input_latch_init(&l, 100.0f, 100.0f);
     RawInput r1 = make_raw(310.0f, 420.0f);
+    r1.left_down = true;
     r1.cyclone_ccw_pressed = true;
     RawInput r2 = make_raw(720.0f, 210.0f);
+    r2.left_down = true;
     r2.cyclone_pressed = true;
     input_latch_feed(&l, &r1);
     input_latch_feed(&l, &r2);
 
     const BrushInput rt1 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(rt1.paint);
+    TEST_ASSERT_EQUAL_FLOAT(720.0f, rt1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(210.0f, rt1.my);
     TEST_ASSERT_TRUE(rt1.cyclone);
     TEST_ASSERT_TRUE(rt1.cyclone_ccw);
-    TEST_ASSERT_EQUAL_FLOAT(310.0f, rt1.mx);
-    TEST_ASSERT_EQUAL_FLOAT(420.0f, rt1.my);
+    TEST_ASSERT_TRUE(rt1.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(310.0f, rt1.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(420.0f, rt1.cyclone_y);
 
     const BrushInput rt2 = input_latch_take_tick(&l);
-    TEST_ASSERT_TRUE(rt2.cyclone);
-    TEST_ASSERT_FALSE(rt2.cyclone_ccw);
+    TEST_ASSERT_TRUE(rt2.paint);
     TEST_ASSERT_EQUAL_FLOAT(720.0f, rt2.mx);
     TEST_ASSERT_EQUAL_FLOAT(210.0f, rt2.my);
+    TEST_ASSERT_TRUE(rt2.cyclone);
+    TEST_ASSERT_FALSE(rt2.cyclone_ccw);
+    TEST_ASSERT_TRUE(rt2.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(720.0f, rt2.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(210.0f, rt2.cyclone_y);
 
     const BrushInput rt3 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(rt3.paint);
     TEST_ASSERT_FALSE(rt3.cyclone);
     TEST_ASSERT_FALSE(rt3.cyclone_ccw);
+    TEST_ASSERT_FALSE(rt3.has_cyclone_pos);
 
-    /* (d) Multi-frame hitstop: CW on hitstop frame 1 + CCW on hitstop frame 2 deliver both
-     * cyclones cleanly at their own coordinates on consecutive live ticks after hitstop ends. */
+    /* (d) Multi-frame hitstop with held LMB: CW on hitstop frame 1 + CCW on hitstop frame 2
+     * keep live painting continuous and live (mx, my) intact after hitstop ends, while spawning
+     * both vortices at their exact captured coordinates without triggering idle ink regen. */
     GameState *g = game_create(NULL);
     TEST_ASSERT_NOT_NULL(g);
     game_debug_start_wave(g, 0);
@@ -1831,35 +1863,52 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
 
     input_latch_init(&l, 400.0f, 300.0f);
     RawInput hs1 = make_raw(480.0f, 260.0f);
+    hs1.left_down = true;
     hs1.cyclone_pressed = true;
     input_latch_feed(&l, &hs1);
     const BrushInput frozen1 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(frozen1.paint);
     TEST_ASSERT_FALSE(frozen1.cyclone);
     TEST_ASSERT_FALSE(frozen1.cyclone_ccw);
     game_step(g, &frozen1, NULL);
 
     RawInput hs2 = make_raw(680.0f, 340.0f);
+    hs2.left_down = true;
     hs2.cyclone_ccw_pressed = true;
     input_latch_feed(&l, &hs2);
     const BrushInput frozen2 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(frozen2.paint);
     TEST_ASSERT_FALSE(frozen2.cyclone);
     TEST_ASSERT_FALSE(frozen2.cyclone_ccw);
     game_step(g, &frozen2, NULL);
     for (int t = 0; t < 4 && g->hitstop_t > 0.0f; ++t) {
-        RawInput hold = make_raw(680.0f, 340.0f);
+        RawInput hold = make_raw(760.0f, 410.0f);
+        hold.left_down = true;
         input_latch_feed(&l, &hold);
         const BrushInput f = input_latch_take_subtick_for_game(&l, 1, g);
+        TEST_ASSERT_TRUE(f.paint);
         TEST_ASSERT_FALSE(f.cyclone);
         game_step(g, &f, NULL);
     }
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, g->hitstop_t);
 
+    RawInput drag1 = make_raw(780.0f, 420.0f);
+    drag1.left_down = true;
+    input_latch_feed(&l, &drag1);
     const BrushInput live1 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live1.paint);
+    TEST_ASSERT_EQUAL_FLOAT(780.0f, live1.mx);
+    TEST_ASSERT_EQUAL_FLOAT(420.0f, live1.my);
     TEST_ASSERT_TRUE(live1.cyclone);
     TEST_ASSERT_FALSE(live1.cyclone_ccw);
-    TEST_ASSERT_EQUAL_FLOAT(480.0f, live1.mx);
-    TEST_ASSERT_EQUAL_FLOAT(260.0f, live1.my);
+    TEST_ASSERT_TRUE(live1.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(480.0f, live1.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(260.0f, live1.cyclone_y);
     game_step(g, &live1, NULL);
+    TEST_ASSERT_TRUE(g->player.painting);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->player.idle_t);
+    TEST_ASSERT_EQUAL_FLOAT(780.0f, g->player.cursor_x);
+    TEST_ASSERT_EQUAL_FLOAT(420.0f, g->player.cursor_y);
     bool saw_cw = false;
     for (int32_t i = 0; i < g->event_count; ++i) {
         if (g->events[i].type == EV_CYCLONE && (g->events[i].flags & EVF_CYCLONE_CCW) == 0u &&
@@ -1869,12 +1918,23 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
     }
     TEST_ASSERT_TRUE(saw_cw);
 
+    RawInput drag2 = make_raw(810.0f, 440.0f);
+    drag2.left_down = true;
+    input_latch_feed(&l, &drag2);
     const BrushInput live2 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live2.paint);
+    TEST_ASSERT_EQUAL_FLOAT(810.0f, live2.mx);
+    TEST_ASSERT_EQUAL_FLOAT(440.0f, live2.my);
     TEST_ASSERT_TRUE(live2.cyclone);
     TEST_ASSERT_TRUE(live2.cyclone_ccw);
-    TEST_ASSERT_EQUAL_FLOAT(680.0f, live2.mx);
-    TEST_ASSERT_EQUAL_FLOAT(340.0f, live2.my);
+    TEST_ASSERT_TRUE(live2.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(680.0f, live2.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(340.0f, live2.cyclone_y);
     game_step(g, &live2, NULL);
+    TEST_ASSERT_TRUE(g->player.painting);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->player.idle_t);
+    TEST_ASSERT_EQUAL_FLOAT(810.0f, g->player.cursor_x);
+    TEST_ASSERT_EQUAL_FLOAT(440.0f, g->player.cursor_y);
     bool saw_ccw = false;
     for (int32_t i = 0; i < g->event_count; ++i) {
         if (g->events[i].type == EV_CYCLONE && (g->events[i].flags & EVF_CYCLONE_CCW) != 0u &&
@@ -1884,9 +1944,28 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
     }
     TEST_ASSERT_TRUE(saw_ccw);
 
+    bool active_cw = false;
+    bool active_ccw = false;
+    for (int32_t i = 0; i < GAME_MAX_ACTIVE_CYCLONES; ++i) {
+        const ActiveCyclone *ac = &g->internal.cyclones[i];
+        if (!ac->active) {
+            continue;
+        }
+        if (ac->spin > 0.0f && fabsf(ac->x - 480.0f) < 1.0f && fabsf(ac->y - 260.0f) < 1.0f) {
+            active_cw = true;
+        } else if (ac->spin < 0.0f && fabsf(ac->x - 680.0f) < 1.0f &&
+                   fabsf(ac->y - 340.0f) < 1.0f) {
+            active_ccw = true;
+        }
+    }
+    TEST_ASSERT_TRUE(active_cw);
+    TEST_ASSERT_TRUE(active_ccw);
+
     const BrushInput live3 = input_latch_take_subtick_for_game(&l, 1, g);
+    TEST_ASSERT_TRUE(live3.paint);
     TEST_ASSERT_FALSE(live3.cyclone);
     TEST_ASSERT_FALSE(live3.cyclone_ccw);
+    TEST_ASSERT_FALSE(live3.has_cyclone_pos);
 
     /* (e) Reward phase clears both pending CW and CCW in a single tick. */
     g->phase = RUN_PHASE_REWARD;
@@ -1895,6 +1974,7 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
     const BrushInput rew = input_latch_take_subtick_for_game(&l, 1, g);
     TEST_ASSERT_FALSE(rew.cyclone);
     TEST_ASSERT_FALSE(rew.cyclone_ccw);
+    TEST_ASSERT_FALSE(rew.has_cyclone_pos);
     TEST_ASSERT_FALSE(l.cyclone_pending);
     TEST_ASSERT_FALSE(l.cyclone_ccw_pending);
 
