@@ -1004,6 +1004,122 @@ static void test_pristine_lobby_sandbox_skips_fluid_solve_until_stroke(void)
     game_destroy(g);
 }
 
+static void test_nue_dash_corner_clip_and_long_trail_continuity(void)
+{
+    /* 1. Exact corner-clip segment on Act 2 Torii: Nue stops before solid cell (47, 49). */
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    const EntityId nue = sturdy_enemy(g, ENEMY_BOSS_NUE, 374.795502f, 399.070984f, 700);
+    EnemyComp *en = game_enemy_mut(g, nue);
+    en->ai_state = 2;
+    en->phase = 3; /* Waypoint (1060, 550): crosses Torii corner cell (47, 49) */
+    en->fire_cd = 1.0f;
+    g->internal.nue_trail_x[0][0] = 374.795502f;
+    g->internal.nue_trail_y[0][0] = 399.070984f;
+    g->internal.nue_trail_x[0][1] = 374.795502f;
+    g->internal.nue_trail_y[0][1] = 399.070984f;
+    g->internal.nue_trail_t[0] = 2.0f;
+
+    enemies_ai_step(g);
+    const TransformComp *tr = game_transform(g, nue);
+    TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, tr->x, tr->y));
+    TEST_ASSERT_TRUE(tr->x < 376.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, tr->x, g->internal.nue_trail_x[0][1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, tr->y, g->internal.nue_trail_y[0][1]);
+
+    /* 2. Long 910px persistent lightning trail has zero storm-dye gaps along the route. */
+    fluid_reset(&g->fluid);
+    fluid_clear_solids(&g->fluid);
+    g->internal.nue_trail_x[0][0] = 170.0f;
+    g->internal.nue_trail_y[0][0] = 360.0f;
+    g->internal.nue_trail_x[0][1] = 1080.0f;
+    g->internal.nue_trail_y[0][1] = 360.0f;
+    g->internal.nue_trail_t[0] = 2.0f;
+    g->internal.nue_trail_t[1] = 0.0f;
+    stage_gimmicks_step(g);
+    for (int s = 0; s <= 90; ++s) {
+        const float px = 170.0f + 910.0f * ((float)s / 90.0f);
+        float dye[FLUID_MAX_CHANNELS] = {0};
+        fluid_sample(&g->fluid, px, 360.0f, NULL, NULL, dye);
+        TEST_ASSERT_TRUE(dye[2] > 0.25f);
+    }
+    game_destroy(g);
+}
+
+static void test_electrified_projectile_hits_stormproof_elite_at_reduced_damage(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    const EntityId primary = sturdy_enemy(g, ENEMY_STONE_ONI, 420.0f, 300.0f, 200);
+    const EntityId elite = sturdy_enemy(g, ENEMY_STONE_ONI, 490.0f, 300.0f, 200);
+    enemy_apply_elite(g, elite, ELITE_STORMPROOF);
+    game_status_mut(g, elite)->ink_mark_t = 0.0f;
+    const int32_t elite_hp0 = game_health(g, elite)->hp;
+
+    const EntityId arrow = projectiles_spawn(g, PROJ_ARROW, 412.0f, 300.0f, 240.0f, 0.0f);
+    game_proj_mut(g, arrow)->deflected = true;
+    game_proj_mut(g, arrow)->electrified = true;
+    (void)primary;
+    projectiles_step(g);
+
+    TEST_ASSERT_EQUAL_INT32(elite_hp0 - 3, game_health(g, elite)->hp);
+    game_destroy(g);
+}
+
+static void test_ink_orb_spawns_outside_solid_terrain(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    stage_gimmicks_setup_act(g, 1);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, 306.66667f, 171.11111f));
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 340.0f, 190.0f));
+
+    /* 1. Enemy slain beside Act 2 rock pillar whose 10%-shifted drop lands inside solid rock. */
+    const EntityId umb = sturdy_enemy(g, ENEMY_UMBRELLA, 306.66667f, 171.11111f, 10);
+    (void)combat_apply_damage(g, umb, 50, DMG_PHYSICAL, 0.0f, 0.0f);
+    ecs_flush_destroy(&g->ecs);
+
+    int32_t orbs = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_INK_ORB)) {
+            const TransformComp *otr = game_transform(g, id);
+            TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, otr->x, otr->y));
+            ++orbs;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT32(0, orbs);
+
+    /* 2. Direct spawn from inside a solid rock pillar resolves to a nearby open cell. */
+    const EntityId solid_orb = combat_spawn_orb(g, 340.0f, 190.0f);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, solid_orb.index);
+    const TransformComp *str = game_transform(g, solid_orb);
+    TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, str->x, str->y));
+
+    /* 3. Non-finite coordinates are rejected cleanly without allocating an orb or UB cast. */
+    const EntityId nan_orb = game_debug_spawn_orb(g, (float)NAN, 360.0f);
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, nan_orb.index);
+    const EntityId inf_orb = game_debug_spawn_orb(g, 360.0f, (float)INFINITY);
+    TEST_ASSERT_EQUAL_UINT32(ECS_INVALID_INDEX, inf_orb.index);
+
+    game_destroy(g);
+}
+
+static void test_game_init_with_aliased_config_preserves_config(void)
+{
+    RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_QUILL, UINT64_C(1947));
+    cfg.endless_loop = 2;
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+
+    game_init(g, &g->config);
+    TEST_ASSERT_EQUAL_INT(BRUSH_STYLE_QUILL, g->config.brush_style);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_C(1947), g->config.seed);
+    TEST_ASSERT_EQUAL_INT32(2, g->config.endless_loop);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_C(1947), g->rng);
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1042,5 +1158,9 @@ int main(void)
     RUN_TEST(test_oblique_gale_knockback_into_torii_corner_slams_instead_of_tunneling);
     RUN_TEST(test_wind_return_ignores_inbound_near_miss_and_triggers_on_direct_threat);
     RUN_TEST(test_pristine_lobby_sandbox_skips_fluid_solve_until_stroke);
+    RUN_TEST(test_nue_dash_corner_clip_and_long_trail_continuity);
+    RUN_TEST(test_electrified_projectile_hits_stormproof_elite_at_reduced_damage);
+    RUN_TEST(test_ink_orb_spawns_outside_solid_terrain);
+    RUN_TEST(test_game_init_with_aliased_config_preserves_config);
     return UNITY_END();
 }

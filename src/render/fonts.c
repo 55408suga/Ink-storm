@@ -81,6 +81,27 @@ static int collect_codepoints(int *out, int cap)
     return count;
 }
 
+static void discard_failed_font(Font font)
+{
+    const Font def = GetFontDefault();
+    const bool owns_tex = font.texture.id != 0 && font.texture.id != def.texture.id;
+    const bool owns_glyphs = font.glyphs != NULL && font.glyphs != def.glyphs;
+    const bool owns_recs = font.recs != NULL && font.recs != def.recs;
+    if (!owns_tex && !owns_glyphs && !owns_recs) {
+        return;
+    }
+    if (font.texture.id != def.texture.id) {
+        UnloadFont(font);
+        return;
+    }
+    if (owns_glyphs) {
+        UnloadFontData(font.glyphs, font.glyphCount);
+    }
+    if (owns_recs) {
+        MemFree(font.recs);
+    }
+}
+
 void render_fonts_init(RenderState *r, const RenderOptions *opt)
 {
     if (r == NULL) {
@@ -117,9 +138,7 @@ void render_fonts_init(RenderState *r, const RenderOptions *opt)
     const bool body_ok =
         IsFontValid(body) && body.texture.id != 0 && body.texture.id != GetFontDefault().texture.id;
     if (!body_ok) {
-        if (body.texture.id != 0 && body.texture.id != GetFontDefault().texture.id) {
-            UnloadFont(body);
-        }
+        discard_failed_font(body);
         TraceLog(LOG_WARNING, "INKSTORM: font unavailable; using built-in ASCII font");
         return;
     }
@@ -155,9 +174,7 @@ void render_fonts_init(RenderState *r, const RenderOptions *opt)
                      cp_count);
             return;
         }
-        if (title.texture.id != 0 && title.texture.id != GetFontDefault().texture.id) {
-            UnloadFont(title);
-        }
+        discard_failed_font(title);
     }
 
     /* Fallback tier 2: load UI Mincho at 48px for sharp titles without crashing */
@@ -169,9 +186,7 @@ void render_fonts_init(RenderState *r, const RenderOptions *opt)
         r->font_title = title;
         r->owns_title_font = true;
     } else {
-        if (title.texture.id != 0 && title.texture.id != GetFontDefault().texture.id) {
-            UnloadFont(title);
-        }
+        discard_failed_font(title);
         r->font_title = r->font_body;
         r->owns_title_font = false;
     }

@@ -758,6 +758,8 @@ int app_run_window_loop(GameState *game, AudioState *audio, RenderState *render,
                     app_after_tick(&ctx, game);
                     step_hint_queue(&ctx, game, INK_FIXED_DT);
                     if (prev_phase == RUN_PHASE_REWARD && game->phase != RUN_PHASE_REWARD) {
+                        input_latch_reset_for_ui_transition(&latch, raw.mouse_x, raw.mouse_y,
+                                                            raw.left_down);
                         frame_clock_reset(&clock);
                         break;
                     }

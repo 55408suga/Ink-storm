@@ -51,7 +51,10 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
     l->cur_y = raw->mouse_y;
     l->left_down = raw->left_down;
 
-    if (raw->ui_click && raw->left_down) {
+    const bool has_reward_input =
+        (raw->pick_pressed >= 0 && raw->pick_pressed < GAME_MAX_REWARD_CHOICES) ||
+        raw->repair_pressed || raw->crystal_pressed || raw->reroll_pressed;
+    if ((raw->ui_click || has_reward_input) && raw->left_down) {
         l->paint_suppressed = true;
     } else if (!raw->left_down) {
         l->paint_suppressed = false;
@@ -196,6 +199,15 @@ BrushInput input_latch_take_subtick(InputLatch *l, int32_t remaining_ticks)
 BrushInput input_latch_take_subtick_for_game(InputLatch *l, int32_t remaining_ticks,
                                              const GameState *g)
 {
+    if (g != NULL && g->phase == RUN_PHASE_REWARD) {
+        BrushInput in = take_subtick_impl(l, remaining_ticks, false);
+        in.pmx = in.mx;
+        in.pmy = in.my;
+        in.paint = false;
+        in.cyclone = false;
+        in.gale = false;
+        return in;
+    }
     const bool keep_skills = (g != NULL && g->phase == RUN_PHASE_PLAYING && g->hitstop_t > 0.0f);
     return take_subtick_impl(l, remaining_ticks, keep_skills);
 }

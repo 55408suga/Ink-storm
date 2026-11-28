@@ -301,8 +301,9 @@ static const TextEntry k_text_table[TEXT_COUNT] = {
     [TEXT_RELIC_ENDLESS_BRUSH_EFFECT] = {.ja = "硯の自然回復 ×2.5", .en = "Inkstone regen x2.5"},
     [TEXT_RELIC_ENDLESS_BRUSH_TRADEOFF] = {.ja = "墨ゲージ上限 -40", .en = "Ink Max -40"},
     [TEXT_RELIC_NIGHT_PARADE_SCROLL_NAME] = {.ja = "百鬼夜行の巻物", .en = "Night Parade Scroll"},
-    [TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT] = {.ja = "獲得墨晶 ×1.5・撃破時墨玉 +1",
-                                               .en = "Crystals x1.5, +1 Ink Orb per kill"},
+    [TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT] =
+        {.ja = "獲得墨晶 ×1.5・撃破時墨玉 +1（龍玉除く）",
+         .en = "Crystals x1.5, +1 Orb/kill (excl. Dragon Orbs)"},
     [TEXT_RELIC_NIGHT_PARADE_SCROLL_TRADEOFF] = {.ja = "増援間隔×0.75・同時上限+2",
                                                  .en = "Spawn interval x0.75, max alive +2"},
 

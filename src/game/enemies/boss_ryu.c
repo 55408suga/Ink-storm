@@ -3,6 +3,7 @@
 #include "enemies/projectiles.h"
 #include "roguelike/waves.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -258,6 +259,121 @@ void boss_ryu_spawn(GameState *g, EntityId id)
 
     static const float k_swirl_dye[FLUID_MAX_CHANNELS] = {0.9f, 0.35f, 0.0f, 0.0f};
     fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 52.0f, k_swirl_dye);
+}
+
+static void resolve_breath_muzzle(const GameState *g, float ox, float oy, float dx, float dy,
+                                  float *out_x, float *out_y)
+{
+    *out_x = ox;
+    *out_y = oy;
+    if (!isfinite(ox) || !isfinite(oy) || !isfinite(dx) || !isfinite(dy) ||
+        !fluid_is_solid(&g->fluid, ox, oy)) {
+        return;
+    }
+
+    const double len = hypot((double)dx, (double)dy);
+    if (len <= 1e-6) {
+        return;
+    }
+    const double ux = (double)dx / len;
+    const double uy = (double)dy / len;
+    const double cell_px = (double)FLUID_CELL_PX;
+    const double max_dist = 64.0;
+    if ((double)ox < -max_dist || (double)ox >= (double)FLUID_W * cell_px + max_dist ||
+        (double)oy < -max_dist || (double)oy >= (double)FLUID_H * cell_px + max_dist) {
+        return;
+    }
+
+    const uint8_t *solid = fluid_solid_const(&g->fluid);
+    if (solid == NULL) {
+        return;
+    }
+
+    const double sx = (double)ox / cell_px;
+    const double sy = (double)oy / cell_px;
+    int cx = (int)floor(sx);
+    int cy = (int)floor(sy);
+
+    const int step_x = ux > 1e-9 ? 1 : (ux < -1e-9 ? -1 : 0);
+    const int step_y = uy > 1e-9 ? 1 : (uy < -1e-9 ? -1 : 0);
+
+    double t_delta_x = DBL_MAX;
+    double t_max_x = DBL_MAX;
+    if (step_x > 0) {
+        t_delta_x = cell_px / ux;
+        t_max_x = ((double)(cx + 1) - sx) * t_delta_x;
+    } else if (step_x < 0) {
+        t_delta_x = -cell_px / ux;
+        t_max_x = (sx - (double)cx) * t_delta_x;
+    }
+
+    double t_delta_y = DBL_MAX;
+    double t_max_y = DBL_MAX;
+    if (step_y > 0) {
+        t_delta_y = cell_px / uy;
+        t_max_y = ((double)(cy + 1) - sy) * t_delta_y;
+    } else if (step_y < 0) {
+        t_delta_y = -cell_px / uy;
+        t_max_y = (sy - (double)cy) * t_delta_y;
+    }
+
+    const int max_steps = (int)ceil(max_dist / cell_px) * 2 + 4;
+    for (int iter = 0; iter < max_steps; ++iter) {
+        const double t_enter = t_max_x < t_max_y ? t_max_x : t_max_y;
+        if (t_enter >= max_dist) {
+            return;
+        }
+
+        if (fabs(t_max_x - t_max_y) <= 1e-9) {
+            cx += step_x;
+            cy += step_y;
+            t_max_x += t_delta_x;
+            t_max_y += t_delta_y;
+        } else if (t_max_x < t_max_y) {
+            cx += step_x;
+            t_max_x += t_delta_x;
+        } else {
+            cy += step_y;
+            t_max_y += t_delta_y;
+        }
+
+        if (cx < 0 || cx >= FLUID_W || cy < 0 || cy >= FLUID_H || solid[cy * FLUID_W + cx] != 0u) {
+            continue;
+        }
+
+        const double next_t = t_max_x < t_max_y ? t_max_x : t_max_y;
+        const double t_exit = next_t < max_dist ? next_t : max_dist;
+        const double span = t_exit - t_enter;
+        if (span <= 0.0) {
+            continue;
+        }
+
+        const double t_near = t_enter + (0.05 < span * 0.5 ? 0.05 : span * 0.5);
+        float cand_x = (float)((double)ox + ux * t_near);
+        float cand_y = (float)((double)oy + uy * t_near);
+        if (!fluid_is_solid(&g->fluid, cand_x, cand_y)) {
+            *out_x = cand_x;
+            *out_y = cand_y;
+            return;
+        }
+
+        const double t_mid = t_enter + span * 0.5;
+        cand_x = (float)((double)ox + ux * t_mid);
+        cand_y = (float)((double)oy + uy * t_mid);
+        if (!fluid_is_solid(&g->fluid, cand_x, cand_y)) {
+            *out_x = cand_x;
+            *out_y = cand_y;
+            return;
+        }
+
+        const float min_x = (float)cx * FLUID_CELL_PX + 1e-3f;
+        const float max_x = (float)(cx + 1) * FLUID_CELL_PX - 1e-3f;
+        const float min_y = (float)cy * FLUID_CELL_PX + 1e-3f;
+        const float max_y = (float)(cy + 1) * FLUID_CELL_PX - 1e-3f;
+        *out_x = ink_clampf(cand_x, min_x, max_x);
+        *out_y = ink_clampf(cand_y, min_y, max_y);
+        return;
+    }
 }
 
 void boss_ryu_step(GameState *g, EntityId id)
@@ -585,7 +701,12 @@ void boss_ryu_step(GameState *g, EntityId id)
                 const float ang = base_ang + ((float)k - 2.5f) * 0.17f;
                 const ProjKind pk = (k % 2 == 0) ? PROJ_FIREBALL : PROJ_STORM_ORB;
                 const float sp = (pk == PROJ_FIREBALL) ? 205.0f : 215.0f;
-                (void)projectiles_spawn_dir(g, pk, tr->x, tr->y, cosf(ang), sinf(ang), sp);
+                const float vx_dir = cosf(ang);
+                const float vy_dir = sinf(ang);
+                float muzzle_x = tr->x;
+                float muzzle_y = tr->y;
+                resolve_breath_muzzle(g, tr->x, tr->y, vx_dir, vy_dir, &muzzle_x, &muzzle_y);
+                (void)projectiles_spawn_dir(g, pk, muzzle_x, muzzle_y, vx_dir, vy_dir, sp);
             }
             boss->pattern = (boss->pattern_timer <= 0.0f) ? 1 : 0;
         }

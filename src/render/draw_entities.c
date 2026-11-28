@@ -881,30 +881,84 @@ static void draw_boss_tengu(RenderState *r, const TransformComp *tr, const BossC
 void render_draw_nue_telegraph(RenderState *r, const TransformComp *tr, const BossComp *boss,
                                uint32_t seed)
 {
+    if (boss == NULL || boss->telegraph <= 0.01f) {
+        return;
+    }
     const float cx = tr->x;
     const float cy = tr->y;
-    /* Azure lightning dash telegraph */
-    if (boss != NULL && boss->telegraph > 0.01f) {
-        const float dx = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dx : 1.0f;
-        const float dy = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dy : 0.0f;
-        const float len = 240.0f;
-        const Vector2 dst = {cx + dx * len, cy + dy * len};
-        const InkTone warn = {.color = PAL_AO, .alpha = 0.65f + 0.30f * boss->telegraph};
-        ink_dashed_stroke(r, (Vector2){cx, cy}, dst, 20.0f, 10.0f, 4.2f, warn, seed + 88u);
-        const Vector2 core[3] = {
-            {cx, cy},
-            {cx + dx * len * 0.5f - dy * 10.0f, cy + dy * len * 0.5f + dx * 10.0f},
-            dst,
-        };
-        ink_stroke(r, core, 3,
-                   (BrushProfile){.w_max = 2.0f,
-                                  .w_min_ratio = 0.4f,
-                                  .entry = 0.1f,
-                                  .exit = 0.2f,
-                                  .dry = 0.0f,
-                                  .seed = seed + 89u},
-                   (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, 1.0f);
+    const InkTone warn = {.color = PAL_AO, .alpha = 0.65f + 0.30f * boss->telegraph};
+
+    if (boss->telegraph_pattern == 3) {
+        /* Night Cry radial shockwave telegraph (200px radius). */
+        const float outer_r = 200.0f;
+        const float pulse_r = 42.0f + 158.0f * boss->telegraph;
+        const int segs = 6;
+        const float seg_step = k_ent_two_pi / (float)segs;
+        for (int k = 0; k < segs; ++k) {
+            const float a0 = (float)k * seg_step + 0.08f;
+            const float a1 = (float)(k + 1) * seg_step - 0.18f;
+            ink_arc_stroke(r, (Vector2){cx, cy}, outer_r, a0, a1,
+                           (BrushProfile){.w_max = 4.0f,
+                                          .w_min_ratio = 0.35f,
+                                          .entry = 0.12f,
+                                          .exit = 0.20f,
+                                          .dry = 0.12f,
+                                          .seed = seed + 90u + (uint32_t)k},
+                           warn);
+        }
+        ink_arc_stroke(r, (Vector2){cx, cy}, pulse_r, 0.0f, k_ent_two_pi,
+                       (BrushProfile){.w_max = 2.4f,
+                                      .w_min_ratio = 0.45f,
+                                      .entry = 0.08f,
+                                      .exit = 0.08f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 98u},
+                       (InkTone){.color = PAL_AO_HOT, .alpha = 0.80f});
+        return;
     }
+
+    const float dx = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dx : 1.0f;
+    const float dy = (boss->gale_dx != 0.0f || boss->gale_dy != 0.0f) ? boss->gale_dy : 0.0f;
+
+    if (boss->telegraph_pattern == 1) {
+        /* Stopped Shrine-directed 3-way Bounce Storm Orb volley fan (+/-0.28 rad). */
+        const float base_ang = atan2f(dy, dx);
+        const float len = 185.0f;
+        for (int k = -1; k <= 1; ++k) {
+            const float ang = base_ang + (float)k * 0.28f;
+            const Vector2 dst = {cx + cosf(ang) * len, cy + sinf(ang) * len};
+            ink_dashed_stroke(r, (Vector2){cx, cy}, dst, 16.0f, 10.0f, k == 0 ? 3.8f : 3.0f, warn,
+                              seed + 90u + (uint32_t)(k + 1));
+        }
+        ink_arc_stroke(r, (Vector2){cx, cy}, 64.0f + 96.0f * boss->telegraph, base_ang - 0.30f,
+                       base_ang + 0.30f,
+                       (BrushProfile){.w_max = 2.4f,
+                                      .w_min_ratio = 0.40f,
+                                      .entry = 0.12f,
+                                      .exit = 0.18f,
+                                      .dry = 0.0f,
+                                      .seed = seed + 95u},
+                       (InkTone){.color = PAL_AO_HOT, .alpha = 0.88f});
+        return;
+    }
+
+    /* Pattern 0: Azure lightning dash telegraph */
+    const float len = 240.0f;
+    const Vector2 dst = {cx + dx * len, cy + dy * len};
+    ink_dashed_stroke(r, (Vector2){cx, cy}, dst, 20.0f, 10.0f, 4.2f, warn, seed + 88u);
+    const Vector2 core[3] = {
+        {cx, cy},
+        {cx + dx * len * 0.5f - dy * 10.0f, cy + dy * len * 0.5f + dx * 10.0f},
+        dst,
+    };
+    ink_stroke(r, core, 3,
+               (BrushProfile){.w_max = 2.0f,
+                              .w_min_ratio = 0.4f,
+                              .entry = 0.1f,
+                              .exit = 0.2f,
+                              .dry = 0.0f,
+                              .seed = seed + 89u},
+               (InkTone){.color = PAL_AO_HOT, .alpha = 0.90f}, 1.0f);
 }
 
 static void draw_boss_nue(RenderState *r, const TransformComp *tr, const EnemyComp *en,

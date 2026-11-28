@@ -81,10 +81,7 @@ bool app_snap_capture(RenderState *render, const GameState *game, const UiView *
         return false;
     }
 
-    size_t dir_len = strlen(dir_path);
-    while (dir_len > 1u && dir_path[dir_len - 1u] == '/') {
-        --dir_len;
-    }
+    const size_t dir_len = cli_trimmed_dir_len(dir_path);
 
     char path[PATH_MAX];
     const int n =

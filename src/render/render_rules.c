@@ -234,3 +234,8 @@ bool render_fluid_cache_matches(const FluidUploadCache *cache, const FluidState 
            cache->pristine == fluid_is_pristine(f) && cache->dims_key == RENDER_FLUID_DIMS_KEY &&
            cache->max_dye == f->cfg.max_dye && cache->gpu_path == gpu_path;
 }
+
+bool render_skill_pip_ready(bool charge_ready, float ink, float cost)
+{
+    return charge_ready && isfinite(ink) && isfinite(cost) && ink >= cost;
+}

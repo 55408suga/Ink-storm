@@ -872,6 +872,55 @@ static void test_pristine_flag_tracks_mutations_and_resets(void)
     TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
 }
 
+static void test_nested_mut_borrow_depth_preserves_outer_borrow(void)
+{
+    fluid_init(f, NULL);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(f, 0));
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(f, 1));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(f));
+
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+
+    /* Extra end call must clamp at zero without underflowing. */
+    fluid_end_mut_borrow(f);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(f));
+}
+
+static void test_diagonal_corner_and_pinch_do_not_bleed_dye(void)
+{
+    /* 1. Shipped Act 2 Torii corner: (47, 48) is solid, (47, 47) holds dye, backtrace from
+     *    (46, 48) aims diagonally toward (47, 47) across the blocked corner. */
+    FluidConfig cfg = fluid_config_default();
+    cfg.project_iters = 0;
+    cfg.vorticity_eps = 0.0f;
+    cfg.vel_damp = 1.0f;
+    cfg.dye_damp[0] = 1.0f;
+    fluid_init(f, &cfg);
+    fluid_set_solid_rect(f, 376.0f, 384.0f, 16.0f, 16.0f, true);
+    f->dye[0][cell(47, 47)] = 1.5f;
+    f->u[cell(46, 48)] = -60.0f;
+    f->v[cell(46, 48)] = 60.0f;
+    fluid_step(f, k_dt);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, f->dye[0][cell(46, 48)]);
+
+    /* 2. Two-solid diagonal corner pinch: (41, 40) and (40, 41) solid, dye at (41, 41). */
+    fluid_init(f, &cfg);
+    fluid_set_solid_rect(f, 41.0f * FLUID_CELL_PX, 40.0f * FLUID_CELL_PX, FLUID_CELL_PX,
+                         FLUID_CELL_PX, true);
+    fluid_set_solid_rect(f, 40.0f * FLUID_CELL_PX, 41.0f * FLUID_CELL_PX, FLUID_CELL_PX,
+                         FLUID_CELL_PX, true);
+    f->dye[0][cell(41, 41)] = 1.5f;
+    f->u[cell(40, 40)] = -60.0f;
+    f->v[cell(40, 40)] = -60.0f;
+    fluid_step(f, k_dt);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, f->dye[0][cell(40, 40)]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -895,5 +944,7 @@ int main(void)
     RUN_TEST(test_trace_solid_segment_face_normals_and_corners);
     RUN_TEST(test_tiny_dye_flushes_to_zero_without_subnormals);
     RUN_TEST(test_pristine_flag_tracks_mutations_and_resets);
+    RUN_TEST(test_nested_mut_borrow_depth_preserves_outer_borrow);
+    RUN_TEST(test_diagonal_corner_and_pinch_do_not_bleed_dye);
     return UNITY_END();
 }

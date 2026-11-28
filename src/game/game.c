@@ -242,9 +242,12 @@ void game_init(GameState *g, const RunConfig *cfg)
     if (g == NULL) {
         return;
     }
+    /* Copy cfg first so game_init(g, &g->config) preserves the caller's config. */
+    const RunConfig cfg_copy =
+        cfg != NULL ? *cfg : meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(1));
     /* Zero with memset to avoid materializing a >1 MB temporary on the stack. */
     memset(g, 0, sizeof *g);
-    g->config = cfg != NULL ? *cfg : meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(1));
+    g->config = cfg_copy;
     g->rng = g->config.seed;
 
     fluid_init(&g->fluid, NULL);

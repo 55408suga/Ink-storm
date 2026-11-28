@@ -422,13 +422,13 @@ static Stencil trace_walls(const uint8_t *solid, int x, int y, float ex, float e
 
     float qx = ex;
     float qy = ey;
+    int cx = x;
+    int cy = y;
     if (step_x != 0 || step_y != 0) {
         const float t_delta_x = step_x != 0 ? fabsf(1.0f / dx) : FLT_MAX;
         const float t_delta_y = step_y != 0 ? fabsf(1.0f / dy) : FLT_MAX;
         float t_max_x = step_x != 0 ? 0.5f * t_delta_x : FLT_MAX;
         float t_max_y = step_y != 0 ? 0.5f * t_delta_y : FLT_MAX;
-        int cx = x;
-        int cy = y;
         bool hit = false;
         float t_hit = 1.0f;
 
@@ -484,18 +484,44 @@ static Stencil trace_walls(const uint8_t *solid, int x, int y, float ex, float e
 
     Stencil s = bilinear(qx, qy);
     const uint8_t *mask = solid + s.base;
-    if (mask[0] || mask[1] || mask[FLUID_W] || mask[FLUID_W + 1]) {
-        if (mask[0]) {
+    const bool s00 = mask[0] != 0;
+    const bool s10 = mask[1] != 0;
+    const bool s01 = mask[FLUID_W] != 0;
+    const bool s11 = mask[FLUID_W + 1] != 0;
+    if (s00 || s10 || s01 || s11) {
+        if (s00) {
             s.w00 = 0;
         }
-        if (mask[1]) {
+        if (s10) {
             s.w10 = 0;
         }
-        if (mask[FLUID_W]) {
+        if (s01) {
             s.w01 = 0;
         }
-        if (mask[FLUID_W + 1]) {
+        if (s11) {
             s.w11 = 0;
+        }
+        /* Match the DDA's conservative corner rule: never blend across a blocked diagonal corner
+         * (either a single pillar corner or a two-solid diagonal pinch) from reachable cell
+         * (cx, cy). */
+        const int x0 = (int)qx;
+        const int y0 = (int)qy;
+        if (cx == x0 && cy == y0) {
+            if (s10 || s01) {
+                s.w11 = 0;
+            }
+        } else if (cx == x0 + 1 && cy == y0) {
+            if (s00 || s11) {
+                s.w01 = 0;
+            }
+        } else if (cx == x0 && cy == y0 + 1) {
+            if (s00 || s11) {
+                s.w10 = 0;
+            }
+        } else if (cx == x0 + 1 && cy == y0 + 1) {
+            if (s10 || s01) {
+                s.w00 = 0;
+            }
         }
         const float sum = s.w00 + s.w10 + s.w01 + s.w11;
         if (sum > 0.0f) {
@@ -736,7 +762,7 @@ void fluid_step(FluidState *f, float dt)
     }
 
     ++f->steps;
-    f->mut_borrow_dirty = 0;
+    f->mut_borrow_depth = 0;
     ++f->mutation_rev;
     clock_gettime(CLOCK_MONOTONIC, &end);
     f->stats.solve_ms = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) * 1e-6;

@@ -86,15 +86,26 @@ static int reaction_block_index(float px, float py)
     return by * GAME_THUNDERBURST_BLOCKS_X + bx;
 }
 
+static void end_channel_borrows(FluidState *f, bool b0, bool b1, bool b2)
+{
+    if (b0) {
+        fluid_end_mut_borrow(f);
+    }
+    if (b1) {
+        fluid_end_mut_borrow(f);
+    }
+    if (b2) {
+        fluid_end_mut_borrow(f);
+    }
+}
+
 static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks, bool *storm_dirty)
 {
     float *ink_ch = fluid_channel_mut(&g->fluid, 0);
     float *fire_ch = fluid_channel_mut(&g->fluid, 1);
     float *storm_ch = fluid_channel_mut(&g->fluid, 2);
     if (ink_ch == NULL || fire_ch == NULL || storm_ch == NULL) {
-        if (ink_ch != NULL || fire_ch != NULL || storm_ch != NULL) {
-            fluid_end_mut_borrow(&g->fluid);
-        }
+        end_channel_borrows(&g->fluid, ink_ch != NULL, fire_ch != NULL, storm_ch != NULL);
         return 0;
     }
 
@@ -157,7 +168,7 @@ static int32_t elements_stage1_cells(GameState *g, ElementPeaks *peaks, bool *st
             peak_storm = storm > peak_storm ? storm : peak_storm;
         }
     }
-    fluid_end_mut_borrow(&g->fluid);
+    end_channel_borrows(&g->fluid, true, true, true);
     peaks->fire = peak_fire;
     peaks->storm = peak_storm;
 
@@ -411,9 +422,7 @@ static int32_t elements_stage2_cataclysm(GameState *g, ElementPeaks peaks)
             }
         }
     }
-    if (ink_ch != NULL || fire_ch != NULL || storm_ch != NULL) {
-        fluid_end_mut_borrow(&g->fluid);
-    }
+    end_channel_borrows(&g->fluid, ink_ch != NULL, fire_ch != NULL, storm_ch != NULL);
 
     g->internal.cataclysm_cd =
         g->internal.mods.cataclysm_cd_base > 0.0f ? g->internal.mods.cataclysm_cd_base : 2.0f;
@@ -603,9 +612,7 @@ static bool elements_stage3_thunderburst(GameState *g, int32_t cataclysm_block, 
                 }
             }
         }
-        if (fire_ch != NULL || storm_ch != NULL) {
-            fluid_end_mut_borrow(&g->fluid);
-        }
+        end_channel_borrows(&g->fluid, false, fire_ch != NULL, storm_ch != NULL);
 
         g->internal.thunderburst_block_cd[b] = 0.8f;
         /* Sweeping a fire + storm brush chains bursts across neighbouring blocks every few ticks;
@@ -760,9 +767,10 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
         const TransformComp *tr = game_transform(g, id);
         const StatusComp *st = game_status(g, id);
         const EnemyComp *en = game_enemy(g, id);
-        if (tr == NULL || st == NULL || en == NULL || (en->elite_flags & ELITE_STORMPROOF) != 0) {
+        if (tr == NULL || st == NULL || en == NULL) {
             continue;
         }
+        const bool first_stormproof = (en->elite_flags & ELITE_STORMPROOF) != 0;
 
         const int cx = (int)(tr->x / FLUID_CELL_PX);
         const int cy = (int)(tr->y / FLUID_CELL_PX);
@@ -830,11 +838,11 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
                                      .x2 = cur_x,
                                      .y2 = cur_y,
                                      .value = 0,
-                                     .flags = 0,
+                                     .flags = EVF_STORM_FLUID_TEMPEST,
                                  });
         (void)combat_apply_damage_f(g, id, dmg, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
 
-        int32_t max_hops = 2 + g->internal.mods.chain_hops_add;
+        int32_t max_hops = first_stormproof ? 0 : (2 + g->internal.mods.chain_hops_add);
         if (max_hops > 15) {
             max_hops = 15;
         }
@@ -849,6 +857,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
             float next_d2 = hop_range2 + 1.0f;
             float next_x = 0.0f;
             float next_y = 0.0f;
+            bool next_stormproof = false;
 
             for (uint32_t j = 0; j < hw; ++j) {
                 if (index_in_list(visited, visited_n, j)) {
@@ -861,8 +870,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
                 const TransformComp *ctr = game_transform(g, cand);
                 const StatusComp *cst = game_status(g, cand);
                 const EnemyComp *cen = game_enemy(g, cand);
-                if (ctr == NULL || cst == NULL || cen == NULL ||
-                    (cen->elite_flags & ELITE_STORMPROOF) != 0) {
+                if (ctr == NULL || cst == NULL || cen == NULL) {
                     continue;
                 }
                 if (cst->ink_mark_t <= 0.0f && cst->charge_t <= 0.0f) {
@@ -876,6 +884,7 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
                     next_id = cand;
                     next_x = ctr->x;
                     next_y = ctr->y;
+                    next_stormproof = (cen->elite_flags & ELITE_STORMPROOF) != 0;
                 }
             }
             if (next_id.index == ECS_INVALID_INDEX) {
@@ -889,11 +898,14 @@ static void elements_stage4_enemies(GameState *g, int32_t storm_cells, bool stor
                                          .x2 = next_x,
                                          .y2 = next_y,
                                          .value = hop,
-                                         .flags = 0,
+                                         .flags = EVF_STORM_FLUID_TEMPEST,
                                      });
             (void)combat_apply_damage_f(g, next_id, dmg, DMG_STORM | DMG_REACTION, 0.0f, 0.0f);
             cur_x = next_x;
             cur_y = next_y;
+            if (next_stormproof) {
+                break;
+            }
         }
         upgrades_fire_on_reaction(g, REACT_TEMPEST, cur_x, cur_y, (float)visited_n);
         break;

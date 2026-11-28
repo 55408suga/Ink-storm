@@ -11,6 +11,20 @@ static const GameVec2 k_nue_waypoints[8] = {
     {640.0f, 590.0f}, {220.0f, 550.0f},  {200.0f, 360.0f},  {220.0f, 170.0f},
 };
 
+static void update_shrine_vector(const TransformComp *tr, BossComp *boss, float sx, float sy)
+{
+    const float dx = sx - tr->x;
+    const float dy = sy - tr->y;
+    const float d = hypotf(dx, dy);
+    if (d > 1e-6f) {
+        boss->gale_dx = dx / d;
+        boss->gale_dy = dy / d;
+    } else {
+        boss->gale_dx = 1.0f;
+        boss->gale_dy = 0.0f;
+    }
+}
+
 static void update_dash_vector(const TransformComp *tr, BossComp *boss, int32_t wp_idx)
 {
     const GameVec2 wp = k_nue_waypoints[wp_idx & 7];
@@ -159,32 +173,11 @@ void boss_nue_step(GameState *g, EntityId id)
         const float target_y = reaching_wp ? wp.y
                                            : ink_clampf(tr->y + boss->gale_dy * step_dist, 84.0f,
                                                         (float)INK_SCREEN_H - 72.0f);
-        const float move_dx = target_x - tr->x;
-        const float move_dy = target_y - tr->y;
-        const float move_dist = hypotf(move_dx, move_dy);
-        int steps = 1;
-        if (move_dist > 6.0f) {
-            steps = (int)ceilf(move_dist / 6.0f);
-            if (steps > 16) {
-                steps = 16;
-            }
-        }
-        bool hit_solid = false;
-        float safe_x = tr->x;
-        float safe_y = tr->y;
-        for (int s = 1; s <= steps; ++s) {
-            const float frac = (float)s / (float)steps;
-            const float probe_x = tr->x + move_dx * frac;
-            const float probe_y = tr->y + move_dy * frac;
-            if (fluid_is_solid(&g->fluid, probe_x, probe_y)) {
-                hit_solid = true;
-                break;
-            }
-            safe_x = probe_x;
-            safe_y = probe_y;
-        }
-        tr->x = safe_x;
-        tr->y = safe_y;
+        const FluidRayHit hit =
+            fluid_trace_solid_segment(&g->fluid, tr->x, tr->y, target_x, target_y);
+        const bool hit_solid = hit.hit;
+        tr->x = hit.hit ? hit.hit_x : target_x;
+        tr->y = hit.hit ? hit.hit_y : target_y;
         /* Keep the active trail alive while Nue is drawing it; count its lifetime post-dash. */
         g->internal.nue_trail_x[0][1] = tr->x;
         g->internal.nue_trail_y[0][1] = tr->y;
@@ -199,6 +192,9 @@ void boss_nue_step(GameState *g, EntityId id)
             en->fire_cd = fmaxf(1.5f * enemy_endless_boss_cd_mul(g), en->windup + 0.10f);
             boss->telegraph = 0.0f;
             boss->telegraph_pattern = (boss->phase_idx >= 1 && (boss->pattern & 1) == 1) ? 3 : 1;
+            if (boss->telegraph_pattern == 1) {
+                update_shrine_vector(tr, boss, sx, sy);
+            }
         }
     } else {
         /* Stopped & attacking (1.5s; vulnerable to gale knockback and slam). */
@@ -216,6 +212,10 @@ void boss_nue_step(GameState *g, EntityId id)
             return;
         }
         if (en->windup > 0.0f) {
+            boss->telegraph_pattern = (boss->phase_idx >= 1 && (boss->pattern & 1) == 1) ? 3 : 1;
+            if (boss->telegraph_pattern == 1) {
+                update_shrine_vector(tr, boss, sx, sy);
+            }
             en->windup -= INK_FIXED_DT * slow;
             boss->telegraph = ink_clampf((0.65f - en->windup) / 0.65f, 0.0f, 1.0f);
             if (en->windup <= 0.0f) {

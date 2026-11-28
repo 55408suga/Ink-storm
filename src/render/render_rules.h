@@ -82,5 +82,6 @@ typedef struct {
 } FluidUploadCache;
 
 bool render_fluid_cache_matches(const FluidUploadCache *cache, const FluidState *f, bool gpu_path);
+bool render_skill_pip_ready(bool charge_ready, float ink, float cost);
 
 #endif

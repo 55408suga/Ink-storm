@@ -1554,6 +1554,161 @@ static void test_tengu_patrol_oscillator_wraps_smoothly_both_sides_of_shrine(voi
     game_destroy(g);
 }
 
+static void test_nue_stopped_telegraph_patterns_and_phase_transition(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 1, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_NUE);
+    const EntityId nue = g->run.boss_id;
+    TransformComp *tr = game_transform_mut(g, nue);
+    EnemyComp *en = game_enemy_mut(g, nue);
+    BossComp *bs = game_boss_mut(g, nue);
+    g->internal.spawn_cd = 999.0f;
+
+    /* Put Nue at top-right with a stale downward dash vector, then finish dash into pattern 1
+     * (Shrine-directed volley). Telegraph must point toward the Shrine, not along (0, 1). */
+    tr->x = 1040.0f;
+    tr->y = 170.0f;
+    en->ai_state = 2;
+    en->phase = 1;
+    en->fire_cd = 0.001f;
+    bs->phase_idx = 0;
+    bs->pattern = 0;
+    bs->gale_dx = 0.0f;
+    bs->gale_dy = 1.0f;
+    enemies_ai_step(g);
+
+    TEST_ASSERT_EQUAL_INT32(1, en->ai_state);
+    TEST_ASSERT_EQUAL_INT32(1, bs->telegraph_pattern);
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+    const float want_d = hypotf(sx - tr->x, sy - tr->y);
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, (sx - tr->x) / want_d, bs->gale_dx);
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, (sy - tr->y) / want_d, bs->gale_dy);
+
+    /* Phase 2 transition mid-windup on odd pattern switches telegraph_pattern to Night Cry (3). */
+    bs->pattern = 1;
+    en->windup = 0.40f;
+    (void)combat_apply_damage(g, nue, 400, DMG_PHYSICAL, 0.0f, 0.0f);
+    TEST_ASSERT_EQUAL_INT32(1, bs->phase_idx);
+    TEST_ASSERT_EQUAL_INT32(3, bs->telegraph_pattern);
+
+    game_destroy(g);
+}
+
+static void test_ryu_breath_in_spirit_pillar_spawns_all_six_shots_outside_solid(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_RYU);
+    const EntityId ryu = g->run.boss_id;
+    clear_enemies_and_projs(g);
+    /* Re-spawn Ryu after clearing escorts so only Ryu head is present in Phase 2. */
+    start_act_wave(g, 2, GAME_BOSS_WAVE_INDEX);
+    const EntityId head = g->run.boss_id;
+    for (int s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+        (void)combat_apply_damage(g, g->ryu_body.orb_ids[s], 1000, DMG_PHYSICAL, 0.0f, 0.0f);
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    TransformComp *tr = game_transform_mut(g, head);
+    EnemyComp *en = game_enemy_mut(g, head);
+    BossComp *bs = game_boss_mut(g, head);
+    HealthComp *hp = game_health_mut(g, head);
+    g->internal.spawn_cd = 999.0f;
+    hp->invuln_t = 0.0f;
+    bs->phase_idx = 1;
+    bs->pattern = 0;
+    bs->pattern_timer = 10.0f;
+    g->internal.ryu_coil_t = 0.0f;
+    /* Place head directly inside the Act 3 top spirit pillar at (640, 130). */
+    TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, 640.0f, 130.0f));
+    tr->x = 640.0f;
+    tr->y = 130.0f;
+    game_velocity_mut(g, head)->vx = 0.0f;
+    game_velocity_mut(g, head)->vy = 0.0f;
+    en->fire_cd = 0.001f;
+
+    /* Remove any preexisting projectiles, fire Thunder-Fire Breath, then step projectiles. */
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+
+    enemies_ai_step(g);
+    projectiles_step(g);
+    ecs_flush_destroy(&g->ecs);
+
+    int32_t alive_shots = 0;
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+            ++alive_shots;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT32(6, alive_shots);
+
+    /* Head at (632, 114.5) and (632.1, 118.5) exits into free cell (78, 14) before re-entering
+     * solid (78, 15). Breath muzzle must stop at that first free point instead of skipping past
+     * the pillar, even when the open gap is narrower than 2px. */
+    static const float k_edge_pts[2][2] = {
+        {632.0f, 114.5f},
+        {632.1f, 118.5f},
+    };
+    for (int p = 0; p < 2; ++p) {
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                ecs_destroy(&g->ecs, id);
+            }
+        }
+        ecs_flush_destroy(&g->ecs);
+        const float px = k_edge_pts[p][0];
+        const float py = k_edge_pts[p][1];
+        TEST_ASSERT_TRUE(fluid_is_solid(&g->fluid, px, py));
+        tr->x = px;
+        tr->y = py;
+        game_velocity_mut(g, head)->vx = 0.0f;
+        game_velocity_mut(g, head)->vy = 0.0f;
+        en->phase = 0;
+        bs->pattern = 0;
+        bs->pattern_timer = 10.0f;
+        en->fire_cd = 0.001f;
+
+        enemies_ai_step(g);
+        bool saw_first_free_shot = false;
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                const TransformComp *ptr = game_transform(g, id);
+                TEST_ASSERT_FALSE(fluid_is_solid(&g->fluid, ptr->x, ptr->y));
+                if (ptr->x >= 624.0f && ptr->x < 632.0f && ptr->y >= 112.0f && ptr->y < 120.0f) {
+                    saw_first_free_shot = true;
+                }
+            }
+        }
+        TEST_ASSERT_TRUE(saw_first_free_shot);
+
+        projectiles_step(g);
+        ecs_flush_destroy(&g->ecs);
+        int32_t post_step_shots = 0;
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            if (id.index != ECS_INVALID_INDEX && ecs_has_mask(&g->ecs, id, COMP_PROJ)) {
+                ++post_step_shots;
+            }
+        }
+        TEST_ASSERT_LESS_THAN_INT32(6, post_step_shots);
+    }
+    (void)ryu;
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1572,5 +1727,7 @@ int main(void)
     RUN_TEST(test_bounce_orb_reflects_off_torii_west_face_near_corner);
     RUN_TEST(test_ryu_coil_orbits_full_shrine_ring_below_y510);
     RUN_TEST(test_tengu_patrol_oscillator_wraps_smoothly_both_sides_of_shrine);
+    RUN_TEST(test_nue_stopped_telegraph_patterns_and_phase_transition);
+    RUN_TEST(test_ryu_breath_in_spirit_pillar_spawns_all_six_shots_outside_solid);
     return UNITY_END();
 }

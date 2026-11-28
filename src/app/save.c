@@ -431,8 +431,7 @@ static void discard_temp(const SaveBackupOps *ops, const char *tmp_path)
  * mistaken for a finished backup under the final name. */
 static bool copy_to_temp(const SaveBackupOps *ops, const char *path, char *tmp_path, size_t cap)
 {
-    const int n = snprintf(tmp_path, cap, "%s.tmpbak.XXXXXX", path);
-    if (n < 0 || (size_t)n >= cap) {
+    if (!format_tmp_in_dir(path, ".inktmp.XXXXXX", tmp_path, cap)) {
         return false;
     }
     FILE *src = open_regular_bounded_ro(path, SAVE_MAX_BACKUP_BYTES, false);

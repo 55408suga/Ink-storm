@@ -55,7 +55,7 @@ typedef struct {
     /* 描画キャッシュ用メタデータ（決定性ハッシュ対象外） */
     uint64_t mutation_rev;
     uint64_t solid_rev;
-    uint8_t mut_borrow_dirty;
+    uint32_t mut_borrow_depth;
     /* 未描画ロビー最適化用フラグ（game_step_sandbox の分岐を左右するため決定性ハッシュ対象） */
     uint8_t pristine;
 } FluidState;

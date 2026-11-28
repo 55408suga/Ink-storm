@@ -1,6 +1,7 @@
 #include "combat/damage.h"
 #include "core.h"
 #include "elements/elements.h"
+#include "enemies/enemy_defs.h"
 #include "fluid.h"
 #include "game.h"
 #include "roguelike/relics.h"
@@ -1248,6 +1249,56 @@ static void test_elements_step_closes_fluid_mut_borrow_for_paused_cache(void)
     game_destroy(g);
 }
 
+static void test_stormproof_elite_takes_reduced_tempest_without_relaying(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_all_entities(g);
+    fluid_reset(&g->fluid);
+
+    /* 1. Stormproof elite as first target takes 70%-reduced damage (10 * 0.3 = 3) and never
+     *    relays to a nearby marked bystander. */
+    const EntityId elite = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 360.0f, 240.0f);
+    enemy_apply_elite(g, elite, ELITE_STORMPROOF);
+    const EntityId bystander = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 440.0f, 240.0f);
+    fluid_reset(&g->fluid);
+    game_status_mut(g, elite)->ink_mark_t = 0.0f;
+    game_status_mut(g, bystander)->ink_mark_t = 2.0f;
+    const int32_t elite_hp0 = game_health(g, elite)->hp;
+    const int32_t by_hp0 = game_health(g, bystander)->hp;
+
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int k = 0; k < 24; ++k) {
+        storm[(30 + (k / 6)) * FLUID_W + 30 + (k % 6)] = 0.8f;
+    }
+    fluid_end_mut_borrow(&g->fluid);
+
+    g->event_count = 0;
+    elements_step(g);
+    TEST_ASSERT_EQUAL_INT32(elite_hp0 - 3, game_health(g, elite)->hp);
+    TEST_ASSERT_EQUAL_INT32(by_hp0, game_health(g, bystander)->hp);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_STORM_ZAP));
+    bool saw_fluid_flag = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_STORM_ZAP &&
+            (g->events[i].flags & EVF_STORM_FLUID_TEMPEST) != 0u) {
+            saw_fluid_flag = true;
+        }
+    }
+    TEST_ASSERT_TRUE(saw_fluid_flag);
+
+    /* 2. Nested external mut borrow remains open across elements_step_post_solve(). */
+    TEST_ASSERT_NOT_NULL(fluid_channel_mut(&g->fluid, 0));
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(&g->fluid));
+    elements_step_post_solve(g);
+    TEST_ASSERT_TRUE(fluid_has_open_mut_borrow(&g->fluid));
+    fluid_end_mut_borrow(&g->fluid);
+    TEST_ASSERT_FALSE(fluid_has_open_mut_borrow(&g->fluid));
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1274,5 +1325,6 @@ int main(void)
     RUN_TEST(test_elements_step_post_solve_matches_full_scan);
     RUN_TEST(test_tempest_lightning_fires_same_tick_after_burn_kills_storm_lantern);
     RUN_TEST(test_elements_step_closes_fluid_mut_borrow_for_paused_cache);
+    RUN_TEST(test_stormproof_elite_takes_reduced_tempest_without_relaying);
     return UNITY_END();
 }
