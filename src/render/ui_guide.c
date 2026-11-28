@@ -469,16 +469,16 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
                         (Vector2){c1.x + cw * 0.5f, c1.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
                         PAL_SUMI_SCORCH, 0.96f, false);
 
-    /* Cell 2 (Bottom-Left): Cyclone Swirl */
+    /* Cell 2 (Bottom-Left): Cyclone Swirl (CW + Reverse CCW) */
     const Rectangle c2 = {x0, y0 + ch + gy, cw, ch};
     ink_fill_panel(r, c2, PAL_GOFUN, 0.96f, PAL_AO, 0.88f, 1328u);
-    const Vector2 sw_c = {c2.x + cw * 0.5f, c2.y + 64.0f};
-    ink_wash(r, sw_c, 42.0f, 34.0f, 0.0f, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.25f}, 2,
+    const Vector2 sw_c = {c2.x + 88.0f, c2.y + 56.0f};
+    ink_wash(r, sw_c, 36.0f, 30.0f, 0.0f, (InkTone){.color = PAL_SUMI_HEAVY, .alpha = 0.25f}, 2,
              1329u);
     for (int k = 0; k < 3; ++k) {
         const float a0 = t * 2.6f + (float)k * (k_guide_two_pi / 3.0f);
-        ink_arc_stroke(r, sw_c, 16.0f + (float)k * 12.0f, a0, a0 + 2.4f,
-                       (BrushProfile){.w_max = 4.4f - (float)k * 0.6f,
+        ink_arc_stroke(r, sw_c, 13.0f + (float)k * 10.0f, a0, a0 + 2.4f,
+                       (BrushProfile){.w_max = 4.2f - (float)k * 0.6f,
                                       .w_min_ratio = 0.25f,
                                       .entry = 0.15f,
                                       .exit = 0.35f,
@@ -486,11 +486,29 @@ static void draw_slide1_diagram(RenderState *r, Rectangle pic, float t)
                                       .seed = 1330u + (uint32_t)k},
                        (InkTone){.color = k == 0 ? PAL_AO : PAL_SUMI_DARK, .alpha = 0.92f});
     }
-    draw_keycap(r, (Rectangle){c2.x + 14.0f, c2.y + 120.0f, 126.0f, 26.0f},
-                text_get(TEXT_GUIDE_D1_KEY_CYC, r->use_ja), PAL_AO, 1334u);
+    const Vector2 rev_c = {c2.x + 174.0f, c2.y + 56.0f};
+    ink_wash(r, rev_c, 26.0f, 22.0f, 0.0f, (InkTone){.color = PAL_AO, .alpha = 0.18f}, 2, 1342u);
+    for (int k = 0; k < 2; ++k) {
+        const float ra0 = -t * 2.6f + (float)k * k_guide_pi;
+        ink_arc_stroke(r, rev_c, 12.0f + (float)k * 10.0f, ra0, ra0 - 2.3f,
+                       (BrushProfile){.w_max = 3.4f - (float)k * 0.5f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.15f,
+                                      .exit = 0.35f,
+                                      .dry = 0.20f,
+                                      .seed = 1343u + (uint32_t)k},
+                       (InkTone){.color = PAL_AO, .alpha = 0.92f});
+    }
+    draw_keycap(r, (Rectangle){c2.x + 10.0f, c2.y + 112.0f, 102.0f, 24.0f},
+                text_get(TEXT_GUIDE_D1_KEY_CYC, r->use_ja), PAL_SUMI_DARK, 1334u);
     guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_CYC, r->use_ja),
-                        (Vector2){c2.x + cw * 0.5f, c2.y + 164.0f}, cw - 20.0f, 15.0f, 11.0f,
+                        (Vector2){c2.x + 178.0f, c2.y + 124.0f}, 124.0f, 13.5f, 10.0f,
                         PAL_SUMI_SCORCH, 0.96f, false);
+    draw_keycap(r, (Rectangle){c2.x + 10.0f, c2.y + 146.0f, 102.0f, 24.0f},
+                text_get(TEXT_GUIDE_D1_KEY_CYC_REV, r->use_ja), PAL_AO, 1345u);
+    guide_draw_text_fit(r, text_get(TEXT_GUIDE_D1_CAP_CYC_REV, r->use_ja),
+                        (Vector2){c2.x + 178.0f, c2.y + 158.0f}, 124.0f, 13.5f, 10.0f, PAL_AO,
+                        0.96f, false);
 
     /* Cell 3 (Bottom-Right): Gale Burst Crescent Slash */
     const Rectangle c3 = {x0 + cw + gx, y0 + ch + gy, cw, ch};

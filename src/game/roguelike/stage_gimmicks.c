@@ -436,8 +436,9 @@ void stage_gimmicks_step(GameState *g)
         if (gim->kind == (int32_t)GIMMICK_SPIRIT_PILLAR) {
             step_spirit_pillar(g, tr, gim);
         } else if (gim->kind == (int32_t)GIMMICK_KAMAITACHI_VORTEX) {
-            fluid_swirl(&g->fluid, tr->x, tr->y, GAME_PX_TO_CELLS(80.0f), GAME_PX_TO_CELLS(-336.0f),
-                        NULL);
+            const float dir = gimmick_kamaitachi_spin_dir(gim);
+            fluid_swirl(&g->fluid, tr->x, tr->y, GAME_PX_TO_CELLS(80.0f),
+                        GAME_PX_TO_CELLS(336.0f) * dir, NULL);
             gim->timer -= INK_FIXED_DT;
             if (gim->timer <= 1e-4f) {
                 ecs_destroy(&g->ecs, id);

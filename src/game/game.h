@@ -39,6 +39,8 @@ typedef struct {
     float invuln_t;
 } ShrineState;
 
+#define GAME_BASE_INK_MAX 120.0f
+
 typedef struct {
     float ink, ink_max;
     bool dry;
@@ -46,6 +48,7 @@ typedef struct {
     float stroke_speed;
     float idle_t;
     float cyclone_cd, cyclone_cd_total;
+    float cyclone_ccw_cd;
     float gale_cd, gale_cd_total;
     int32_t gale_charges;
     int32_t gale_max_charges;

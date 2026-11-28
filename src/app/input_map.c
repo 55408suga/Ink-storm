@@ -134,8 +134,13 @@ RawInput input_map_read(const GameState *g, UiView *ui, bool reward_ready)
         return raw;
     }
 
-    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E)) {
+    const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    const bool rmb = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+    if ((rmb && !shift) || IsKeyPressed(KEY_E)) {
         raw.cyclone_pressed = true;
+    }
+    if ((rmb && shift) || IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) || IsKeyPressed(KEY_Q)) {
+        raw.cyclone_ccw_pressed = true;
     }
     if (IsKeyPressed(KEY_SPACE)) {
         raw.gale_pressed = true;
@@ -160,6 +165,7 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         .lobby_paint = false,
         .lobby_stroke_started = false,
         .lobby_cyclone = false,
+        .lobby_cyclone_ccw = false,
         .lobby_gale = false,
         .lobby_brush_step = 0,
     };
@@ -249,9 +255,13 @@ MenuInput input_map_read_menu(const GameState *g, UiView *ui)
         } else if (pick == 4) {
             out.action = MENU_ACT_LOBBY_QUIT;
         } else {
+            const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+            const bool rmb = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
             out.lobby_paint = stroking;
             out.lobby_stroke_started = stroking && !was_stroking;
-            out.lobby_cyclone = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsKeyPressed(KEY_E);
+            out.lobby_cyclone = (rmb && !shift) || IsKeyPressed(KEY_E);
+            out.lobby_cyclone_ccw =
+                (rmb && shift) || IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) || IsKeyPressed(KEY_Q);
             out.lobby_gale = IsKeyPressed(KEY_SPACE);
         }
         return out;

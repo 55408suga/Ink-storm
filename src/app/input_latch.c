@@ -61,7 +61,23 @@ void input_latch_feed(InputLatch *l, const RawInput *raw)
     }
 
     if (raw->cyclone_pressed) {
-        l->cyclone_pending = true;
+        if (!l->cyclone_pending) {
+            l->cyclone_pending = true;
+            if (!l->cyclone_ccw_pending) {
+                l->cyclone_ccw_first = false;
+            }
+        }
+        l->cyclone_x = raw->mouse_x;
+        l->cyclone_y = raw->mouse_y;
+    } else if (raw->cyclone_ccw_pressed) {
+        if (!l->cyclone_ccw_pending) {
+            l->cyclone_ccw_pending = true;
+            if (!l->cyclone_pending) {
+                l->cyclone_ccw_first = true;
+            }
+        }
+        l->cyclone_ccw_x = raw->mouse_x;
+        l->cyclone_ccw_y = raw->mouse_y;
     }
     if (raw->gale_pressed) {
         l->gale_pending = true;
@@ -140,7 +156,8 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
     if (l == NULL) {
         return in;
     }
-    const bool has_skill_edge = !keep_skills && (l->cyclone_pending || l->gale_pending);
+    const bool has_skill_edge =
+        !keep_skills && (l->cyclone_pending || l->cyclone_ccw_pending || l->gale_pending);
     if (remaining_ticks <= 1 || has_skill_edge) {
         in.mx = l->cur_x;
         in.my = l->cur_y;
@@ -153,9 +170,24 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
             record_hitstop_motion(l, &in);
         } else {
             apply_hitstop_motion(l, &in);
-            in.cyclone = l->cyclone_pending;
+            if (l->cyclone_ccw_pending && (!l->cyclone_pending || l->cyclone_ccw_first)) {
+                in.cyclone = true;
+                in.cyclone_ccw = true;
+                in.has_cyclone_pos = true;
+                in.cyclone_x = l->cyclone_ccw_x;
+                in.cyclone_y = l->cyclone_ccw_y;
+                l->cyclone_ccw_pending = false;
+                l->cyclone_ccw_first = false;
+            } else if (l->cyclone_pending) {
+                in.cyclone = true;
+                in.cyclone_ccw = false;
+                in.has_cyclone_pos = true;
+                in.cyclone_x = l->cyclone_x;
+                in.cyclone_y = l->cyclone_y;
+                l->cyclone_pending = false;
+                l->cyclone_ccw_first = l->cyclone_ccw_pending;
+            }
             in.gale = l->gale_pending;
-            l->cyclone_pending = false;
             l->gale_pending = false;
         }
         return in;
@@ -176,6 +208,7 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
         .paint = l->left_down && !l->paint_suppressed,
         .cyclone = false,
         .gale = false,
+        .cyclone_ccw = false,
     };
     l->prev_x = x;
     l->prev_y = y;
@@ -184,6 +217,8 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
     } else {
         apply_hitstop_motion(l, &in);
         l->cyclone_pending = false;
+        l->cyclone_ccw_pending = false;
+        l->cyclone_ccw_first = false;
         l->gale_pending = false;
     }
     return in;
@@ -200,11 +235,14 @@ BrushInput input_latch_take_subtick_for_game(InputLatch *l, int32_t remaining_ti
                                              const GameState *g)
 {
     if (g != NULL && g->phase == RUN_PHASE_REWARD) {
+        input_latch_clear_skills(l);
         BrushInput in = take_subtick_impl(l, remaining_ticks, false);
         in.pmx = in.mx;
         in.pmy = in.my;
         in.paint = false;
         in.cyclone = false;
+        in.cyclone_ccw = false;
+        in.has_cyclone_pos = false;
         in.gale = false;
         return in;
     }
@@ -218,6 +256,8 @@ void input_latch_clear_skills(InputLatch *l)
         return;
     }
     l->cyclone_pending = false;
+    l->cyclone_ccw_pending = false;
+    l->cyclone_ccw_first = false;
     l->gale_pending = false;
     l->hitstop_dx = 0.0f;
     l->hitstop_dy = 0.0f;

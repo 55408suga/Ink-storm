@@ -608,7 +608,7 @@ static void test_lobby_sandbox_paints_with_combat_brush_and_no_waves(void)
     const float ink_before =
         g->fluid.dye[0][(int)(300.0f / FLUID_CELL_PX) * FLUID_W + (int)(360.0f / FLUID_CELL_PX)];
     game_sandbox_apply_config(g, &bought);
-    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 120.0f, g->player.ink_max);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 140.0f, g->player.ink_max);
     TEST_ASSERT_EQUAL_FLOAT(
         ink_before,
         g->fluid.dye[0][(int)(300.0f / FLUID_CELL_PX) * FLUID_W + (int)(360.0f / FLUID_CELL_PX)]);
@@ -677,7 +677,7 @@ static void test_lobby_sandbox_never_runs_dry_but_keeps_skill_cooldowns(void)
     bought.meta_upgrade_lv[META_UPG_INK_MAX] = 2;
     game_sandbox_apply_config(g, &bought);
     game_sandbox_set_brush(g, BRUSH_STYLE_QUILL);
-    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 120.0f, g->player.ink_max);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 140.0f, g->player.ink_max);
     assert_ink_full(g);
 
     game_init(g, &cfg);
@@ -1120,6 +1120,227 @@ static void test_game_init_with_aliased_config_preserves_config(void)
     game_destroy(g);
 }
 
+static void test_reverse_cyclone_injects_counter_clockwise_flow(void)
+{
+    GameState *g_cw = arena(BRUSH_STYLE_HEAVY);
+    GameState *g_ccw = arena(BRUSH_STYLE_HEAVY);
+
+    const BrushInput in_cw = {
+        .pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f, .cyclone = true};
+    const BrushInput in_ccw = {.pmx = 640.0f,
+                               .pmy = 360.0f,
+                               .mx = 640.0f,
+                               .my = 360.0f,
+                               .cyclone = true,
+                               .cyclone_ccw = true};
+    player_skills_step(g_cw, &in_cw);
+    player_skills_step(g_ccw, &in_ccw);
+
+    float u_cw = 0.0f;
+    float v_cw = 0.0f;
+    float u_ccw = 0.0f;
+    float v_ccw = 0.0f;
+    fluid_sample(&g_cw->fluid, 700.0f, 360.0f, &u_cw, &v_cw, NULL);
+    fluid_sample(&g_ccw->fluid, 700.0f, 360.0f, &u_ccw, &v_ccw, NULL);
+
+    TEST_ASSERT_TRUE(v_cw > 10.0f);
+    TEST_ASSERT_TRUE(v_ccw < -10.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, v_cw, -v_ccw);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g_cw, EV_CYCLONE, 0));
+    TEST_ASSERT_EQUAL_INT(0, count_events(g_cw, EV_CYCLONE, EVF_CYCLONE_CCW));
+    TEST_ASSERT_EQUAL_INT(1, count_events(g_ccw, EV_CYCLONE, EVF_CYCLONE_CCW));
+
+    game_destroy(g_ccw);
+    game_destroy(g_cw);
+}
+
+static void test_cw_and_ccw_cyclones_have_independent_cooldowns_and_share_ink_cost(void)
+{
+    GameState *g = arena(BRUSH_STYLE_HEAVY);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, GAME_BASE_INK_MAX, g->player.ink);
+
+    const BrushInput in_cw = {
+        .pmx = 560.0f, .pmy = 360.0f, .mx = 560.0f, .my = 360.0f, .cyclone = true};
+    const BrushInput in_ccw = {.pmx = 720.0f,
+                               .pmy = 360.0f,
+                               .mx = 720.0f,
+                               .my = 360.0f,
+                               .cyclone = true,
+                               .cyclone_ccw = true};
+
+    g->event_count = 0;
+    player_skills_step(g, &in_cw);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, 0));
+    TEST_ASSERT_TRUE(g->player.cyclone_cd > 0.0f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g->player.cyclone_ccw_cd);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, GAME_BASE_INK_MAX - 26.0f, g->player.ink);
+
+    /* CCW succeeds immediately on the next tick while CW is on CD, sharing the ink pool. */
+    g->event_count = 0;
+    const float ink_before_ccw = g->player.ink;
+    player_skills_step(g, &in_ccw);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, EVF_CYCLONE_CCW));
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_SKILL_DENIED, 0));
+    TEST_ASSERT_TRUE(g->player.cyclone_ccw_cd > 0.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, ink_before_ccw + 15.0f * INK_FIXED_DT - 26.0f, g->player.ink);
+
+    /* Repeating CCW while on CD emits EV_SKILL_DENIED with SKILL_CYCLONE_CCW. */
+    g->event_count = 0;
+    player_skills_step(g, &in_ccw);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CYCLONE, 0));
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SKILL_DENIED, 0));
+    bool denied_ccw = false;
+    for (int32_t i = 0; i < g->event_count; ++i) {
+        if (g->events[i].type == EV_SKILL_DENIED &&
+            g->events[i].value == (int32_t)SKILL_CYCLONE_CCW) {
+            denied_ccw = true;
+        }
+    }
+    TEST_ASSERT_TRUE(denied_ccw);
+
+    game_destroy(g);
+}
+
+static void test_cw_left_ccw_right_pair_forms_downward_jet_stronger_than_either(void)
+{
+    GameState *g_single = arena(BRUSH_STYLE_HEAVY);
+    GameState *g_pair = arena(BRUSH_STYLE_HEAVY);
+    GameState *g_up = arena(BRUSH_STYLE_HEAVY);
+
+    const BrushInput cw_left = {
+        .pmx = 578.0f, .pmy = 360.0f, .mx = 578.0f, .my = 360.0f, .cyclone = true};
+    const BrushInput ccw_right = {.pmx = 702.0f,
+                                  .pmy = 360.0f,
+                                  .mx = 702.0f,
+                                  .my = 360.0f,
+                                  .cyclone = true,
+                                  .cyclone_ccw = true};
+    const BrushInput ccw_left = {.pmx = 578.0f,
+                                 .pmy = 360.0f,
+                                 .mx = 578.0f,
+                                 .my = 360.0f,
+                                 .cyclone = true,
+                                 .cyclone_ccw = true};
+    const BrushInput cw_right = {
+        .pmx = 702.0f, .pmy = 360.0f, .mx = 702.0f, .my = 360.0f, .cyclone = true};
+
+    player_skills_step(g_single, &cw_left);
+    player_skills_step(g_pair, &cw_left);
+    player_skills_step(g_pair, &ccw_right);
+    player_skills_step(g_up, &ccw_left);
+    player_skills_step(g_up, &cw_right);
+
+    float u1 = 0.0f;
+    float v1 = 0.0f;
+    float u2 = 0.0f;
+    float v2 = 0.0f;
+    float u3 = 0.0f;
+    float v3 = 0.0f;
+    fluid_sample(&g_single->fluid, 640.0f, 360.0f, &u1, &v1, NULL);
+    fluid_sample(&g_pair->fluid, 640.0f, 360.0f, &u2, &v2, NULL);
+    fluid_sample(&g_up->fluid, 640.0f, 360.0f, &u3, &v3, NULL);
+
+    TEST_ASSERT_TRUE(v1 > 10.0f);
+    TEST_ASSERT_TRUE(v2 > v1 * 1.6f);
+    TEST_ASSERT_TRUE(v3 < -v1 * 1.6f);
+
+    game_destroy(g_up);
+    game_destroy(g_pair);
+    game_destroy(g_single);
+}
+
+static void test_kamaitachi_counter_vortex_opposes_target_cyclone_spin(void)
+{
+    for (int mode = 0; mode < 2; ++mode) {
+        const bool player_ccw = (mode == 1);
+        GameState *g = arena(BRUSH_STYLE_HEAVY);
+        g->internal.spawn_cd = 999.0f;
+
+        const BrushInput cast = {.pmx = 520.0f,
+                                 .pmy = 320.0f,
+                                 .mx = 520.0f,
+                                 .my = 320.0f,
+                                 .cyclone = true,
+                                 .cyclone_ccw = player_ccw};
+        player_skills_step(g, &cast);
+        fluid_reset(&g->fluid);
+
+        const EntityId kama = game_debug_spawn_enemy(g, ENEMY_KAMAITACHI, 420.0f, 320.0f);
+        TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, kama.index);
+        EnemyComp *en = game_enemy_mut(g, kama);
+        en->absorbed_ink = 0.01f;
+        en->fire_cd = 10.0f;
+
+        kamaitachi_step(g, kama);
+
+        EntityId vid = {ECS_INVALID_INDEX, 0};
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId id = ecs_entity_at(&g->ecs, i);
+            const GimmickComp *gim = game_gimmick(g, id);
+            if (gim != NULL && gim->kind == (int32_t)GIMMICK_KAMAITACHI_VORTEX) {
+                vid = id;
+                break;
+            }
+        }
+        TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, vid.index);
+        const TransformComp *vtr = game_transform(g, vid);
+        const GimmickComp *vgim = game_gimmick(g, vid);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 520.0f, vtr->x);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 320.0f, vtr->y);
+        const float expected_spin = player_ccw ? 1.0f : -1.0f;
+        TEST_ASSERT_EQUAL_FLOAT(expected_spin, vgim->param_a);
+        TEST_ASSERT_EQUAL_FLOAT(expected_spin, gimmick_kamaitachi_spin_dir(vgim));
+
+        fluid_reset(&g->fluid);
+        stage_gimmicks_step(g);
+        float u = 0.0f;
+        float v = 0.0f;
+        fluid_sample(&g->fluid, 560.0f, 320.0f, &u, &v, NULL);
+        if (player_ccw) {
+            /* Opposing a CCW cyclone injects CW flow (v > 0 on the right). */
+            TEST_ASSERT_TRUE(v > 10.0f);
+        } else {
+            /* Opposing a CW cyclone injects CCW flow (v < 0 on the right). */
+            TEST_ASSERT_TRUE(v < -10.0f);
+        }
+        game_destroy(g);
+    }
+}
+
+static void test_lobby_sandbox_ccw_never_runs_dry_and_keeps_cd(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(2));
+    game_init_sandbox(g, &cfg);
+    assert_ink_full(g);
+
+    const BrushInput ccw = {.pmx = 640.0f,
+                            .pmy = 360.0f,
+                            .mx = 640.0f,
+                            .my = 360.0f,
+                            .cyclone = true,
+                            .cyclone_ccw = true};
+    game_step_sandbox(g, &ccw);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, EVF_CYCLONE_CCW));
+    TEST_ASSERT_TRUE(g->player.cyclone_ccw_cd > 0.0f);
+    assert_ink_full(g);
+
+    game_step_sandbox(g, &ccw);
+    TEST_ASSERT_EQUAL_INT(0, count_events(g, EV_CYCLONE, 0));
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_SKILL_DENIED, 0));
+    assert_ink_full(g);
+
+    const int wait_ticks = (int)ceilf(g->player.cyclone_ccw_cd * (float)INK_TICK_HZ) + 1;
+    for (int t = 0; t < wait_ticks; ++t) {
+        game_step_sandbox(g, NULL);
+    }
+    game_step_sandbox(g, &ccw);
+    TEST_ASSERT_EQUAL_INT(1, count_events(g, EV_CYCLONE, EVF_CYCLONE_CCW));
+    assert_ink_full(g);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1162,5 +1383,10 @@ int main(void)
     RUN_TEST(test_electrified_projectile_hits_stormproof_elite_at_reduced_damage);
     RUN_TEST(test_ink_orb_spawns_outside_solid_terrain);
     RUN_TEST(test_game_init_with_aliased_config_preserves_config);
+    RUN_TEST(test_reverse_cyclone_injects_counter_clockwise_flow);
+    RUN_TEST(test_cw_and_ccw_cyclones_have_independent_cooldowns_and_share_ink_cost);
+    RUN_TEST(test_cw_left_ccw_right_pair_forms_downward_jet_stronger_than_either);
+    RUN_TEST(test_kamaitachi_counter_vortex_opposes_target_cyclone_spin);
+    RUN_TEST(test_lobby_sandbox_ccw_never_runs_dry_and_keeps_cd);
     return UNITY_END();
 }

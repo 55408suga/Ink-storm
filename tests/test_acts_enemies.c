@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 void setUp(void) {}
@@ -2516,7 +2517,7 @@ static void test_ryu_awakening_break_cataclysm_gets_full_x1_5_while_ascension_ge
 
 static void test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_break(void)
 {
-    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7000));
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7006));
     GameState *g = game_create(&cfg);
     TEST_ASSERT_NOT_NULL(g);
     game_debug_start_act(g, 0);
@@ -2573,6 +2574,144 @@ static void test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_br
     game_destroy(g);
 }
 
+static void test_tengu_controlled_brush_deflected_volleys_trigger_stance_break(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x7010));
+    GameState *g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(g);
+    start_act_wave(g, 0, GAME_BOSS_WAVE_INDEX);
+    assert_boss_alive_kind(g, ENEMY_BOSS_TENGU);
+
+    const EntityId tengu = g->run.boss_id;
+    const HealthComp *bhp = game_health(g, tengu);
+    BossComp *bbs = game_boss_mut(g, tengu);
+    TEST_ASSERT_NOT_NULL(bhp);
+    TEST_ASSERT_NOT_NULL(bbs);
+
+    /* Remove non-boss wave escorts so only Tengu's real volleys are present; no ink, HP, or
+     * stagger cheats. Start on Pattern 1 (4-Arrow Fan -> Storm Orb + Twin Arrows) so returned
+     * volleys reach 100 stagger in Phase 1 before the 50% HP phase transition. */
+    for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+        const EntityId id = ecs_entity_at(&g->ecs, i);
+        if (id.index != ECS_INVALID_INDEX && id.index != tengu.index &&
+            (ecs_has_mask(&g->ecs, id, COMP_ENEMY) || ecs_has_mask(&g->ecs, id, COMP_PROJ))) {
+            ecs_destroy(&g->ecs, id);
+        }
+    }
+    ecs_flush_destroy(&g->ecs);
+    bbs->pattern = 1;
+    g->internal.spawn_cd = 999.0f;
+
+    const int32_t shrine_hp0 = g->shrines[0].hp;
+    const int32_t boss_hp0 = bhp->hp;
+    const float sx = g->shrines[0].x;
+    const float sy = g->shrines[0].y;
+
+    int32_t deflects = 0;
+    bool saw_stagger_buildup = false;
+    bool saw_stance_break = false;
+    float max_stagger = 0.0f;
+    float min_ink = g->player.ink;
+    int t_end = 0;
+
+    for (int t = 0; t < 1500 && g->phase == RUN_PHASE_PLAYING && !saw_stance_break; ++t) {
+        t_end = t + 1;
+        g->internal.spawn_cd = 999.0f;
+
+        /* Find the highest-priority undeflected Tengu projectile approaching the shrine. */
+        EntityId target_proj = {ECS_INVALID_INDEX, 0};
+        float best_d = 1e9f;
+        for (uint32_t i = 0; i < g->ecs.high_water; ++i) {
+            const EntityId pid = ecs_entity_at(&g->ecs, i);
+            if (pid.index == ECS_INVALID_INDEX || !ecs_has_mask(&g->ecs, pid, COMP_PROJ)) {
+                continue;
+            }
+            const ProjComp *pr = game_proj(g, pid);
+            const TransformComp *ptr = game_transform(g, pid);
+            const VelocityComp *pvel = game_velocity(g, pid);
+            if (pr == NULL || ptr == NULL || pvel == NULL || pr->deflected) {
+                continue;
+            }
+            const float to_sx = sx - ptr->x;
+            const float to_sy = sy - ptr->y;
+            const float d = hypotf(to_sx, to_sy);
+            const float psp = hypotf(pvel->vx, pvel->vy);
+            if (d <= 1e-4f || psp <= 1e-4f) {
+                continue;
+            }
+            const float toward = (pvel->vx * to_sx + pvel->vy * to_sy) / (psp * d);
+            const float score = (pr->kind == PROJ_STORM_ORB && d > 130.0f) ? (d + 120.0f) : d;
+            if (toward > 0.25f && d <= 260.0f && score < best_d) {
+                best_d = score;
+                target_proj = pid;
+            }
+        }
+
+        BrushInput in = {.pmx = sx, .pmy = sy - 120.0f, .mx = sx, .my = sy - 120.0f};
+        if (target_proj.index != ECS_INVALID_INDEX) {
+            const TransformComp *ptr = game_transform(g, target_proj);
+            const TransformComp *btr = game_transform(g, tengu);
+            float tx = (btr != NULL ? btr->x : sx) - ptr->x;
+            float ty = (btr != NULL ? btr->y : 160.0f) - ptr->y;
+            const float dlen = hypotf(tx, ty);
+            if (dlen > 1e-4f) {
+                tx /= dlen;
+                ty /= dlen;
+            } else {
+                tx = 0.0f;
+                ty = -1.0f;
+            }
+            /* Angled return stroke across the incoming projectile breaks toward_center < 0.90
+             * rapidly and returns the volley straight back into Tengu. */
+            const float dx = tx * 0.75f - ty * 0.66f;
+            const float dy = ty * 0.75f + tx * 0.66f;
+            in = (BrushInput){
+                .pmx = ptr->x - dx * 22.0f,
+                .pmy = ptr->y - dy * 22.0f,
+                .mx = ptr->x + dx * 34.0f,
+                .my = ptr->y + dy * 34.0f,
+                .paint = true,
+            };
+        }
+
+        game_step(g, &in, NULL);
+        if (g->player.ink < min_ink) {
+            min_ink = g->player.ink;
+        }
+        if (bbs->stagger > max_stagger) {
+            max_stagger = bbs->stagger;
+        }
+        if (bbs->stagger > 0.0f && bbs->break_t <= 0.0f) {
+            saw_stagger_buildup = true;
+        }
+        for (int32_t i = 0; i < g->event_count; ++i) {
+            if (g->events[i].type == EV_DEFLECT) {
+                ++deflects;
+            } else if (g->events[i].type == EV_BOSS_BREAK &&
+                       g->events[i].value == BOSS_BREAK_EV_START) {
+                saw_stance_break = true;
+            }
+        }
+    }
+
+    char msg[192];
+    snprintf(msg, sizeof msg,
+             "t=%d phase=%d shrine=%d/%d deflects=%d hp=%d/%d boss_phase=%d stagger=%.1f/%.1f "
+             "ink=%.1f",
+             t_end, (int)g->phase, g->shrines[0].hp, shrine_hp0, deflects, bhp->hp, boss_hp0,
+             bbs->phase_idx, bbs->stagger, max_stagger, min_ink);
+    TEST_ASSERT_TRUE_MESSAGE(saw_stance_break, msg);
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(shrine_hp0, g->shrines[0].hp, msg);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(5, deflects);
+    TEST_ASSERT_TRUE(saw_stagger_buildup);
+    TEST_ASSERT_EQUAL_INT32(BOSS_BREAK_STANCE, bbs->break_kind);
+    TEST_ASSERT_TRUE(bbs->break_t > 2.5f);
+    TEST_ASSERT_LESS_THAN_INT32(boss_hp0, bhp->hp);
+    TEST_ASSERT_TRUE(min_ink < g->player.ink_max);
+    TEST_ASSERT_TRUE(min_ink > 0.0f);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2610,5 +2749,6 @@ int main(void)
     RUN_TEST(test_nue_wall_slam_during_invuln_bounces_without_stun_slam_event_or_hitstop);
     RUN_TEST(test_ryu_awakening_break_cataclysm_gets_full_x1_5_while_ascension_gets_x2_5);
     RUN_TEST(test_tengu_no_cheat_fairness_deflects_volleys_and_triggers_stance_break);
+    RUN_TEST(test_tengu_controlled_brush_deflected_volleys_trigger_stance_break);
     return UNITY_END();
 }

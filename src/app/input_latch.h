@@ -10,6 +10,7 @@ typedef struct {
     float mouse_x, mouse_y;
     bool left_down;
     bool cyclone_pressed;
+    bool cyclone_ccw_pressed;
     bool gale_pressed;
     int32_t pick_pressed;
     bool reroll_pressed;
@@ -23,9 +24,13 @@ typedef struct {
     float prev_x, prev_y;
     float cur_x, cur_y;
     float hitstop_dx, hitstop_dy;
+    float cyclone_x, cyclone_y;
+    float cyclone_ccw_x, cyclone_ccw_y;
     bool left_down;
     bool paint_suppressed;
     bool cyclone_pending;
+    bool cyclone_ccw_pending;
+    bool cyclone_ccw_first;
     bool gale_pending;
     int32_t pick_pending;
     bool repair_pending;

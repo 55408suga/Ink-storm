@@ -134,8 +134,8 @@ static void push_callout(RenderState *r, TextId text_id, int32_t count_arg, floa
     r->callout_cursor = (r->callout_cursor + 1) % RENDER_MAX_CALLOUTS;
 }
 
-static void push_styled_stroke(RenderState *r, int32_t kind, int32_t style, float x, float y,
-                               float dx, float dy, float radius, float life)
+static void push_styled_stroke_spin(RenderState *r, int32_t kind, int32_t style, float x, float y,
+                                    float dx, float dy, float radius, float life, float spin)
 {
     r->strokes[r->stroke_cursor] = (VfxStroke){
         .active = true,
@@ -146,11 +146,18 @@ static void push_styled_stroke(RenderState *r, int32_t kind, int32_t style, floa
         .dx = dx,
         .dy = dy,
         .radius = radius,
+        .spin = spin,
         .age = 0.0f,
         .life = life,
         .seed = (uint32_t)(ink_rng_next(&r->vfx_rng) & 0xffffffffu),
     };
     r->stroke_cursor = (r->stroke_cursor + 1) % RENDER_MAX_STROKES;
+}
+
+static void push_styled_stroke(RenderState *r, int32_t kind, int32_t style, float x, float y,
+                               float dx, float dy, float radius, float life)
+{
+    push_styled_stroke_spin(r, kind, style, x, y, dx, dy, radius, life, 1.0f);
 }
 
 static void push_stroke(RenderState *r, int32_t kind, float x, float y, float dx, float dy,
@@ -212,8 +219,9 @@ void render_reset_vfx(RenderState *r, uint64_t seed)
     r->reward_anim_t = 0.0f;
     r->reward_reroll_t = 0.0f;
     r->last_reward_serial = 0;
-    r->skill_deny_t[0] = 0.0f;
-    r->skill_deny_t[1] = 0.0f;
+    for (int i = 0; i < SKILL_COUNT; ++i) {
+        r->skill_deny_t[i] = 0.0f;
+    }
     r->shrine_flicker_t = 0.0f;
     r->major_fx_active = 0;
     r->wind_telegraph_t = 0.0f;
@@ -330,8 +338,9 @@ void render_consume_events(RenderState *r, const GameState *g)
             r->wind_telegraph_dir = ev->value;
             break;
         case EV_CYCLONE:
-            push_styled_stroke(r, 0, (int32_t)g->config.brush_style, ev->x, ev->y, 0.0f, 0.0f,
-                               ev->value > 0 ? (float)ev->value : 110.0f, 0.72f);
+            push_styled_stroke_spin(r, 0, (int32_t)g->config.brush_style, ev->x, ev->y, 0.0f, 0.0f,
+                                    ev->value > 0 ? (float)ev->value : 110.0f, 0.72f,
+                                    (ev->flags & EVF_CYCLONE_CCW) != 0 ? -1.0f : 1.0f);
             break;
         case EV_GALE:
             push_styled_stroke(r, 1, (int32_t)g->config.brush_style, ev->x, ev->y, ev->x2, ev->y2,
@@ -767,13 +776,14 @@ static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, flo
     const bool heavy = s->style == BRUSH_STYLE_HEAVY;
     const bool ember = s->style == BRUSH_STYLE_EMBER;
     const bool quill = s->style == BRUSH_STYLE_QUILL;
+    const float spin = s->spin < 0.0f ? -1.0f : 1.0f;
     const float arm_w = heavy ? 10.5f : (quill ? 4.0f : 6.5f);
     for (int arm = 0; arm < 2; ++arm) {
         Vector2 pts[14];
         const float base_a = (float)arm * 3.14159f + u * 5.2f;
         for (int k = 0; k < 14; ++k) {
             const float ku = (float)k / 13.0f;
-            const float ang = base_a + ku * 4.4f;
+            const float ang = spin * (base_a + ku * 4.4f);
             const float rad = s->radius * (0.18f + 0.82f * ku) * (0.75f + 0.25f * u);
             pts[k] = (Vector2){s->x + cosf(ang) * rad, s->y + sinf(ang) * rad};
         }
@@ -788,8 +798,8 @@ static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, flo
                    ink_clampf(u * 3.5f, 0.15f, 1.0f));
     }
     if (heavy) {
-        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.9f + 0.25f * u), u * 2.0f,
-                       u * 2.0f + 4.6f,
+        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.9f + 0.25f * u), spin * (u * 2.0f),
+                       spin * (u * 2.0f + 4.6f),
                        (BrushProfile){.w_max = 7.0f,
                                       .w_min_ratio = 0.2f,
                                       .entry = 0.2f,
@@ -798,8 +808,8 @@ static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, flo
                                       .seed = s->seed + 7u},
                        (InkTone){.color = PAL_SUMI_HEAVY, .alpha = a * 0.6f});
     } else if (ember) {
-        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.45f + 0.35f * u), -u * 6.0f,
-                       -u * 6.0f + 5.2f,
+        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * (0.45f + 0.35f * u),
+                       spin * (-u * 6.0f), spin * (-u * 6.0f + 5.2f),
                        (BrushProfile){.w_max = 5.0f,
                                       .w_min_ratio = 0.3f,
                                       .entry = 0.15f,
@@ -810,14 +820,14 @@ static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, flo
     } else if (quill) {
         uint64_t rng = (uint64_t)s->seed ^ UINT64_C(0x51554c4c41524353);
         for (int k = 0; k < 3; ++k) {
-            const float ang = u * 7.0f + (float)k * 2.094f;
+            const float ang = spin * (u * 7.0f + (float)k * 2.094f);
             const float r0 = s->radius * 0.55f;
             const float r1 = s->radius * (0.85f + 0.15f * ink_rng_f01(&rng));
             const Vector2 zig[3] = {
                 {s->x + cosf(ang) * r0, s->y + sinf(ang) * r0},
-                {s->x + cosf(ang + 0.18f) * (r0 + r1) * 0.5f,
-                 s->y + sinf(ang + 0.18f) * (r0 + r1) * 0.5f},
-                {s->x + cosf(ang - 0.05f) * r1, s->y + sinf(ang - 0.05f) * r1},
+                {s->x + cosf(ang + spin * 0.18f) * (r0 + r1) * 0.5f,
+                 s->y + sinf(ang + spin * 0.18f) * (r0 + r1) * 0.5f},
+                {s->x + cosf(ang - spin * 0.05f) * r1, s->y + sinf(ang - spin * 0.05f) * r1},
             };
             ink_stroke(r, zig, 3,
                        (BrushProfile){.w_max = 2.4f,
@@ -828,6 +838,18 @@ static void draw_cyclone_stroke(RenderState *r, const VfxStroke *s, float u, flo
                                       .seed = s->seed + 20u + (uint32_t)k},
                        (InkTone){.color = PAL_AO_HOT, .alpha = a}, 1.0f);
         }
+    }
+    if (spin < 0.0f) {
+        const float ret_a0 = -u * 4.0f + 0.6f;
+        const float ret_a1 = ret_a0 - 3.8f;
+        ink_arc_stroke(r, (Vector2){s->x, s->y}, s->radius * 1.05f, ret_a0, ret_a1,
+                       (BrushProfile){.w_max = 3.2f,
+                                      .w_min_ratio = 0.25f,
+                                      .entry = 0.18f,
+                                      .exit = 0.32f,
+                                      .dry = 0.25f,
+                                      .seed = s->seed + 31u},
+                       (InkTone){.color = PAL_AO, .alpha = a * 0.45f});
     }
     const float mark = 5.0f * (1.0f - 0.5f * u);
     ink_teardrop(r, (Vector2){s->x, s->y}, (Vector2){0.0f, -1.0f}, mark * 1.3f, mark,

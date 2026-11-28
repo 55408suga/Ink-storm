@@ -396,24 +396,48 @@ static void test_invalid_inputs_and_extreme_coords(void)
     game_debug_start_wave(inf_g, 0);
     game_debug_start_wave(ext_g, 0);
 
+    GameState *cyc_nan_g = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(cyc_nan_g);
+    game_debug_start_wave(cyc_nan_g, 0);
+
     const BrushInput nan_in = {
         .mx = NAN, .my = 100.0f, .pmx = 100.0f, .pmy = 100.0f, .paint = true};
     const BrushInput inf_in = {
         .mx = 100.0f, .my = INFINITY, .pmx = 100.0f, .pmy = 100.0f, .cyclone = true};
-    const BrushInput ext_in = {
-        .mx = 1e30f, .my = -1e30f, .pmx = -1e30f, .pmy = 1e30f, .paint = true, .gale = true};
+    const BrushInput cyc_nan_in = {.mx = 100.0f,
+                                   .my = 100.0f,
+                                   .pmx = 100.0f,
+                                   .pmy = 100.0f,
+                                   .cyclone = true,
+                                   .has_cyclone_pos = true,
+                                   .cyclone_x = NAN,
+                                   .cyclone_y = 100.0f};
+    const BrushInput ext_in = {.mx = 1e30f,
+                               .my = -1e30f,
+                               .pmx = -1e30f,
+                               .pmy = 1e30f,
+                               .paint = true,
+                               .cyclone = true,
+                               .gale = true,
+                               .has_cyclone_pos = true,
+                               .cyclone_x = 1e30f,
+                               .cyclone_y = -1e30f};
     const GameCommand bogus_cmd = {.type = (GameCommandType)99, .arg = 123};
 
     game_step(ref, NULL, NULL);
     game_step(nan_g, &nan_in, NULL);
     game_step(inf_g, &inf_in, NULL);
+    game_step(cyc_nan_g, &cyc_nan_in, NULL);
     TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(nan_g));
     TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(inf_g));
+    TEST_ASSERT_EQUAL_HEX64(game_hash(ref), game_hash(cyc_nan_g));
 
     for (int t = 0; t < 10; ++t) {
         game_step(ext_g, &ext_in, &bogus_cmd);
         TEST_ASSERT_TRUE(fluid_validate_finite(&ext_g->fluid));
     }
+
+    game_destroy(cyc_nan_g);
 
     game_destroy(ext_g);
     game_destroy(inf_g);
@@ -590,12 +614,81 @@ static void test_boss_break_determinism_and_event_tally(void)
     game_destroy(a);
 }
 
+static void test_ccw_cyclone_determinism_and_hash_sensitivity(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x4646));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    GameState *cw_only = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(cw_only);
+
+    game_debug_start_wave(a, 0);
+    game_debug_start_wave(b, 0);
+    game_debug_start_wave(cw_only, 0);
+
+    int ccw_events = 0;
+    int cw_events = 0;
+    for (int t = 0; t < 180; ++t) {
+        BrushInput in_ccw = {.pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f};
+        BrushInput in_cw = in_ccw;
+        if (t == 5 || t == 95) {
+            in_ccw = (BrushInput){.pmx = 580.0f,
+                                  .pmy = 360.0f,
+                                  .mx = 580.0f,
+                                  .my = 360.0f,
+                                  .cyclone = true,
+                                  .cyclone_ccw = true};
+            in_cw = in_ccw;
+            in_cw.cyclone_ccw = false;
+        } else if (t == 15) {
+            in_ccw = (BrushInput){
+                .pmx = 700.0f, .pmy = 360.0f, .mx = 700.0f, .my = 360.0f, .cyclone = true};
+            in_cw = in_ccw;
+        }
+        game_step(a, &in_ccw, NULL);
+        game_step(b, &in_ccw, NULL);
+        game_step(cw_only, &in_cw, NULL);
+
+        TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+        for (int32_t i = 0; i < a->event_count; ++i) {
+            if (a->events[i].type == EV_CYCLONE) {
+                if ((a->events[i].flags & EVF_CYCLONE_CCW) != 0) {
+                    ++ccw_events;
+                } else {
+                    ++cw_events;
+                }
+            }
+        }
+        if (t == 5) {
+            /* Right after CCW vs CW cast, spin, cyclone_ccw_cd, and fluid must all diverge. */
+            uint64_t sec_ccw[GAME_HASH_SECTION_COUNT];
+            uint64_t sec_cw[GAME_HASH_SECTION_COUNT];
+            game_hash_sections(a, sec_ccw);
+            game_hash_sections(cw_only, sec_cw);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_FLUID], sec_cw[GAME_HASH_FLUID]);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_RUN], sec_cw[GAME_HASH_RUN]);
+            TEST_ASSERT_NOT_EQUAL_UINT64(sec_ccw[GAME_HASH_INTERNAL], sec_cw[GAME_HASH_INTERNAL]);
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT(2, ccw_events);
+    TEST_ASSERT_EQUAL_INT(1, cw_events);
+    TEST_ASSERT_NOT_EQUAL_UINT64(game_hash(a), game_hash(cw_only));
+
+    game_destroy(cw_only);
+    game_destroy(b);
+    game_destroy(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_full_run_determinism_sanity_and_settlement);
     RUN_TEST(test_campaign_plus_endless_loop_determinism_and_settlement);
     RUN_TEST(test_boss_break_determinism_and_event_tally);
+    RUN_TEST(test_ccw_cyclone_determinism_and_hash_sensitivity);
     RUN_TEST(test_different_seed_diverges);
     RUN_TEST(test_multi_tick_per_frame_event_tally);
     RUN_TEST(test_event_queue_overflow_and_reset);

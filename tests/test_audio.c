@@ -2224,6 +2224,85 @@ static void test_audio_boss_break_and_ward_voices(void)
     game_destroy(g);
 }
 
+static void render_cyclone_event(AudioState *a, GameState *g, uint32_t flags, int16_t *buf,
+                                 size_t n)
+{
+    audio_init(a, UINT64_C(333));
+    audio_set_volumes(a, 100, 0, 100);
+    g->phase = RUN_PHASE_PLAYING;
+    g->config.brush_style = BRUSH_STYLE_HEAVY;
+    g->player.dry = false;
+    g->player.surge_t = 0.0f;
+    g->event_count = 1;
+    memset(&g->events[0], 0, sizeof g->events[0]);
+    g->events[0].type = EV_CYCLONE;
+    g->events[0].flags = flags;
+    audio_consume_events(a, g);
+    audio_render(a, buf, n);
+}
+
+static void test_audio_ccw_cyclone_differs_cleanly_while_cw_stays_bit_identical(void)
+{
+    enum { N = AUDIO_SAMPLES_PER_TICK * 24 };
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    int16_t *cw_ref = calloc(N, sizeof *cw_ref);
+    int16_t *cw_chk = calloc(N, sizeof *cw_chk);
+    int16_t *ccw_pcm = calloc(N, sizeof *ccw_pcm);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(cw_ref);
+    TEST_ASSERT_NOT_NULL(cw_chk);
+    TEST_ASSERT_NOT_NULL(ccw_pcm);
+
+    /* CW via EV_CYCLONE(flags=0) is bit-identical to an explicit spawn without bit 16. */
+    render_cyclone_event(a, g, 0u, cw_chk, N);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    audio_init(a, UINT64_C(333));
+    audio_set_volumes(a, 100, 0, 100);
+    g->phase = RUN_PHASE_PLAYING;
+    g->config.brush_style = BRUSH_STYLE_HEAVY;
+    g->player.dry = false;
+    g->player.surge_t = 0.0f;
+    g->event_count = 0;
+    audio_consume_events(a, g);
+    a->pending[0] = (AudioPendingVoice){
+        .kind = AUDIO_VOICE_CYCLONE_SWIRL,
+        .start_sample = 0,
+        .freq = 145.0f,
+        .param = (float)BRUSH_STYLE_HEAVY,
+    };
+    a->pending_head = 0;
+    a->pending_count = 1;
+    audio_render(a, cw_ref, N);
+    TEST_ASSERT_EQUAL_MEMORY(cw_ref, cw_chk, N * sizeof *cw_ref);
+
+    /* CCW via EVF_CYCLONE_CCW differs in waveform, keeps similar RMS (+/-15%), and never clips. */
+    render_cyclone_event(a, g, EVF_CYCLONE_CCW, ccw_pcm, N);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    TEST_ASSERT_TRUE(peak_abs(ccw_pcm, N) > 500);
+    TEST_ASSERT_TRUE(peak_abs(ccw_pcm, N) < 32767);
+
+    double diff_sq = 0.0;
+    for (size_t i = 0; i < N; ++i) {
+        const double d = (double)cw_chk[i] - (double)ccw_pcm[i];
+        diff_sq += d * d;
+    }
+    const double l2_rms = sqrt(diff_sq / (double)N);
+    const double cw_rms = rms_of(cw_chk, N);
+    const double ccw_rms = rms_of(ccw_pcm, N);
+    TEST_ASSERT_TRUE(cw_rms > 100.0);
+    TEST_ASSERT_TRUE(l2_rms > 50.0);
+    TEST_ASSERT_TRUE(ccw_rms >= cw_rms * 0.85 && ccw_rms <= cw_rms * 1.15);
+
+    free(ccw_pcm);
+    free(cw_chk);
+    free(cw_ref);
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2273,5 +2352,6 @@ int main(void)
     RUN_TEST(test_audio_precomputed_brush_hp_coeffs_match_direct_svf);
     RUN_TEST(test_audio_voice_high_water_tracks_lifetime);
     RUN_TEST(test_audio_boss_break_and_ward_voices);
+    RUN_TEST(test_audio_ccw_cyclone_differs_cleanly_while_cw_stays_bit_identical);
     return UNITY_END();
 }
