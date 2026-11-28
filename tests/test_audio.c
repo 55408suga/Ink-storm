@@ -2121,6 +2121,109 @@ static void test_audio_voice_high_water_tracks_lifetime(void)
     free(a);
 }
 
+static float spectral_centroid_hz(const int16_t *pcm, size_t n)
+{
+    /* Coarse DFT across 64..8000 Hz in 64 Hz bins to verify acoustic (non-shrill) timbre. */
+    double num = 0.0;
+    double den = 0.0;
+    const double sr = (double)AUDIO_SAMPLE_RATE;
+    const double two_pi = 6.283185307179586;
+    for (double f = 64.0; f <= 8000.0; f += 64.0) {
+        double re = 0.0;
+        double im = 0.0;
+        const double w = two_pi * f / sr;
+        for (size_t i = 0; i < n; ++i) {
+            const double s = (double)pcm[i] / 32768.0;
+            const double ang = w * (double)i;
+            re += s * cos(ang);
+            im -= s * sin(ang);
+        }
+        const double mag = sqrt(re * re + im * im);
+        num += f * mag;
+        den += mag;
+    }
+    return den > 1e-9 ? (float)(num / den) : 0.0f;
+}
+
+static void test_audio_boss_break_and_ward_voices(void)
+{
+    GameState *g = game_create(NULL);
+    AudioState *a = calloc(1, sizeof *a);
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_NOT_NULL(a);
+
+    /* 1. Boss Break START: finite, audible, peak <= 16384 (-6 dBFS), spectral centroid < 3 kHz. */
+    audio_init(a, UINT64_C(451));
+    audio_set_volumes(a, 100, 0, 100);
+    g->phase = RUN_PHASE_PLAYING;
+    g->run.wave_index = GAME_BOSS_WAVE_INDEX;
+    g->event_count = 1;
+    g->events[0] = (GameEvent){
+        .type = EV_BOSS_BREAK,
+        .x = 640.0f,
+        .y = 200.0f,
+        .value = (int32_t)BOSS_BREAK_EV_START,
+    };
+    audio_consume_events(a, g);
+
+    int16_t pcm[AUDIO_SAMPLES_PER_TICK * 20];
+    audio_render(a, pcm, sizeof pcm / sizeof pcm[0]);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    const int32_t pk = peak_abs(pcm, sizeof pcm / sizeof pcm[0]);
+    TEST_ASSERT_GREATER_THAN_INT32(400, pk);
+    TEST_ASSERT_LESS_OR_EQUAL_INT32(16384, pk);
+    const float centroid = spectral_centroid_hz(pcm, 4096u);
+    TEST_ASSERT_TRUE(centroid > 100.0f && centroid < 3000.0f);
+
+    /* 2. Boss Break EXTEND and Ryu Ward Tap: finite, audible, peak <= 16384. */
+    audio_init(a, UINT64_C(452));
+    audio_set_volumes(a, 100, 0, 100);
+    g->event_count = 1;
+    g->events[0] = (GameEvent){.type = EV_BOSS_BREAK, .value = (int32_t)BOSS_BREAK_EV_EXTEND};
+    audio_consume_events(a, g);
+    audio_render(a, pcm, AUDIO_SAMPLES_PER_TICK * 6u);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    const int32_t ext_pk = peak_abs(pcm, AUDIO_SAMPLES_PER_TICK * 6u);
+    TEST_ASSERT_GREATER_THAN_INT32(100, ext_pk);
+    TEST_ASSERT_LESS_OR_EQUAL_INT32(16384, ext_pk);
+
+    audio_init(a, UINT64_C(453));
+    audio_set_volumes(a, 100, 0, 100);
+    g->event_count = 1;
+    g->events[0] = (GameEvent){.type = EV_BOSS_WARD, .value = 2};
+    audio_consume_events(a, g);
+    audio_render(a, pcm, AUDIO_SAMPLES_PER_TICK * 6u);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+    const int32_t ward_pk = peak_abs(pcm, AUDIO_SAMPLES_PER_TICK * 6u);
+    TEST_ASSERT_GREATER_THAN_INT32(60, ward_pk);
+    TEST_ASSERT_LESS_OR_EQUAL_INT32(16384, ward_pk);
+
+    /* 3. Milestone priority: EV_BOSS_BREAK survives a 128-event combat flood. */
+    audio_init(a, UINT64_C(454));
+    audio_set_volumes(a, 100, 0, 100);
+    g->event_count = GAME_MAX_EVENTS;
+    g->events[0] = (GameEvent){.type = EV_BOSS_BREAK, .value = (int32_t)BOSS_BREAK_EV_START};
+    for (int i = 1; i < GAME_MAX_EVENTS; ++i) {
+        g->events[i] = (GameEvent){
+            .type = (i % 3 == 0) ? EV_KILL : ((i % 3 == 1) ? EV_DEFLECT : EV_ORB_PICKUP),
+        };
+    }
+    audio_consume_events(a, g);
+    audio_render(a, pcm, AUDIO_SAMPLES_PER_TICK);
+    bool break_active = false;
+    for (int i = 0; i < AUDIO_MAX_VOICES; ++i) {
+        if (a->voices[i].active && a->voices[i].kind == AUDIO_VOICE_BOSS_BREAK) {
+            break_active = true;
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE(break_active);
+    TEST_ASSERT_TRUE(audio_validate_finite(a));
+
+    free(a);
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2169,5 +2272,6 @@ int main(void)
     RUN_TEST(test_audio_procedural_bgm_rapid_mid_fade_switch_preserves_outgoing_gain);
     RUN_TEST(test_audio_precomputed_brush_hp_coeffs_match_direct_svf);
     RUN_TEST(test_audio_voice_high_water_tracks_lifetime);
+    RUN_TEST(test_audio_boss_break_and_ward_voices);
     return UNITY_END();
 }

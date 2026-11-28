@@ -1,6 +1,7 @@
 #include "combat/damage.h"
 
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "enemies/enemy_defs.h"
 #include "roguelike/upgrades.h"
 
@@ -206,6 +207,7 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
                 EnemyComp *pen = game_enemy_mut(g, head);
                 const TransformComp *ptr = game_transform(g, head);
                 if (pboss != NULL && pboss->phase_idx == 0) {
+                    boss_break_end(g, head, true);
                     pboss->phase_idx = 1;
                     if (php != NULL) {
                         php->invuln_t = 1.5f;
@@ -231,26 +233,34 @@ static void kill_enemy(GameState *g, EntityId victim, uint32_t dmg_flags, float 
                                              });
                 }
             }
-        } else if (g->ryu_body.active_orb_slot == part_id) {
-            g->ryu_body.active_orb_slot = -1;
-            for (int32_t off = 1; off <= GAME_RYU_ORB_COUNT; ++off) {
-                const int32_t slot = ((part_id >= 0 ? part_id : 0) + off) % GAME_RYU_ORB_COUNT;
-                if ((g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) == 0u &&
-                    ecs_is_alive(&g->ecs, g->ryu_body.orb_ids[slot])) {
-                    g->ryu_body.active_orb_slot = slot;
-                    BossComp *next_oboss = game_boss_mut(g, g->ryu_body.orb_ids[slot]);
-                    if (next_oboss != NULL) {
-                        next_oboss->telegraph = 0.0f;
-                    }
-                    break;
-                }
-            }
-            /* Ensure the replacement orb always gets its full 0.65s warning (+0.10s lead-in). */
+        } else {
             const EntityId head =
                 parent_id.index != ECS_INVALID_INDEX ? parent_id : g->ryu_body.head_id;
-            EnemyComp *head_en = (head.index != ECS_INVALID_INDEX) ? game_enemy_mut(g, head) : NULL;
-            if (head_en != NULL && head_en->fire_cd < 0.75f) {
-                head_en->fire_cd = 0.75f;
+            if (g->ryu_body.active_orb_slot == part_id) {
+                g->ryu_body.active_orb_slot = -1;
+                for (int32_t off = 1; off <= GAME_RYU_ORB_COUNT; ++off) {
+                    const int32_t slot = ((part_id >= 0 ? part_id : 0) + off) % GAME_RYU_ORB_COUNT;
+                    if ((g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) == 0u &&
+                        ecs_is_alive(&g->ecs, g->ryu_body.orb_ids[slot])) {
+                        g->ryu_body.active_orb_slot = slot;
+                        BossComp *next_oboss = game_boss_mut(g, g->ryu_body.orb_ids[slot]);
+                        if (next_oboss != NULL) {
+                            next_oboss->telegraph = 0.0f;
+                        }
+                        break;
+                    }
+                }
+                /* Ensure the replacement orb always gets its full 0.65s warning (+0.10s lead-in).
+                 */
+                EnemyComp *head_en =
+                    (head.index != ECS_INVALID_INDEX) ? game_enemy_mut(g, head) : NULL;
+                if (head_en != NULL && head_en->fire_cd < 0.75f) {
+                    head_en->fire_cd = 0.75f;
+                }
+            }
+            /* Breaking a non-final orb flinches Ryu for 1.8s (pausing volleys, no guard). */
+            if (head.index != ECS_INVALID_INDEX && ecs_is_alive(&g->ecs, head)) {
+                boss_break_start(g, head, BOSS_BREAK_FLINCH, 1.8f, 0);
             }
         }
     }
@@ -414,16 +424,21 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
         }
     }
 
+    dmg *= boss_break_damage_mul(g, target, dmg_flags);
+
     const float clamped = ink_clampf(dmg, 1.0f, 1000000.0f);
     const int32_t final_dmg = (int32_t)floorf(clamped + 0.5f);
     hp->hp -= final_dmg;
     hp->flash_t = 1.0f;
 
+    bool phase_changed = false;
     if (hp->hp > 0 && is_boss) {
         BossComp *boss = game_boss_mut(g, target);
         if (boss != NULL) {
             if (en->def_id == ENEMY_BOSS_TENGU && boss->phase_idx == 0 &&
                 hp->hp * 2 <= hp->max_hp) {
+                boss_break_end(g, target, true);
+                phase_changed = true;
                 boss->phase_idx = 1;
                 hp->invuln_t = 1.5f;
                 EnemyComp *en_mut = game_enemy_mut(g, target);
@@ -431,6 +446,7 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                     en_mut->fire_cd = 0.75f;
                 }
                 boss->gale_t = 0.0f;
+                boss->volley_t = 0.0f;
                 boss->telegraph = 0.0f;
                 boss->telegraph_pattern = 0;
                 static const float k_phase_dye[FLUID_MAX_CHANNELS] = {0.8f, 0.4f, 0.0f, 0.0f};
@@ -444,14 +460,19 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                                          });
             } else if (en->def_id == ENEMY_BOSS_NUE && boss->phase_idx == 0 &&
                        hp->hp * 2 <= hp->max_hp) {
+                boss_break_end(g, target, true);
+                phase_changed = true;
                 boss->phase_idx = 1;
                 hp->invuln_t = 1.5f;
                 EnemyComp *en_mut = game_enemy_mut(g, target);
                 if (en_mut != NULL && en_mut->ai_state == 1 && en_mut->windup > 0.0f) {
                     en_mut->windup = 0.65f;
+                    const float win_cd = fmaxf(fmaxf(1.6f, 2.2f * enemy_endless_boss_cd_mul(g)),
+                                               en_mut->windup + 0.10f);
                     if (en_mut->fire_cd < en_mut->windup + 0.10f) {
                         en_mut->fire_cd = en_mut->windup + 0.10f;
                     }
+                    boss->window_total = fmaxf(win_cd, en_mut->fire_cd);
                     boss->telegraph_pattern = (boss->pattern & 1) == 1 ? 3 : 1;
                     if (boss->telegraph_pattern == 1) {
                         const float sx =
@@ -478,6 +499,8 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                                          });
             } else if (en->def_id == ENEMY_BOSS_RYU && boss->phase_idx == 1 &&
                        hp->hp * 5 <= hp->max_hp * 2) {
+                boss_break_end(g, target, true);
+                phase_changed = true;
                 boss->phase_idx = 2;
                 hp->invuln_t = 1.5f;
                 EnemyComp *en_mut = game_enemy_mut(g, target);
@@ -496,6 +519,42 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                                              .value = 3,
                                              .flags = 0,
                                          });
+            }
+        }
+    }
+
+    if (hp->hp > 0 && is_boss && !phase_changed) {
+        if (en->def_id == ENEMY_BOSS_TENGU) {
+            if ((dmg_flags & DMG_DEFLECTED) != 0u) {
+                boss_break_add_stagger(g, target, (dmg_flags & DMG_FIRE) != 0u ? 26.0f : 20.0f);
+            }
+        } else if (en->def_id == ENEMY_BOSS_RYU) {
+            if ((dmg_flags & DMG_CATACLYSM) != 0u) {
+                boss_break_add_stagger(g, target, 45.0f);
+            } else if ((dmg_flags & DMG_DEFLECTED) != 0u) {
+                boss_break_add_stagger(g, target, 14.0f);
+            } else if ((dmg_flags & DMG_REACTION) != 0u) {
+                boss_break_add_stagger(g, target, 5.0f);
+            }
+        } else if (en->def_id == ENEMY_BOSS_NUE && en->ai_state == 1 &&
+                   (dmg_flags & (DMG_STORM | DMG_REACTION)) == (DMG_STORM | DMG_REACTION) &&
+                   st->ink_mark_t > 0.0f) {
+            BossComp *boss = game_boss_mut(g, target);
+            EnemyComp *en_mut = game_enemy_mut(g, target);
+            if (boss != NULL && en_mut != NULL) {
+                const float add = fminf(0.4f, 0.8f - boss->window_bonus);
+                if (add > 1e-4f) {
+                    en_mut->fire_cd += add;
+                    boss->window_total = fmaxf(boss->window_total + add, en_mut->fire_cd);
+                    boss->window_bonus += add;
+                    (void)game_push_event(g, (GameEvent){
+                                                 .type = EV_BOSS_BREAK,
+                                                 .x = tr->x,
+                                                 .y = tr->y,
+                                                 .value = (int32_t)BOSS_BREAK_EV_EXTEND,
+                                                 .flags = 0,
+                                             });
+                }
             }
         }
     }
@@ -550,7 +609,7 @@ static float slam_damage_for_enemy(const GameState *g, EnemyDefId def_id, MassTi
                                    int32_t max_hp)
 {
     if (def_id == ENEMY_BOSS_NUE) {
-        return 60.0f;
+        return 110.0f;
     }
     if (raw_tier == MASS_LIGHT || (g->internal.mods.oni_tile && raw_tier == MASS_MEDIUM)) {
         return (float)(max_hp > 0 ? max_hp * 4 : 1000);
@@ -645,28 +704,41 @@ void combat_physics_and_slams_step(GameState *g)
 
             if (st->knockback_t > 0.0f && esp > 215.0f) {
                 const float slam_dmg = slam_damage_for_enemy(g, en->def_id, raw_tier, hp->max_hp);
-                if (raw_tier == MASS_HEAVY || nue_slam_active) {
-                    if (st->stun_t < 1.0f) {
+                const EnemyDefId slam_def = en->def_id;
+                const float slam_x = tr->x;
+                const float slam_y = tr->y;
+                st->knockback_t = 0.0f;
+                const int32_t dealt = combat_apply_damage_f(
+                    g, id, slam_dmg, DMG_PHYSICAL | DMG_SLAM, vel->vx, vel->vy);
+                if (dealt > 0) {
+                    (void)game_push_event(g, (GameEvent){
+                                                 .type = EV_SLAM,
+                                                 .x = slam_x,
+                                                 .y = slam_y,
+                                                 .x2 = nx,
+                                                 .y2 = ny,
+                                                 .value = (int32_t)slam_def,
+                                                 .flags = EVF_SLAM_WALL,
+                                             });
+                    if (g->hitstop_t < 0.05f) {
+                        g->hitstop_t = 0.05f;
+                    }
+                    if (!ecs_is_alive(&g->ecs, id)) {
+                        continue;
+                    }
+                    if (raw_tier == MASS_HEAVY && hp->invuln_t <= 0.0f && st->stun_t < 1.0f) {
                         st->stun_t = 1.0f;
                     }
-                }
-                st->knockback_t = 0.0f;
-                (void)game_push_event(g, (GameEvent){
-                                             .type = EV_SLAM,
-                                             .x = tr->x,
-                                             .y = tr->y,
-                                             .x2 = nx,
-                                             .y2 = ny,
-                                             .value = (int32_t)en->def_id,
-                                             .flags = EVF_SLAM_WALL,
-                                         });
-                if (g->hitstop_t < 0.05f) {
-                    g->hitstop_t = 0.05f;
-                }
-                (void)combat_apply_damage_f(g, id, slam_dmg, DMG_PHYSICAL | DMG_SLAM, vel->vx,
-                                            vel->vy);
-                if (!ecs_is_alive(&g->ecs, id)) {
-                    continue;
+                    if (nue_slam_active && hp->hp > 0 && hp->invuln_t <= 0.0f) {
+                        if (st->stun_t < 1.6f) {
+                            st->stun_t = 1.6f;
+                        }
+                        const BossComp *nboss = game_boss(g, id);
+                        if (nboss != NULL && nboss->break_t <= 0.0f &&
+                            nboss->break_guard_t <= 0.0f) {
+                            boss_break_start(g, id, BOSS_BREAK_SLAM, 2.5f, 2);
+                        }
+                    }
                 }
                 vel->vx *= -0.4f;
                 vel->vy *= -0.4f;

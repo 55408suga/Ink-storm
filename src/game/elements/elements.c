@@ -939,8 +939,9 @@ static void elements_stage5_projectiles(GameState *g)
             proj->pierce = g->internal.mods.burning_proj_pierce;
             vel->vx *= 1.25f;
             vel->vy *= 1.25f;
-            const float max_mul = proj->deflected ? g->internal.mods.deflected_max_speed_mul : 1.0f;
-            clamp_proj_max_speed(vel, 640.0f * max_mul);
+            const float max_sp =
+                proj->deflected ? (640.0f * g->internal.mods.deflected_max_speed_mul) : 365.0f;
+            clamp_proj_max_speed(vel, max_sp);
         }
         if (proj->deflected && !proj->electrified && storm > 0.25f) {
             proj->electrified = true;
@@ -949,7 +950,7 @@ static void elements_stage5_projectiles(GameState *g)
             proj->accelerated = true;
             vel->vx *= 1.3f;
             vel->vy *= 1.3f;
-            clamp_proj_max_speed(vel, proj->burning ? 640.0f : 365.0f);
+            clamp_proj_max_speed(vel, 365.0f);
         }
     }
 }

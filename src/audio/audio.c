@@ -539,6 +539,16 @@ static void spawn_event_voices(AudioState *audio, const GameState *game, uint64_
         case EV_BOSS_PART_BREAK:
             audio_voice_spawn(audio, AUDIO_VOICE_PART_BREAK, at_sample, 987.77f, (float)ev->value);
             break;
+        case EV_BOSS_BREAK:
+            if (ev->value == (int32_t)BOSS_BREAK_EV_START) {
+                audio_voice_spawn(audio, AUDIO_VOICE_BOSS_BREAK, at_sample, 1850.0f, 1.0f);
+            } else if (ev->value == (int32_t)BOSS_BREAK_EV_EXTEND) {
+                audio_voice_spawn(audio, AUDIO_VOICE_BOSS_BREAK, at_sample, 1950.0f, 0.5f);
+            }
+            break;
+        case EV_BOSS_WARD:
+            audio_voice_spawn(audio, AUDIO_VOICE_WARD_TAP, at_sample, 900.0f, 0.3f);
+            break;
         case EV_WAVE_CLEAR:
             audio_voice_spawn(audio, AUDIO_VOICE_WAVE_CLEAR, at_sample, k_yo_scale[2], 0.0f);
             break;

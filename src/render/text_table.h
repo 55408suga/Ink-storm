@@ -3,6 +3,7 @@
 
 #include "game_ids.h"
 #include "meta.h"
+#include "vfx_rules.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -67,6 +68,15 @@ typedef enum {
     TEXT_BOSS_TENGU_EPITHET,
     TEXT_BOSS_NUE_EPITHET,
     TEXT_BOSS_RYU_EPITHET,
+    TEXT_BOSS_CUE_TENGU_P1,
+    TEXT_BOSS_CUE_TENGU_P2,
+    TEXT_BOSS_CUE_NUE_MOVING,
+    TEXT_BOSS_CUE_NUE_GROUNDED,
+    TEXT_BOSS_CUE_RYU_P1,
+    TEXT_BOSS_CUE_RYU_P2,
+    TEXT_BOSS_CUE_RYU_P3,
+    TEXT_BOSS_CUE_RYU_FLINCH,
+    TEXT_BOSS_CUE_BREAK,
 
     TEXT_CALLOUT_BLAZING,
     TEXT_CALLOUT_TEMPEST,
@@ -77,6 +87,7 @@ typedef enum {
     TEXT_CALLOUT_SURGE,
     TEXT_CALLOUT_WAVE_CLEAR,
     TEXT_CALLOUT_ACT_CLEAR,
+    TEXT_CALLOUT_BOSS_BREAK,
 
     TEXT_REWARD_TITLE,
     TEXT_REWARD_RELIC_TITLE,
@@ -489,6 +500,7 @@ const char *text_get(TextId id, bool use_ja);
 TextId text_enemy_name(EnemyDefId id);
 TextId text_enemy_intro(EnemyDefId id);
 TextId text_boss_epithet(EnemyDefId id);
+TextId text_boss_cue(VfxBossCue cue);
 TextId text_upgrade_name(UpgradeId id);
 TextId text_upgrade_effect(UpgradeId id, int level);
 TextId text_axis_name(UpgradeAxis axis);

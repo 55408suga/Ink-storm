@@ -1,3 +1,5 @@
+#include "combat/damage.h"
+#include "enemies/boss_break.h"
 #include "fluid.h"
 #include "game.h"
 #include "unity.h"
@@ -515,11 +517,85 @@ static void test_campaign_plus_endless_loop_determinism_and_settlement(void)
     game_destroy(a);
 }
 
+static void test_boss_break_determinism_and_event_tally(void)
+{
+    const RunConfig cfg = meta_run_config_preset(BRUSH_STYLE_HEAVY, UINT64_C(0x4545));
+    GameState *a = game_create(&cfg);
+    GameState *b = game_create(&cfg);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+
+    RunTelemetry tel_a = {0};
+    RunTelemetry tel_b = {0};
+
+    /* 1. Scripted Tengu Stance Break -> step through full 2.8s break + guard window. */
+    game_debug_start_act(a, 0);
+    game_debug_start_act(b, 0);
+    game_debug_start_wave(a, GAME_BOSS_WAVE_INDEX);
+    game_debug_start_wave(b, GAME_BOSS_WAVE_INDEX);
+    a->internal.spawn_cd = 999.0f;
+    b->internal.spawn_cd = 999.0f;
+    for (int k = 0; k < 5; ++k) {
+        (void)combat_apply_damage(a, a->run.boss_id, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0.0f, 0.0f);
+        (void)combat_apply_damage(b, b->run.boss_id, 20, DMG_DEFLECTED | DMG_PHYSICAL, 0.0f, 0.0f);
+    }
+    tally_events(a, &tel_a);
+    tally_events(b, &tel_b);
+    TEST_ASSERT_TRUE(game_boss(a, a->run.boss_id)->break_t > 2.7f);
+    TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+
+    for (int t = 0; t < 200; ++t) {
+        const BrushInput in_a = game_autoplay_input(a);
+        const BrushInput in_b = game_autoplay_input(b);
+        game_step(a, &in_a, NULL);
+        game_step(b, &in_b, NULL);
+        tally_events(a, &tel_a);
+        tally_events(b, &tel_b);
+        TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+    }
+
+    /* 2. Scripted Nue Slam Break -> wall impact into 2.5s break + end event. */
+    game_debug_start_act(a, 1);
+    game_debug_start_act(b, 1);
+    game_debug_start_wave(a, GAME_BOSS_WAVE_INDEX);
+    game_debug_start_wave(b, GAME_BOSS_WAVE_INDEX);
+    a->internal.spawn_cd = 999.0f;
+    b->internal.spawn_cd = 999.0f;
+    GameState *pair[2] = {a, b};
+    for (int p = 0; p < 2; ++p) {
+        const EntityId nue = pair[p]->run.boss_id;
+        game_transform_mut(pair[p], nue)->x = 52.0f;
+        game_transform_mut(pair[p], nue)->y = 360.0f;
+        game_enemy_mut(pair[p], nue)->ai_state = 1;
+        game_enemy_mut(pair[p], nue)->fire_cd = 2.2f;
+        game_boss_mut(pair[p], nue)->window_total = 2.2f;
+        game_velocity_mut(pair[p], nue)->vx = -420.0f;
+        game_velocity_mut(pair[p], nue)->vy = 0.0f;
+        game_status_mut(pair[p], nue)->knockback_t = 0.9f;
+    }
+    for (int t = 0; t < 200; ++t) {
+        const BrushInput in_a = game_autoplay_input(a);
+        const BrushInput in_b = game_autoplay_input(b);
+        game_step(a, &in_a, NULL);
+        game_step(b, &in_b, NULL);
+        tally_events(a, &tel_a);
+        tally_events(b, &tel_b);
+        TEST_ASSERT_EQUAL_HEX64(game_hash(a), game_hash(b));
+    }
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(4, tel_a.event_counts[EV_BOSS_BREAK]);
+    TEST_ASSERT_EQUAL_INT32_ARRAY(tel_a.event_counts, tel_b.event_counts, EV_TYPE_COUNT);
+
+    game_destroy(b);
+    game_destroy(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_full_run_determinism_sanity_and_settlement);
     RUN_TEST(test_campaign_plus_endless_loop_determinism_and_settlement);
+    RUN_TEST(test_boss_break_determinism_and_event_tally);
     RUN_TEST(test_different_seed_diverges);
     RUN_TEST(test_multi_tick_per_frame_event_tally);
     RUN_TEST(test_event_queue_overflow_and_reset);

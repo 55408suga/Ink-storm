@@ -52,8 +52,17 @@ typedef enum {
     EV_SKILL_DENIED,
     EV_BOSS_PART_BREAK,
     EV_PURIFY,
+    EV_BOSS_BREAK,
+    EV_BOSS_WARD,
     EV_TYPE_COUNT
 } GameEventType;
+
+typedef enum {
+    BOSS_BREAK_EV_START = 0,
+    BOSS_BREAK_EV_END,
+    BOSS_BREAK_EV_EXTEND,
+    BOSS_BREAK_EV_FLINCH
+} BossBreakEvent;
 
 #define EVF_SLAM_WALL (UINT32_C(1) << 8)
 #define EVF_SLAM_ENEMY (UINT32_C(1) << 9)

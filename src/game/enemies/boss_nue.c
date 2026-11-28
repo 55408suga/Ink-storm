@@ -1,4 +1,5 @@
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "enemies/enemy_defs.h"
 #include "enemies/projectiles.h"
 #include "roguelike/waves.h"
@@ -62,6 +63,15 @@ void boss_nue_spawn(GameState *g, EntityId id)
     boss->parent_id = (EntityId){ECS_INVALID_INDEX, 0};
     boss->telegraph_pattern = 0;
     boss->telegraph = 0.0f;
+    boss->stagger = 0.0f;
+    boss->stagger_idle_t = 0.0f;
+    boss->break_t = 0.0f;
+    boss->break_guard_t = 0.0f;
+    boss->break_kind = (int32_t)BOSS_BREAK_NONE;
+    boss->volley_t = 0.0f;
+    boss->volley_pattern = 0;
+    boss->window_total = 0.0f;
+    boss->window_bonus = 0.0f;
     update_dash_vector(tr, boss, en->phase);
 
     g->run.boss_id = id;
@@ -74,6 +84,8 @@ void boss_nue_spawn(GameState *g, EntityId id)
 
 void boss_nue_step(GameState *g, EntityId id)
 {
+    boss_break_step(g, id);
+
     TransformComp *tr = game_transform_mut(g, id);
     VelocityComp *vel = game_velocity_mut(g, id);
     const HealthComp *hp = game_health(g, id);
@@ -189,7 +201,10 @@ void boss_nue_step(GameState *g, EntityId id)
             vel->vx = 0.0f;
             vel->vy = 0.0f;
             en->windup = 0.65f;
-            en->fire_cd = fmaxf(1.5f * enemy_endless_boss_cd_mul(g), en->windup + 0.10f);
+            en->fire_cd =
+                fmaxf(fmaxf(1.6f, 2.2f * enemy_endless_boss_cd_mul(g)), en->windup + 0.10f);
+            boss->window_total = en->fire_cd;
+            boss->window_bonus = 0.0f;
             boss->telegraph = 0.0f;
             boss->telegraph_pattern = (boss->phase_idx >= 1 && (boss->pattern & 1) == 1) ? 3 : 1;
             if (boss->telegraph_pattern == 1) {
@@ -197,7 +212,7 @@ void boss_nue_step(GameState *g, EntityId id)
             }
         }
     } else {
-        /* Stopped & attacking (1.5s; vulnerable to gale knockback and slam). */
+        /* Stopped & attacking (2.2s base; vulnerable to gale knockback and slam). */
         vel->mass_tier = MASS_MEDIUM;
         if (st->knockback_t <= 0.0f) {
             vel->vx *= 0.8f;
@@ -208,6 +223,11 @@ void boss_nue_step(GameState *g, EntityId id)
         if (hp->invuln_t > 0.0f) {
             /* Freeze both windup and stop-exit timers during phase invulnerability so Nue never
              * abandons a warned shot or starts dashing while invulnerable. */
+            boss->telegraph = 0.0f;
+            return;
+        }
+        if (boss->break_t > 0.0f) {
+            /* Keep Nue grounded and slam-able while freezing windup and stop-exit timers. */
             boss->telegraph = 0.0f;
             return;
         }
@@ -263,6 +283,8 @@ void boss_nue_step(GameState *g, EntityId id)
             vel->mass_tier = MASS_BOSS;
             st->knockback_t = 0.0f;
             en->fire_cd = 0.5f;
+            boss->window_total = 0.0f;
+            boss->window_bonus = 0.0f;
             boss->telegraph = 0.0f;
             update_dash_vector(tr, boss, en->phase);
         }

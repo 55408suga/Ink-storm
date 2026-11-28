@@ -1,6 +1,7 @@
 #include "ink_prims.h"
 #include "player/player_skills.h"
 #include "render_internal.h"
+#include "vfx_rules.h"
 
 #include "core.h"
 
@@ -233,7 +234,80 @@ static void draw_stage_plaque(RenderState *r, const GameState *g, Rectangle box)
         fmaxf(20.0f, max_w - w1 - sep_w), sz, 11.0f, PAL_SUMI_HEAVY, 0.95f, false);
 }
 
-static void draw_center_progress(RenderState *r, const GameState *g)
+static bool hud_is_multipart_ryu(const GameState *g)
+{
+    if (g == NULL || g->run.wave_index != GAME_BOSS_WAVE_INDEX ||
+        g->run.boss_id.index == ECS_INVALID_INDEX ||
+        g->ryu_body.head_id.index != g->run.boss_id.index ||
+        g->ryu_body.head_id.gen != g->run.boss_id.gen) {
+        return false;
+    }
+    const HealthComp *boss_hp = game_health(g, g->run.boss_id);
+    return boss_hp != NULL && boss_hp->max_hp > 0;
+}
+
+void render_draw_shrine_hp_bar(RenderState *r, const GameState *g, const UiView *ui)
+{
+    if (r == NULL || g == NULL || g->shrine_count <= 0) {
+        return;
+    }
+    if (g->phase == RUN_PHASE_REWARD || g->phase == RUN_PHASE_ACT_TRANSITION ||
+        g->phase == RUN_PHASE_SHRINE_BREAK || g->phase == RUN_PHASE_VICTORY ||
+        g->phase == RUN_PHASE_GAME_OVER) {
+        return;
+    }
+    const ShrineState *sh = &g->shrines[0];
+    const bool reduce_flash = (ui != NULL && ui->reduce_flash);
+    const VfxShrineBar style =
+        vfx_shrine_bar_style(sh->hp, sh->max_hp, r->shrine_flicker_t, r->vfx_time, reduce_flash);
+    if (!style.visible) {
+        return;
+    }
+
+    const Vector2 shake = render_vfx_shake_offset(r, ui);
+    const float cx = sh->x + shake.x;
+    const float cy = sh->y + 46.0f + shake.y;
+    const float s = style.scale;
+
+    /* Gofun backing plate so the micro-bar remains readable over dark 60%+ ink. */
+    const float back_w = 70.0f * s;
+    const float back_h = 9.0f * s;
+    draw_filled_rect(r, (Rectangle){cx - back_w * 0.5f, cy - back_h * 0.5f, back_w, back_h},
+                     pal_color_alpha(PAL_GOFUN, style.alpha * 0.70f));
+
+    /* 1.5px Sumi frame enclosing the 64x5 HP bar. */
+    const float bar_w = 64.0f * s;
+    const float bar_h = 5.0f * s;
+    const float border = 1.5f * s;
+    const float frame_w = bar_w + border * 2.0f;
+    const float frame_h = bar_h + border * 2.0f;
+    draw_filled_rect(r, (Rectangle){cx - frame_w * 0.5f, cy - frame_h * 0.5f, frame_w, frame_h},
+                     pal_color_alpha(PAL_SUMI_DARK, style.alpha));
+
+    const float bar_x = cx - bar_w * 0.5f;
+    const float bar_y = cy - bar_h * 0.5f;
+    draw_filled_rect(r, (Rectangle){bar_x, bar_y, bar_w, bar_h},
+                     pal_color_alpha(PAL_GOFUN, style.alpha * 0.35f));
+
+    const float ratio = ink_clampf((float)sh->hp / (float)sh->max_hp, 0.0f, 1.0f);
+    const PaletteId fill_pal = style.alert ? PAL_SHU_HOT : PAL_SHU;
+    if (ratio > 0.0f) {
+        draw_filled_rect(r, (Rectangle){bar_x, bar_y, bar_w * ratio, bar_h},
+                         pal_color_alpha(fill_pal, style.alpha));
+    }
+
+    /* 1px divider ticks between HP points. */
+    if (sh->max_hp > 1) {
+        const float seg_w = bar_w / (float)sh->max_hp;
+        const Color tick_c = pal_color_alpha(PAL_SUMI_DARK, style.alpha * 0.60f);
+        for (int32_t k = 1; k < sh->max_hp; ++k) {
+            const float tx = bar_x + seg_w * (float)k - 0.5f;
+            draw_filled_rect(r, (Rectangle){tx, bar_y, 1.0f, bar_h}, tick_c);
+        }
+    }
+}
+
+static void draw_center_progress(RenderState *r, const GameState *g, const UiView *ui)
 {
     const float cx = (float)INK_SCREEN_W * 0.5f;
     const HealthComp *boss_hp = game_health(g, g->run.boss_id);
@@ -246,9 +320,7 @@ static void draw_center_progress(RenderState *r, const GameState *g)
         const char *epithet =
             text_get(name_id != TEXT_NONE ? name_id : TEXT_BOSS_TENGU_EPITHET, r->use_ja);
 
-        const bool is_multipart_ryu = (g->run.boss_id.index != ECS_INVALID_INDEX &&
-                                       g->ryu_body.head_id.index == g->run.boss_id.index &&
-                                       g->ryu_body.head_id.gen == g->run.boss_id.gen);
+        const bool is_multipart_ryu = hud_is_multipart_ryu(g);
 
         int32_t cur_hp = boss_hp->hp > 0 ? boss_hp->hp : 0;
         int32_t total_max = boss_hp->max_hp;
@@ -266,11 +338,14 @@ static void draw_center_progress(RenderState *r, const GameState *g)
             }
         }
 
+        const bool boss_broken = (bbc != NULL && bbc->break_t > 0.0f);
         const PaletteId border_pal =
-            (is_multipart_ryu && bbc != NULL && bbc->phase_idx >= 2)
+            boss_broken
                 ? PAL_KIN
-                : ((is_multipart_ryu && bbc != NULL && bbc->phase_idx == 1) ? PAL_SHU
-                                                                            : PAL_BENGARA);
+                : ((is_multipart_ryu && bbc != NULL && bbc->phase_idx >= 2)
+                       ? PAL_KIN
+                       : ((is_multipart_ryu && bbc != NULL && bbc->phase_idx == 1) ? PAL_SHU
+                                                                                   : PAL_BENGARA));
         const Rectangle plaque = {cx - 216.0f, 4.0f, 432.0f, 54.0f};
         ink_fill_panel(r, plaque, PAL_SUMI_SCORCH, 0.94f, border_pal, 0.95f, 319u);
 
@@ -343,6 +418,26 @@ static void draw_center_progress(RenderState *r, const GameState *g)
                                        (InkTone){.color = PAL_SUMI_DARK, .alpha = 0.88f});
                     }
                 }
+            }
+        }
+
+        /* Compact boss counterplay cue strip tucked under the plaque (or Ryu orb pill). */
+        const VfxBossCue cue = vfx_boss_cue(g);
+        if (cue != VFX_BOSS_CUE_NONE && r->boss_banner_t <= 0.0f && (ui == NULL || !ui->paused)) {
+            const TextId cue_tid = text_boss_cue(cue);
+            if (cue_tid != TEXT_NONE) {
+                const char *cue_str = text_get(cue_tid, r->use_ja);
+                const Vector2 m = render_measure_text(r, cue_str, 18.0f, false);
+                const float w = ink_clampf(m.x + 40.0f, 340.0f, 680.0f);
+                const float y = is_multipart_ryu ? 84.0f : 60.0f;
+                const Rectangle strip = {cx - w * 0.5f, y, w, 28.0f};
+                const bool is_break_cue =
+                    (cue == VFX_BOSS_CUE_BREAK || cue == VFX_BOSS_CUE_RYU_FLINCH);
+                ink_fill_panel(r, strip, PAL_SUMI_SCORCH, 0.88f,
+                               is_break_cue ? PAL_KIN : PAL_SUMI_LIGHT,
+                               is_break_cue ? 0.90f : 0.45f, 641u);
+                render_draw_text_fit(r, cue_str, (Vector2){cx, y + 14.0f}, w - 24.0f, 18.0f, 14.0f,
+                                     is_break_cue ? PAL_KIN : PAL_GOFUN, 0.96f, false);
             }
         }
         return;
@@ -643,7 +738,7 @@ void render_draw_hud(RenderState *r, const GameState *g, const UiView *ui)
     }
     draw_top_band(r, g->run.act_index);
     draw_shrine_flames_and_ink(r, g);
-    draw_center_progress(r, g);
+    draw_center_progress(r, g, ui);
     draw_score_and_chain(r, g);
     if (ui == NULL || ui->scene != UI_SCENE_SHOWCASE || ui->showcase_page != 1) {
         draw_owned_relics_hud(r, g);

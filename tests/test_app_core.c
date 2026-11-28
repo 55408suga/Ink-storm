@@ -697,6 +697,8 @@ static void test_hints_wait_while_hidden_and_never_duplicate(void)
     }
     TEST_ASSERT_EQUAL_FLOAT(0.0f, active_t);
 
+    TEST_ASSERT_EQUAL_FLOAT(4.0f, HINT_SHOW_SECONDS);
+
     TEST_ASSERT_EQUAL_INT32(HINT_STROKE,
                             hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, true));
     TEST_ASSERT_EQUAL_FLOAT(HINT_SHOW_SECONDS, active_t);
@@ -705,8 +707,18 @@ static void test_hints_wait_while_hidden_and_never_duplicate(void)
     }
     TEST_ASSERT_EQUAL_FLOAT(HINT_SHOW_SECONDS, active_t);
 
+    /* Verify active_t remains positive at 2.5s before transitioning after HINT_SHOW_SECONDS. */
+    const int mid_ticks = 150;
     int32_t started = -1;
-    for (int i = 0; i < 130 && started < 0; ++i) {
+    for (int i = 0; i < mid_ticks; ++i) {
+        started = hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, true);
+        TEST_ASSERT_EQUAL_INT32(-1, started);
+    }
+    TEST_ASSERT_EQUAL_INT(HINT_STROKE, active);
+    TEST_ASSERT_TRUE(active_t > 1.0f);
+
+    const int max_ticks = (int)(HINT_SHOW_SECONDS * 60.0f) + 15;
+    for (int i = mid_ticks; i < max_ticks && started < 0; ++i) {
         started = hint_queue_step(&q, &active, &active_t, 1.0f / 60.0f, true);
     }
     TEST_ASSERT_EQUAL_INT32(HINT_INK_REGEN, started);

@@ -1,9 +1,46 @@
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "enemies/enemy_defs.h"
 #include "enemies/projectiles.h"
 
 #include <math.h>
 #include <stddef.h>
+
+static void tengu_fire_volley(GameState *g, EntityId id, int32_t pat)
+{
+    const TransformComp *tr = game_transform(g, id);
+    if (tr == NULL) {
+        return;
+    }
+    const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    const float base_ang = atan2f(sy - tr->y, sx - tr->x);
+
+    if (pat == 0) {
+        /* Pattern A: Twin Fireballs. */
+        (void)projectiles_spawn_dir(g, PROJ_FIREBALL, tr->x, tr->y, cosf(base_ang - 0.22f),
+                                    sinf(base_ang - 0.22f), 205.0f);
+        (void)projectiles_spawn_dir(g, PROJ_FIREBALL, tr->x, tr->y, cosf(base_ang + 0.22f),
+                                    sinf(base_ang + 0.22f), 205.0f);
+    } else if (pat == 1) {
+        /* Pattern B: Fan Arrow Volley (4 arrows). */
+        for (int k = -1; k <= 2; ++k) {
+            const float ang = base_ang + ((float)k - 0.5f) * 0.22f;
+            (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x, tr->y, cosf(ang), sinf(ang), 255.0f);
+        }
+    } else if (pat == 2) {
+        /* Pattern C: Storm Orb + Twin Arrows (arrows launch from wing offsets outside the storm
+         * orb's initial dye radius so they don't self-accelerate on spawn). */
+        const float px = -sinf(base_ang) * 28.0f;
+        const float py = cosf(base_ang) * 28.0f;
+        (void)projectiles_spawn_dir(g, PROJ_STORM_ORB, tr->x, tr->y, cosf(base_ang), sinf(base_ang),
+                                    215.0f);
+        (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x - px, tr->y - py, cosf(base_ang - 0.30f),
+                                    sinf(base_ang - 0.30f), 245.0f);
+        (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x + px, tr->y + py, cosf(base_ang + 0.30f),
+                                    sinf(base_ang + 0.30f), 245.0f);
+    }
+}
 
 void boss_tengu_spawn(GameState *g, EntityId id)
 {
@@ -27,6 +64,15 @@ void boss_tengu_spawn(GameState *g, EntityId id)
     boss->parent_id = (EntityId){ECS_INVALID_INDEX, 0};
     boss->telegraph_pattern = 0;
     boss->telegraph = 0.0f;
+    boss->stagger = 0.0f;
+    boss->stagger_idle_t = 0.0f;
+    boss->break_t = 0.0f;
+    boss->break_guard_t = 0.0f;
+    boss->break_kind = (int32_t)BOSS_BREAK_NONE;
+    boss->volley_t = 0.0f;
+    boss->volley_pattern = 0;
+    boss->window_total = 0.0f;
+    boss->window_bonus = 0.0f;
 
     g->run.boss_id = id;
     g->internal.last_boss_x = tr->x;
@@ -40,6 +86,8 @@ void boss_tengu_spawn(GameState *g, EntityId id)
 
 void boss_tengu_step(GameState *g, EntityId id)
 {
+    boss_break_step(g, id);
+
     TransformComp *tr = game_transform_mut(g, id);
     VelocityComp *vel = game_velocity_mut(g, id);
     const HealthComp *hp = game_health(g, id);
@@ -52,9 +100,26 @@ void boss_tengu_step(GameState *g, EntityId id)
 
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
-    const float slow = st->ink_mark_t > 0.0f ? 0.66f : 1.0f;
     static const float k_two_pi = 6.2831853f;
     const float ph = (float)en->phase * (k_two_pi / 6283.0f);
+
+    if (boss->break_t > 0.0f) {
+        const float drop_y = ink_clampf(225.0f + sinf(2.0f * ph) * 90.0f + 60.0f, 96.0f,
+                                        (float)INK_SCREEN_H - 210.0f);
+        vel->vx *= 0.85f;
+        vel->vy = (vel->vy + (drop_y - tr->y) * 2.4f * INK_FIXED_DT) * 0.85f;
+        tr->x = ink_clampf(tr->x + vel->vx * INK_FIXED_DT, 130.0f, (float)INK_SCREEN_W - 130.0f);
+        tr->y = ink_clampf(tr->y + vel->vy * INK_FIXED_DT, 96.0f, (float)INK_SCREEN_H - 210.0f);
+        tr->facing = atan2f(sy - tr->y, sx - tr->x);
+        boss->telegraph = 0.0f;
+        boss->gale_t = 0.0f;
+        boss->volley_t = 0.0f;
+        g->internal.boss_vortex_t = 0.0f;
+        en->fire_cd = fmaxf(en->fire_cd, 1.0f);
+        return;
+    }
+
+    const float slow = st->ink_mark_t > 0.0f ? 0.66f : 1.0f;
     en->phase = (en->phase + 15) % 6283;
 
     const float tx = sx + sinf(ph) * 390.0f;
@@ -70,11 +135,34 @@ void boss_tengu_step(GameState *g, EntityId id)
         if (boss->gale_t <= 1e-4f) {
             boss->gale_t = 0.0f;
         }
+        /* Parting twin wing-gusts sweep crimson wind laterally across the upper-mid arena while
+         * leaving a calm sanctuary (>= 120px) around the shrine and a neutral center volley lane.
+         */
         static const float k_gale_dye[FLUID_MAX_CHANNELS] = {0.0f, 0.14f, 0.0f, 0.0f};
-        for (int k = 1; k <= 9; ++k) {
-            const float dist = (float)k * 36.0f;
-            fluid_splat(&g->fluid, tr->x + boss->gale_dx * dist, tr->y + boss->gale_dy * dist, 5.2f,
-                        boss->gale_dx * 36.0f, boss->gale_dy * 36.0f, k_gale_dye);
+        const float k_gale_splat_cells = 3.6f;
+        const float k_gale_clear_px = 120.0f + k_gale_splat_cells * FLUID_CELL_PX;
+        const float perp_x = -boss->gale_dy;
+        const float perp_y = boss->gale_dx;
+        for (int side = -1; side <= 1; side += 2) {
+            const float s = (float)side;
+            const float wx = boss->gale_dx * 0.10f + perp_x * (0.995f * s);
+            const float wy = boss->gale_dy * 0.10f + perp_y * (0.995f * s);
+            for (int k = 1; k <= 4; ++k) {
+                const float dist = (float)k * 38.0f;
+                const float px = tr->x + wx * dist;
+                const float py = tr->y + wy * dist;
+                const float sdx = px - sx;
+                const float sdy = py - sy;
+                if (sdx * sdx + sdy * sdy < k_gale_clear_px * k_gale_clear_px) {
+                    continue;
+                }
+                float fu = 0.0f;
+                float fv = 0.0f;
+                fluid_sample(&g->fluid, px, py, &fu, &fv, NULL);
+                const float along = fu * wx + fv * wy;
+                const float add = fmaxf(0.0f, 18.0f - along) * 0.14f;
+                fluid_splat(&g->fluid, px, py, k_gale_splat_cells, wx * add, wy * add, k_gale_dye);
+            }
         }
     }
 
@@ -84,7 +172,16 @@ void boss_tengu_step(GameState *g, EntityId id)
             en->fire_cd = min_cd;
         }
         boss->telegraph = 0.0f;
+        boss->volley_t = 0.0f;
         return;
+    }
+
+    if (boss->volley_t > 0.0f) {
+        boss->volley_t -= INK_FIXED_DT;
+        if (boss->volley_t <= 1e-4f) {
+            boss->volley_t = 0.0f;
+            tengu_fire_volley(g, id, boss->volley_pattern);
+        }
     }
 
     const int32_t next_pat = boss->pattern;
@@ -98,37 +195,27 @@ void boss_tengu_step(GameState *g, EntityId id)
         const float d = hypotf(dx, dy);
         const float dir_x = d > 1e-6f ? dx / d : 0.0f;
         const float dir_y = d > 1e-6f ? dy / d : 1.0f;
-        const float base_ang = atan2f(dir_y, dir_x);
         boss->gale_dx = dir_x;
         boss->gale_dy = dir_y;
 
         const float cd_mul = (boss->phase_idx >= 1 ? 0.8f : 1.0f) * enemy_endless_boss_cd_mul(g);
         if (next_pat == 0) {
-            /* Pattern A: Crimson Gale Sweep + Twin Fireballs. */
-            boss->gale_t = 0.85f;
-            (void)projectiles_spawn_dir(g, PROJ_FIREBALL, tr->x, tr->y, cosf(base_ang - 0.22f),
-                                        sinf(base_ang - 0.22f), 205.0f);
-            (void)projectiles_spawn_dir(g, PROJ_FIREBALL, tr->x, tr->y, cosf(base_ang + 0.22f),
-                                        sinf(base_ang + 0.22f), 205.0f);
+            /* Pattern A: Crimson Gale Sweep (0.55s) -> calm (0.25s) -> Twin Fireballs. */
+            boss->gale_t = 0.55f;
+            boss->volley_t = 0.80f;
+            boss->volley_pattern = 0;
             en->fire_cd = 1.95f * cd_mul;
         } else if (next_pat == 1) {
-            /* Pattern B: Fan Arrow Volley (4 arrows) + brief gust. */
-            boss->gale_t = 0.40f;
-            for (int k = -1; k <= 2; ++k) {
-                const float ang = base_ang + ((float)k - 0.5f) * 0.22f;
-                (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x, tr->y, cosf(ang), sinf(ang),
-                                            255.0f);
-            }
+            /* Pattern B: Brief gust (0.25s) -> calm (0.25s) -> 4-Arrow Fan Volley. */
+            boss->gale_t = 0.25f;
+            boss->volley_t = 0.50f;
+            boss->volley_pattern = 1;
             en->fire_cd = 1.65f * cd_mul;
         } else if (next_pat == 2) {
-            /* Pattern C: Full Crimson Gale + Storm Orb + Twin Arrows. */
-            boss->gale_t = 1.15f;
-            (void)projectiles_spawn_dir(g, PROJ_STORM_ORB, tr->x, tr->y, cosf(base_ang),
-                                        sinf(base_ang), 215.0f);
-            (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x, tr->y, cosf(base_ang - 0.30f),
-                                        sinf(base_ang - 0.30f), 245.0f);
-            (void)projectiles_spawn_dir(g, PROJ_ARROW, tr->x, tr->y, cosf(base_ang + 0.30f),
-                                        sinf(base_ang + 0.30f), 245.0f);
+            /* Pattern C: Full Crimson Gale (0.80s) -> calm (0.25s) -> Storm Orb + Twin Arrows. */
+            boss->gale_t = 0.80f;
+            boss->volley_t = 1.05f;
+            boss->volley_pattern = 2;
             en->fire_cd = 2.05f * cd_mul;
         } else {
             /* Pattern D (Phase 2): Tengu Fan Reverse Vortex around the shrine. */
@@ -142,7 +229,7 @@ void boss_tengu_step(GameState *g, EntityId id)
         const int32_t pat_count = boss->phase_idx >= 1 ? 4 : 3;
         boss->pattern = (boss->pattern + 1) % pat_count;
         const float next_tele = boss->pattern == 3 ? 0.8f : 0.6f;
-        en->fire_cd = fmaxf(en->fire_cd, next_tele + 0.10f);
+        en->fire_cd = fmaxf(en->fire_cd, boss->volley_t + next_tele + 0.10f);
         boss->telegraph_pattern = boss->pattern;
     } else if (en->fire_cd <= tele_dur) {
         if (boss->gale_t <= 0.0f) {

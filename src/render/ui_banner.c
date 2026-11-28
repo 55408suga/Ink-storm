@@ -7,16 +7,21 @@
 #include <math.h>
 #include <stdio.h>
 
-static bool is_multipart_ryu_hud_active(const GameState *g)
+/* Shared geometry for the bottom-docked enemy intro strip so the hint strip can stack cleanly
+ * above it without duplicating measurement logic. */
+static Rectangle compute_enemy_intro_box(const RenderState *r, const GameState *g, const UiView *ui,
+                                         EnemyDefId eid)
 {
-    if (g == NULL || g->run.wave_index != GAME_BOSS_WAVE_INDEX ||
-        g->run.boss_id.index == ECS_INVALID_INDEX ||
-        g->ryu_body.head_id.index != g->run.boss_id.index ||
-        g->ryu_body.head_id.gen != g->run.boss_id.gen) {
-        return false;
-    }
-    const HealthComp *boss_hp = game_health(g, g->run.boss_id);
-    return boss_hp != NULL && boss_hp->max_hp > 0;
+    const float cx = (float)INK_SCREEN_W * 0.5f;
+    const char *name_str = text_get(text_enemy_name(eid), r->use_ja);
+    const char *intro_str = text_get(text_enemy_intro(eid), r->use_ja);
+    const Vector2 nm = render_measure_text(r, name_str, 23.0f, false);
+    const Vector2 im = render_measure_text(r, intro_str, 20.0f, false);
+    const float bw = ink_clampf(fmaxf(nm.x, im.x) + 60.0f, 360.0f, 680.0f);
+    const float bh = 62.0f;
+    const bool has_showcase_badge = (ui != NULL && ui->scene == UI_SCENE_SHOWCASE);
+    const float by = vfx_bottom_dock_y(bw, bh, g->run.relic_count, has_showcase_badge);
+    return (Rectangle){cx - bw * 0.5f, by, bw, bh};
 }
 
 /* Drawn before the VFX seals so the 祓/討 stamp lands on top of the band, in its right-hand slot;
@@ -83,7 +88,7 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
         const char *desc_str = text_get(desc_id != TEXT_NONE ? desc_id : TEXT_ACT1_DESC, r->use_ja);
 
         const Vector2 tm = render_measure_text(r, title_str, 44.0f, true);
-        const Vector2 dm = render_measure_text(r, desc_str, 19.0f, false);
+        const Vector2 dm = render_measure_text(r, desc_str, 21.0f, false);
         const float target_bw =
             ink_clampf(fmaxf(760.0f, fmaxf(tm.x + 104.0f, dm.x + 96.0f)), 760.0f, 1180.0f);
         const float bw = target_bw * ink_clampf(open, 0.1f, 1.0f);
@@ -104,13 +109,13 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
                                       .seed = 602u},
                        (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.78f * open}, 1.0f);
             render_draw_text_fit(r, desc_str, (Vector2){cx, band.y + 116.0f}, band.width - 64.0f,
-                                 19.0f, 13.0f, PAL_BENGARA, open, false);
+                                 21.0f, 15.0f, PAL_BENGARA, open, false);
         }
     }
 
-    /* Boss entrance calligraphic title */
+    /* Boss entrance calligraphic title (2.2s with smooth fade-in and fade-out) */
     if (r->boss_banner_t > 0.0f) {
-        const float a = ink_clampf(r->boss_banner_t * 1.4f, 0.0f, 1.0f);
+        const float a = vfx_boss_banner_alpha(r->boss_banner_t);
         const Rectangle band = {cx - 320.0f, 88.0f, 640.0f, 82.0f};
         ink_fill_panel(r, band, PAL_GOFUN, 0.90f * a, PAL_BENGARA, 0.88f * a, 610u);
         const TextId ep = text_boss_epithet(r->boss_banner_id);
@@ -119,20 +124,18 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
                              PAL_SUMI_SCORCH, a, true);
     }
 
-    /* Enemy intro strip at top (2.0s per queued enemy; waits for boss banner to avoid overlap).
-     * Hidden during the purification so it never covers the clear banner. */
+    /* Enemy intro strip in the bottom-center explanation dock (3.5s per queued enemy; waits for
+     * boss banner and hides during purification so it never covers bosses or the clear banner). */
     if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && vfx_enemy_intro_shown_in(g->phase)) {
         const EnemyDefId eid = r->intro_queue[r->intro_head];
-        const float a = r->intro_t < 0.2f ? (r->intro_t / 0.2f)
-                                          : (r->intro_t > 1.7f ? (2.0f - r->intro_t) / 0.3f : 1.0f);
-        const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
-        const Rectangle box = {cx - 300.0f, base_y, 600.0f, 66.0f};
+        const float a = vfx_enemy_intro_alpha(r->intro_t);
+        const Rectangle box = compute_enemy_intro_box(r, g, ui, eid);
         ink_fill_panel(r, box, PAL_GOFUN, 0.92f * a, PAL_SUMI_DARK, 0.85f * a, 620u);
         render_draw_text_fit(r, text_get(text_enemy_name(eid), r->use_ja),
-                             (Vector2){cx, box.y + 22.0f}, box.width - 32.0f, 22.0f, 16.0f,
+                             (Vector2){cx, box.y + 21.0f}, box.width - 32.0f, 23.0f, 17.0f,
                              PAL_SUMI_SCORCH, a, false);
         render_draw_text_fit(r, text_get(text_enemy_intro(eid), r->use_ja),
-                             (Vector2){cx, box.y + 46.0f}, box.width - 32.0f, 18.0f, 13.0f,
+                             (Vector2){cx, box.y + 45.0f}, box.width - 32.0f, 20.0f, 15.0f,
                              PAL_SUMI_HEAVY, a, false);
     }
 
@@ -153,8 +156,6 @@ void render_draw_banners(RenderState *r, const GameState *g, const UiView *ui)
                        (InkTone){.color = PAL_SUMI_SCORCH, .alpha = 0.78f * u}, 1.0f);
         }
     }
-
-    (void)ui;
 }
 
 void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui)
@@ -172,23 +173,23 @@ void render_draw_hint_strip(RenderState *r, const GameState *g, const UiView *ui
     }
 
     const float cx = (float)INK_SCREEN_W * 0.5f;
-    const float base_y = is_multipart_ryu_hud_active(g) ? 88.0f : 74.0f;
-    float y = base_y;
-    if (r->boss_banner_t > 0.0f) {
-        y = 178.0f;
-    } else if (r->intro_count > 0) {
-        y = base_y + 74.0f;
+    const float a = vfx_hint_strip_alpha(ui->active_hint_t);
+    const char *msg = text_get(tid, r->use_ja);
+    const Vector2 m = render_measure_text(r, msg, 21.0f, false);
+    const float bw = ink_clampf(m.x + 64.0f, 380.0f, 760.0f);
+    const float bh = 46.0f;
+    const bool has_showcase_badge = (ui->scene == UI_SCENE_SHOWCASE);
+    float y = vfx_bottom_dock_y(bw, bh, g->run.relic_count, has_showcase_badge);
+    if (r->intro_count > 0 && r->boss_banner_t <= 0.0f && vfx_enemy_intro_shown_in(g->phase)) {
+        const EnemyDefId eid = r->intro_queue[r->intro_head];
+        const Rectangle intro_box = compute_enemy_intro_box(r, g, ui, eid);
+        y = fminf(y, intro_box.y - 8.0f - bh);
     }
 
-    const float t = ui->active_hint_t;
-    const float a = t > 1.75f ? ((2.0f - t) / 0.25f) : (t < 0.30f ? (t / 0.30f) : 1.0f);
-    const char *msg = text_get(tid, r->use_ja);
-    const Vector2 m = render_measure_text(r, msg, 18.0f, false);
-    const float bw = ink_clampf(m.x + 56.0f, 360.0f, (float)INK_SCREEN_W - 80.0f);
-    const Rectangle strip = {cx - bw * 0.5f, y, bw, 40.0f};
+    const Rectangle strip = {cx - bw * 0.5f, y, bw, bh};
     ink_fill_panel(r, strip, PAL_GOFUN, 0.92f * a, PAL_KIN, 0.85f * a, 635u);
-    render_draw_text_fit(r, msg, (Vector2){cx, strip.y + strip.height * 0.5f}, bw - 32.0f, 18.0f,
-                         13.0f, PAL_SUMI_SCORCH, a, false);
+    render_draw_text_fit(r, msg, (Vector2){cx, strip.y + strip.height * 0.5f}, bw - 32.0f, 21.0f,
+                         16.0f, PAL_SUMI_SCORCH, a, false);
 }
 
 void render_draw_showcase_overlay(RenderState *r, const GameState *g, const UiView *ui)

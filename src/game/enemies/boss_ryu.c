@@ -1,4 +1,5 @@
 #include "core.h"
+#include "enemies/boss_break.h"
 #include "enemies/enemy_defs.h"
 #include "enemies/projectiles.h"
 #include "roguelike/waves.h"
@@ -208,6 +209,16 @@ void boss_ryu_spawn(GameState *g, EntityId id)
     boss->parent_id = (EntityId){ECS_INVALID_INDEX, 0};
     boss->telegraph_pattern = 0;
     boss->telegraph = 0.0f;
+    boss->stagger = 0.0f;
+    boss->stagger_idle_t = 0.0f;
+    boss->break_t = 0.0f;
+    boss->break_guard_t = 0.0f;
+    boss->break_kind = (int32_t)BOSS_BREAK_NONE;
+    boss->volley_t = 0.0f;
+    boss->volley_pattern = 0;
+    boss->window_total = 0.0f;
+    boss->window_bonus = 0.0f;
+    g->internal.ryu_ward_ping_cd = 0.0f;
 
     /* The spawn body used to trail off-screen to the left; it now runs rightward along the upper
      * arena so all three Dragon Orbs (up to 900px of arc behind the head) start on screen. */
@@ -378,6 +389,8 @@ static void resolve_breath_muzzle(const GameState *g, float ox, float oy, float 
 
 void boss_ryu_step(GameState *g, EntityId id)
 {
+    boss_break_step(g, id);
+
     TransformComp *tr = game_transform_mut(g, id);
     VelocityComp *vel = game_velocity_mut(g, id);
     HealthComp *hp = game_health_mut(g, id);
@@ -388,10 +401,19 @@ void boss_ryu_step(GameState *g, EntityId id)
         return;
     }
 
+    if (g->internal.ryu_ward_ping_cd > 0.0f) {
+        g->internal.ryu_ward_ping_cd -= INK_FIXED_DT;
+        if (g->internal.ryu_ward_ping_cd <= 1e-4f) {
+            g->internal.ryu_ward_ping_cd = 0.0f;
+        }
+    }
+
     /* Safety phase sync in case orbs were cleared or HP was adjusted externally. */
     if (boss->phase_idx == 0 && (g->ryu_body.orb_broken_mask & 0x7u) == 0x7u) {
+        boss_break_end(g, id, true);
         enter_awakening_phase(g, tr, hp, en, boss);
     } else if (boss->phase_idx == 1 && hp->hp > 0 && hp->hp * 5 <= hp->max_hp * 2) {
+        boss_break_end(g, id, true);
         enter_ascension_phase(g, tr, hp, en, boss);
     }
 
@@ -401,7 +423,7 @@ void boss_ryu_step(GameState *g, EntityId id)
             boss->pattern_timer = 0.0f;
         }
     }
-    if (en->absorbed_ink > 0.0f) {
+    if (boss->break_t <= 0.0f && en->absorbed_ink > 0.0f) {
         en->absorbed_ink -= INK_FIXED_DT;
         if (en->absorbed_ink <= 1e-4f) {
             en->absorbed_ink = 0.0f;
@@ -411,7 +433,14 @@ void boss_ryu_step(GameState *g, EntityId id)
     const float sx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float sy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
     const float slow = st->ink_mark_t > 0.0f ? 0.66f : 1.0f;
-    const float speed_mul = boss->phase_idx >= 1 ? 1.3f : 1.0f;
+    float speed_mul = boss->phase_idx >= 1 ? 1.3f : 1.0f;
+    if (boss->break_t > 0.0f) {
+        if (boss->phase_idx == 0 && boss->break_kind == (int32_t)BOSS_BREAK_FLINCH) {
+            speed_mul *= 0.5f;
+        } else if (boss->phase_idx >= 1) {
+            speed_mul = 0.3f;
+        }
+    }
 
     const float ph = (float)en->phase * 0.001f;
     const int32_t ph_step = (int32_t)floorf(22.0f * speed_mul * slow + 0.5f);
@@ -530,7 +559,9 @@ void boss_ryu_step(GameState *g, EntityId id)
     }
 
     /* Step active Fire Orb breath / Wind Orb headwind from their respective orb positions. */
-    step_orb_breaths(g);
+    if (hp->invuln_t <= 0.0f && !(boss->phase_idx == 0 && boss->break_t > 0.0f)) {
+        step_orb_breaths(g);
+    }
 
     if (hp->invuln_t > 0.0f) {
         boss->telegraph = 0.0f;
@@ -539,6 +570,7 @@ void boss_ryu_step(GameState *g, EntityId id)
             BossComp *oboss = (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
             if (oboss != NULL) {
                 oboss->telegraph = 0.0f;
+                oboss->gale_t = 0.0f;
             }
         }
         return;
@@ -549,6 +581,20 @@ void boss_ryu_step(GameState *g, EntityId id)
     if (boss->phase_idx == 0) {
         /* Phase 1: Three Dragon Orbs take turns attacking from their own coordinates. */
         boss->telegraph = 0.0f;
+        if (boss->break_t > 0.0f) {
+            for (int32_t s = 0; s < GAME_RYU_ORB_COUNT; ++s) {
+                const EntityId oid = g->ryu_body.orb_ids[s];
+                BossComp *oboss = (oid.index != ECS_INVALID_INDEX) ? game_boss_mut(g, oid) : NULL;
+                if (oboss != NULL) {
+                    oboss->telegraph = 0.0f;
+                    oboss->gale_t = 0.0f;
+                }
+            }
+            if (en->fire_cd < 0.75f) {
+                en->fire_cd = 0.75f;
+            }
+            return;
+        }
         int32_t slot = g->ryu_body.active_orb_slot;
         if (slot < 0 || slot >= GAME_RYU_ORB_COUNT ||
             (g->ryu_body.orb_broken_mask & (uint8_t)(1u << (unsigned)slot)) != 0u ||
@@ -654,6 +700,16 @@ void boss_ryu_step(GameState *g, EntityId id)
     }
 
     /* Phase 2 (Awakening) & Phase 3 (Ascension): Summons every 10s, Thunder-Fire Breath & Coil. */
+    if (boss->break_t > 0.0f) {
+        g->internal.ryu_coil_t = 0.0f;
+        g->internal.ryu_coil_active = false;
+        boss->telegraph = 0.0f;
+        if (en->fire_cd < 0.90f) {
+            en->fire_cd = 0.90f;
+        }
+        return;
+    }
+
     if (en->absorbed_ink <= 0.0f) {
         en->absorbed_ink = 10.0f;
         const int32_t max_escorts = 4 + g->internal.mods.max_alive_add;

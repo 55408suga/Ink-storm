@@ -1,5 +1,8 @@
 #include "vfx_rules.h"
 
+#include "core.h"
+#include "enemies/boss_break.h"
+
 #include <math.h>
 #include <stddef.h>
 
@@ -81,4 +84,147 @@ VfxThunderburstFx vfx_thunderburst_throttle_consume(VfxThunderburstThrottle *st)
     }
     st->streak_t = 1.40f;
     return out;
+}
+
+VfxBossCue vfx_boss_cue(const GameState *g)
+{
+    if (g == NULL || g->run.wave_index != GAME_BOSS_WAVE_INDEX || g->phase != RUN_PHASE_PLAYING) {
+        return VFX_BOSS_CUE_NONE;
+    }
+    const EntityId bid = g->run.boss_id;
+    if (bid.index == ECS_INVALID_INDEX || !ecs_is_alive(&g->ecs, bid)) {
+        return VFX_BOSS_CUE_NONE;
+    }
+    const EnemyComp *en = game_enemy(g, bid);
+    const BossComp *boss = game_boss(g, bid);
+    const HealthComp *hp = game_health(g, bid);
+    if (en == NULL || boss == NULL || hp == NULL || hp->hp <= 0) {
+        return VFX_BOSS_CUE_NONE;
+    }
+    if (boss->break_t > 0.0f) {
+        if (en->def_id == ENEMY_BOSS_RYU && boss->break_kind == (int32_t)BOSS_BREAK_FLINCH) {
+            return VFX_BOSS_CUE_RYU_FLINCH;
+        }
+        return VFX_BOSS_CUE_BREAK;
+    }
+    if (en->def_id == ENEMY_BOSS_TENGU) {
+        return boss->phase_idx >= 1 ? VFX_BOSS_CUE_TENGU_P2 : VFX_BOSS_CUE_TENGU_P1;
+    }
+    if (en->def_id == ENEMY_BOSS_NUE) {
+        return en->ai_state == 1 ? VFX_BOSS_CUE_NUE_GROUNDED : VFX_BOSS_CUE_NUE_MOVING;
+    }
+    if (en->def_id == ENEMY_BOSS_RYU) {
+        if (boss->phase_idx >= 2) {
+            return VFX_BOSS_CUE_RYU_P3;
+        }
+        return boss->phase_idx == 1 ? VFX_BOSS_CUE_RYU_P2 : VFX_BOSS_CUE_RYU_P1;
+    }
+    return VFX_BOSS_CUE_NONE;
+}
+
+VfxShrineBar vfx_shrine_bar_style(int32_t hp, int32_t max_hp, float hit_t, float time_s,
+                                  bool reduce_flash)
+{
+    if (hp <= 0 || max_hp <= 0) {
+        return (VfxShrineBar){.visible = false, .alpha = 0.0f, .scale = 1.0f, .alert = false};
+    }
+    const float safe_hit = (isfinite(hit_t) && hit_t > 0.0f) ? hit_t : 0.0f;
+    const float safe_t = isfinite(time_s) ? time_s : 0.0f;
+    const bool alert = hp <= 3;
+
+    if (safe_hit > 0.0f) {
+        const float u = ink_clampf(safe_hit / 0.45f, 0.0f, 1.0f);
+        return (VfxShrineBar){
+            .visible = true,
+            .alpha = 0.95f,
+            .scale = reduce_flash ? 1.0f : (1.0f + 0.25f * u),
+            .alert = alert,
+        };
+    }
+    if (alert) {
+        static const float k_two_pi = 6.2831853f;
+        const float wave = 0.5f + 0.5f * sinf(k_two_pi * 2.2f * safe_t);
+        const float amp = reduce_flash ? 0.08f : 0.20f;
+        return (VfxShrineBar){
+            .visible = true,
+            .alpha = 0.80f + amp * wave,
+            .scale = reduce_flash ? 1.0f : (1.0f + 0.04f * wave),
+            .alert = true,
+        };
+    }
+    return (VfxShrineBar){
+        .visible = true,
+        .alpha = hp < max_hp ? 0.80f : 0.50f,
+        .scale = 1.0f,
+        .alert = false,
+    };
+}
+
+/* Compute top-Y for a bottom-centered explanation strip, lifting above the bottom-left Brush
+ * Badge (or showcase page badge) and bottom-right Owned Relics whenever horizontal clearance
+ * would be violated. */
+float vfx_bottom_dock_y(float strip_w, float strip_h, int32_t relic_count, bool has_showcase_badge)
+{
+    const float safe_w = (isfinite(strip_w) && strip_w > 0.0f) ? strip_w : 0.0f;
+    const float safe_h = (isfinite(strip_h) && strip_h > 0.0f) ? strip_h : 0.0f;
+    const float cx = (float)INK_SCREEN_W * 0.5f;
+    const float strip_left = cx - safe_w * 0.5f;
+    const float strip_right = cx + safe_w * 0.5f;
+    const int32_t shown_relics = relic_count < 0 ? 0 : (relic_count > 6 ? 6 : relic_count);
+    const float left_limit = has_showcase_badge ? 218.0f : 214.0f;
+    const bool hits_left = strip_left < left_limit;
+    const float relic_limit = (float)INK_SCREEN_W - 18.0f - (float)shown_relics * 120.0f - 6.0f;
+    const bool hits_right = shown_relics > 0 && strip_right > relic_limit;
+    const float dock_bottom =
+        (hits_left || hits_right) ? ((float)INK_SCREEN_H - 56.0f) : ((float)INK_SCREEN_H - 18.0f);
+    return dock_bottom - safe_h;
+}
+
+/* First-time hint counts down from 4.0s to 0.0s: 0.25s fade-in, 3.35s solid, 0.40s fade-out. */
+float vfx_hint_strip_alpha(float remaining_t)
+{
+    if (!isfinite(remaining_t) || remaining_t <= 0.0f) {
+        return 0.0f;
+    }
+    const float fade_in_start = VFX_HINT_SHOW_SECONDS - 0.25f;
+    if (remaining_t > fade_in_start) {
+        return ink_clampf((VFX_HINT_SHOW_SECONDS - remaining_t) / 0.25f, 0.0f, 1.0f);
+    }
+    if (remaining_t < 0.40f) {
+        return ink_clampf(remaining_t / 0.40f, 0.0f, 1.0f);
+    }
+    return 1.0f;
+}
+
+/* Enemy intro advances from 0.0s to 3.5s: 0.25s fade-in, 2.85s solid, 0.40s fade-out. */
+float vfx_enemy_intro_alpha(float elapsed_t)
+{
+    if (!isfinite(elapsed_t) || elapsed_t <= 0.0f || elapsed_t >= VFX_ENEMY_INTRO_SECONDS) {
+        return 0.0f;
+    }
+    if (elapsed_t < 0.25f) {
+        return ink_clampf(elapsed_t / 0.25f, 0.0f, 1.0f);
+    }
+    const float fade_out_start = VFX_ENEMY_INTRO_SECONDS - 0.40f;
+    if (elapsed_t > fade_out_start) {
+        return ink_clampf((VFX_ENEMY_INTRO_SECONDS - elapsed_t) / 0.40f, 0.0f, 1.0f);
+    }
+    return 1.0f;
+}
+
+/* Boss entrance banner counts down from 2.2s to 0.0s: 0.20s fade-in, 1.60s solid, 0.40s fade-out.
+ */
+float vfx_boss_banner_alpha(float remaining_t)
+{
+    if (!isfinite(remaining_t) || remaining_t <= 0.0f) {
+        return 0.0f;
+    }
+    const float fade_in_start = VFX_BOSS_BANNER_SECONDS - 0.20f;
+    if (remaining_t > fade_in_start) {
+        return ink_clampf((VFX_BOSS_BANNER_SECONDS - remaining_t) / 0.20f, 0.0f, 1.0f);
+    }
+    if (remaining_t < 0.40f) {
+        return ink_clampf(remaining_t / 0.40f, 0.0f, 1.0f);
+    }
+    return 1.0f;
 }
