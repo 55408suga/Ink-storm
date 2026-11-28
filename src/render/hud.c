@@ -1,4 +1,5 @@
 #include "ink_prims.h"
+#include "player/player_skills.h"
 #include "render_internal.h"
 
 #include "core.h"
@@ -575,10 +576,13 @@ void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *
     const float pip_y = c.y + rad + 13.0f * cs;
 
     /* Cyclone readiness pip (left) */
+    const float cyc_cost = player_skills_cyclone_cost(g);
+    const float gale_cost = player_skills_gale_cost(g);
     const float cyc_shake =
         r->skill_deny_t[SKILL_CYCLONE] > 0.0f ? sinf(r->vfx_time * 80.0f) * 3.5f * cs : 0.0f;
     const float cyc_x = c.x + (double_gale ? -14.0f : -11.0f) * cs + cyc_shake;
-    const bool cyc_ready = g->player.cyclone_cd <= 0.001f;
+    const bool cyc_ready =
+        render_skill_pip_ready(g->player.cyclone_cd <= 0.001f, g->player.ink, cyc_cost);
     const float cyc_fill = ink_clampf(1.0f - g->player.cyclone_cd / cyc_total, 0.0f, 1.0f);
     const PaletteId cyc_pal = r->skill_deny_t[SKILL_CYCLONE] > 0.0f
                                   ? PAL_SHU
@@ -594,12 +598,14 @@ void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *
         const float gx_offs[2] = {5.0f * cs, 17.0f * cs};
         const int32_t charges = g->player.gale_charges;
         for (int k = 0; k < 2; ++k) {
-            const bool ready = (k < charges);
+            const bool charged = (k < charges);
+            const bool ready = render_skill_pip_ready(charged, g->player.ink, gale_cost);
             const bool recharging = (k == charges);
             const float fill =
-                ready ? 1.0f
-                      : (recharging ? ink_clampf(1.0f - g->player.gale_cd / gale_total, 0.0f, 1.0f)
-                                    : 0.0f);
+                charged
+                    ? 1.0f
+                    : (recharging ? ink_clampf(1.0f - g->player.gale_cd / gale_total, 0.0f, 1.0f)
+                                  : 0.0f);
             const PaletteId gpal = r->skill_deny_t[SKILL_GALE] > 0.0f
                                        ? PAL_SHU
                                        : (ready ? PAL_SUMI_DARK : PAL_SUMI_CLEAR);
@@ -608,7 +614,8 @@ void render_draw_brush_cursor(RenderState *r, const GameState *g, const UiView *
                          pal_color_alpha(gpal, 0.92f));
         }
     } else {
-        const bool gale_ready = g->player.gale_cd <= 0.001f;
+        const bool gale_ready = render_skill_pip_ready(
+            g->player.gale_charges > 0 && g->player.gale_cd <= 0.001f, g->player.ink, gale_cost);
         const float gale_fill = ink_clampf(1.0f - g->player.gale_cd / gale_total, 0.0f, 1.0f);
         const PaletteId gpal = r->skill_deny_t[SKILL_GALE] > 0.0f
                                    ? PAL_SHU

@@ -352,7 +352,8 @@ static int count_temp_backups(const char *dir)
     int n = 0;
     const struct dirent *e = NULL;
     while ((e = readdir(d)) != NULL) {
-        n += strstr(e->d_name, "tmpbak") != NULL ? 1 : 0;
+        n +=
+            (strstr(e->d_name, "tmpbak") != NULL || strncmp(e->d_name, ".inktmp.", 8) == 0) ? 1 : 0;
     }
     TEST_ASSERT_EQUAL_INT(0, closedir(d));
     return n;
@@ -655,6 +656,35 @@ static void test_save_248_byte_basename_roundtrips_without_enametoolong(void)
     (void)rmdir(dir);
 }
 
+static void test_save_248_byte_corrupt_basename_backs_up_cleanly(void)
+{
+    char dir[PATH_MAX];
+    TEST_ASSERT_NOT_NULL(make_temp_dir(dir, sizeof dir));
+
+    char long_name[249];
+    memset(long_name, 'c', 244);
+    memcpy(long_name + 244, ".txt", 5);
+    TEST_ASSERT_EQUAL_UINT(248u, strlen(long_name));
+
+    char path[PATH_MAX + 300];
+    join_path(path, sizeof path, dir, long_name);
+    write_text(path, "corrupted save payload\n");
+
+    MetaState loaded;
+    TEST_ASSERT_EQUAL_INT(SAVE_LOAD_CORRUPT, save_load(path, &loaded));
+
+    char kept[PATH_MAX + 320];
+    TEST_ASSERT_EQUAL_INT(SAVE_BACKUP_CREATED, save_backup_unreadable(path, kept, sizeof kept));
+    TEST_ASSERT_EQUAL_INT(0, count_tmp_files(dir));
+    char got[64];
+    read_text(kept, got, sizeof got);
+    TEST_ASSERT_EQUAL_STRING("corrupted save payload\n", got);
+
+    (void)remove(kept);
+    (void)remove(path);
+    (void)rmdir(dir);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -672,5 +702,6 @@ int main(void)
     RUN_TEST(test_save_fifo_does_not_block_load_or_backup);
     RUN_TEST(test_save_oversized_file_skips_backup_copy);
     RUN_TEST(test_save_248_byte_basename_roundtrips_without_enametoolong);
+    RUN_TEST(test_save_248_byte_corrupt_basename_backs_up_cleanly);
     return UNITY_END();
 }

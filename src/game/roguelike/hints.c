@@ -84,7 +84,9 @@ void hints_check_tick(GameState *g)
             trigger_hint_once(g, HINT_REACT_BLAZING, ev->x, ev->y);
             break;
         case EV_STORM_ZAP:
-            trigger_hint_once(g, HINT_REACT_TEMPEST, ev->x2, ev->y2);
+            if ((ev->flags & EVF_STORM_FLUID_TEMPEST) != 0u) {
+                trigger_hint_once(g, HINT_REACT_TEMPEST, ev->x2, ev->y2);
+            }
             break;
         case EV_THUNDERBURST:
             trigger_hint_once(g, HINT_REACT_THUNDERBURST, ev->x, ev->y);

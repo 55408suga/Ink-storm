@@ -260,6 +260,26 @@ void boss_ryu_spawn(GameState *g, EntityId id)
     fluid_swirl(&g->fluid, tr->x, tr->y, 16.0f, 52.0f, k_swirl_dye);
 }
 
+static void resolve_breath_muzzle(const GameState *g, float ox, float oy, float dx, float dy,
+                                  float *out_x, float *out_y)
+{
+    *out_x = ox;
+    *out_y = oy;
+    if (!fluid_is_solid(&g->fluid, ox, oy)) {
+        return;
+    }
+    for (int step = 1; step <= 20; ++step) {
+        const float dist = (float)step * 4.0f;
+        const float cx = ox + dx * dist;
+        const float cy = oy + dy * dist;
+        if (!fluid_is_solid(&g->fluid, cx, cy)) {
+            *out_x = cx;
+            *out_y = cy;
+            return;
+        }
+    }
+}
+
 void boss_ryu_step(GameState *g, EntityId id)
 {
     TransformComp *tr = game_transform_mut(g, id);
@@ -585,7 +605,12 @@ void boss_ryu_step(GameState *g, EntityId id)
                 const float ang = base_ang + ((float)k - 2.5f) * 0.17f;
                 const ProjKind pk = (k % 2 == 0) ? PROJ_FIREBALL : PROJ_STORM_ORB;
                 const float sp = (pk == PROJ_FIREBALL) ? 205.0f : 215.0f;
-                (void)projectiles_spawn_dir(g, pk, tr->x, tr->y, cosf(ang), sinf(ang), sp);
+                const float vx_dir = cosf(ang);
+                const float vy_dir = sinf(ang);
+                float muzzle_x = tr->x;
+                float muzzle_y = tr->y;
+                resolve_breath_muzzle(g, tr->x, tr->y, vx_dir, vy_dir, &muzzle_x, &muzzle_y);
+                (void)projectiles_spawn_dir(g, pk, muzzle_x, muzzle_y, vx_dir, vy_dir, sp);
             }
             boss->pattern = (boss->pattern_timer <= 0.0f) ? 1 : 0;
         }

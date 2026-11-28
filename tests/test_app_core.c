@@ -1577,6 +1577,89 @@ static void test_bgm_rapid_three_track_switch_tapers_both_outgoing_tracks(void)
     TEST_ASSERT_EQUAL_FLOAT(1.0f, f.gain_cur);
 }
 
+static void test_reward_keyboard_pick_with_held_lmb_suppresses_paint_and_selection_tick(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    g->phase = RUN_PHASE_REWARD;
+    g->run.reward.kind = REWARD_KIND_UPGRADE;
+    g->run.reward.choice_count = 3;
+    g->run.reward.choice_ids[0] = (int32_t)UPG_STORM_BRUSH;
+    g->run.reward.choice_ids[1] = (int32_t)UPG_DOUBLE_GALE;
+    g->run.reward.choice_ids[2] = (int32_t)UPG_SHRINE_WARD;
+    g->run.reward.choice_next_level[0] = 1;
+    g->run.reward.choice_next_level[1] = 1;
+    g->run.reward.choice_next_level[2] = 1;
+
+    InputLatch l;
+    input_latch_init(&l, 420.0f, 300.0f);
+    RawInput pick_while_held = make_raw(450.0f, 320.0f);
+    pick_while_held.left_down = true;
+    pick_while_held.pick_pressed = 0;
+    pick_while_held.ui_click = false;
+    input_latch_feed(&l, &pick_while_held);
+
+    const BrushInput sel_in = input_latch_take_subtick_for_game(&l, 1, g);
+    const GameCommand cmd = input_latch_take_command(&l, g->phase);
+    TEST_ASSERT_FALSE(sel_in.paint);
+    TEST_ASSERT_EQUAL_INT(CMD_PICK_REWARD, cmd.type);
+
+    game_step(g, &sel_in, &cmd);
+    TEST_ASSERT_EQUAL_INT(RUN_PHASE_PLAYING, g->phase);
+    TEST_ASSERT_FALSE(g->player.painting);
+
+    input_latch_reset_for_ui_transition(&l, pick_while_held.mouse_x, pick_while_held.mouse_y,
+                                        pick_while_held.left_down);
+    RawInput still_held = make_raw(480.0f, 340.0f);
+    still_held.left_down = true;
+    input_latch_feed(&l, &still_held);
+    TEST_ASSERT_FALSE(input_latch_take_subtick_for_game(&l, 1, g).paint);
+
+    RawInput released = make_raw(480.0f, 340.0f);
+    input_latch_feed(&l, &released);
+    TEST_ASSERT_FALSE(input_latch_take_subtick_for_game(&l, 1, g).paint);
+
+    RawInput fresh_press = make_raw(500.0f, 340.0f);
+    fresh_press.left_down = true;
+    input_latch_feed(&l, &fresh_press);
+    TEST_ASSERT_TRUE(input_latch_take_subtick_for_game(&l, 1, g).paint);
+
+    game_destroy(g);
+}
+
+static void test_cli_snap_dir_accepts_exact_path_max_bound(void)
+{
+    const size_t max_dir = (size_t)PATH_MAX - CLI_SNAP_SUFFIX_LEN - 1u;
+    char ok_dir[PATH_MAX];
+    ok_dir[0] = '/';
+    memset(ok_dir + 1, 'a', max_dir - 1u);
+    ok_dir[max_dir] = '\0';
+    TEST_ASSERT_EQUAL_size_t(max_dir, cli_trimmed_dir_len(ok_dir));
+
+    CliOptions opt;
+    char *argv_ok[] = {"inkstorm", "--snap", ok_dir};
+    TEST_ASSERT_TRUE(cli_parse(3, argv_ok, &opt));
+    TEST_ASSERT_EQUAL_STRING(ok_dir, opt.snap_dir);
+
+    /* Trailing separator trims back to max_dir and remains valid when raw length < PATH_MAX. */
+    char ok_slash[PATH_MAX];
+    memcpy(ok_slash, ok_dir, max_dir);
+    ok_slash[max_dir] = '/';
+    ok_slash[max_dir + 1u] = '\0';
+    TEST_ASSERT_EQUAL_size_t(max_dir, cli_trimmed_dir_len(ok_slash));
+    char *argv_slash[] = {"inkstorm", "--snap", ok_slash};
+    TEST_ASSERT_TRUE(cli_parse(3, argv_slash, &opt));
+
+    /* One byte longer exceeds PATH_MAX once "/snap_00.png" is appended. */
+    char too_long[PATH_MAX];
+    too_long[0] = '/';
+    memset(too_long + 1, 'a', max_dir);
+    too_long[max_dir + 1u] = '\0';
+    char *argv_bad[] = {"inkstorm", "--snap", too_long};
+    TEST_ASSERT_FALSE(cli_parse(3, argv_bad, &opt));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1619,5 +1702,7 @@ int main(void)
     RUN_TEST(test_resolve_and_settle_matches_exit_for_act3_boss_hitstop);
     RUN_TEST(test_latch_retains_skill_edges_across_hitstop_and_clears_on_phase_change);
     RUN_TEST(test_bgm_rapid_three_track_switch_tapers_both_outgoing_tracks);
+    RUN_TEST(test_reward_keyboard_pick_with_held_lmb_suppresses_paint_and_selection_tick);
+    RUN_TEST(test_cli_snap_dir_accepts_exact_path_max_bound);
     return UNITY_END();
 }

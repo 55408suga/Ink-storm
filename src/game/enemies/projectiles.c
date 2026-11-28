@@ -160,7 +160,7 @@ static void trigger_electrified_bounce(GameState *g, EntityId hit_enemy, float o
             }
             const TransformComp *tr = game_transform(g, cand);
             const EnemyComp *en = game_enemy(g, cand);
-            if (tr == NULL || en == NULL || (en->elite_flags & ELITE_STORMPROOF) != 0) {
+            if (tr == NULL || en == NULL) {
                 continue;
             }
             const float dx = tr->x - ox;

@@ -237,27 +237,26 @@ BrushInput game_autoplay_input(const GameState *g)
         want_paint = true;
     }
 
+    bool want_cyclone = false;
+    float cyc_tx = tx;
+    float cyc_ty = ty;
     if (g->player.cyclone_cd <= 0.0f && ink_avail >= cyc_cost + 4.0f) {
         if (fireball_near_ink) {
-            in.cyclone = true;
+            want_cyclone = true;
+            cyc_tx = fb_x;
+            cyc_ty = fb_y;
             tx = fb_x;
             ty = fb_y;
         } else if (close_proj_n >= 2 || urgent_d2 < 145.0f * 145.0f ||
                    (has_boss && has_proj && (g->ticks % UINT64_C(95) == 0))) {
-            in.cyclone = true;
-            tx = clx;
-            ty = cly;
+            want_cyclone = true;
+            const float target_x = close_proj_n > 0 ? clx : proj_x;
+            const float target_y = close_proj_n > 0 ? cly : proj_y;
+            cyc_tx = target_x;
+            cyc_ty = target_y;
+            tx = target_x;
+            ty = target_y;
         }
-    }
-    if (in.cyclone) {
-        ink_avail -= cyc_cost;
-    }
-
-    if (want_slam_gale && ink_avail >= gale_cost + 2.0f) {
-        in.gale = true;
-    } else if (!in.cyclone && g->player.gale_charges > 0 && ink_avail >= gale_cost + 12.0f &&
-               ((g->internal.blazing_active || has_boss) && (g->ticks % UINT64_C(130) == 35))) {
-        in.gale = true;
     }
 
     float next_mx =
@@ -271,6 +270,21 @@ BrushInput game_autoplay_input(const GameState *g)
             next_mx = ink_clampf(next_mx + snx * 28.0f, 90.0f, (float)INK_SCREEN_W - 90.0f);
             next_my = ink_clampf(next_my + sny * 28.0f, 88.0f, (float)INK_SCREEN_H - 82.0f);
         }
+    }
+
+    if (want_cyclone) {
+        const float cyc_rad_px = 15.5f * g->internal.mods.cyclone_radius_mul * FLUID_CELL_PX;
+        if (hypotf(next_mx - cyc_tx, next_my - cyc_ty) <= cyc_rad_px) {
+            in.cyclone = true;
+            ink_avail -= cyc_cost;
+        }
+    }
+
+    if (want_slam_gale && ink_avail >= gale_cost + 2.0f) {
+        in.gale = true;
+    } else if (!in.cyclone && g->player.gale_charges > 0 && ink_avail >= gale_cost + 12.0f &&
+               ((g->internal.blazing_active || has_boss) && (g->ticks % UINT64_C(130) == 35))) {
+        in.gale = true;
     }
 
     in.mx = next_mx;

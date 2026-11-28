@@ -269,6 +269,14 @@ static void test_utf8_clip_never_splits_a_codepoint(void)
     TEST_ASSERT_EQUAL_size_t(0u, text_utf8_clip(text, n, 2));
 }
 
+static void test_night_parade_scroll_mentions_dragon_orb_exception(void)
+{
+    const char *ja = text_get(TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT, true);
+    const char *en = text_get(TEXT_RELIC_NIGHT_PARADE_SCROLL_EFFECT, false);
+    TEST_ASSERT_NOT_NULL(strstr(ja, "\xE9\xBE\x8D\xE7\x8E\x89"));
+    TEST_ASSERT_NOT_NULL(strstr(en, "Dragon Orb"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -277,5 +285,6 @@ int main(void)
     RUN_TEST(test_text_layout_wraps_words_and_cjk_with_kinsoku);
     RUN_TEST(test_text_layout_fit_prefix_stops_on_codepoint_boundary);
     RUN_TEST(test_utf8_clip_never_splits_a_codepoint);
+    RUN_TEST(test_night_parade_scroll_mentions_dragon_orb_exception);
     return UNITY_END();
 }

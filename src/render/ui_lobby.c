@@ -293,15 +293,17 @@ void render_draw_brush_select_ui(RenderState *r, const GameState *g, const UiVie
     for (int i = 0; i < BRUSH_STYLE_COUNT; ++i) {
         const BrushStyleId style = (BrushStyleId)i;
         const bool sel = (active == i);
-        Rectangle card = layout.cards[i];
-        if (sel) {
-            card.y -= 8.0f;
-        }
+        const Rectangle card = layout.cards[i];
         const PaletteId border =
             sel ? (style == BRUSH_STYLE_EMBER ? PAL_SHU
                                               : (style == BRUSH_STYLE_QUILL ? PAL_AO : PAL_KIN))
                 : PAL_SUMI_DARK;
         ink_fill_panel(r, card, PAL_GOFUN, 0.96f, border, 0.94f, 960u + (uint32_t)i);
+        if (sel) {
+            const Rectangle inner = {card.x + 5.0f, card.y + 5.0f, card.width - 10.0f,
+                                     card.height - 10.0f};
+            ink_fill_panel(r, inner, border, 0.08f, border, 0.72f, 965u + (uint32_t)i);
+        }
 
         const float ccx = card.x + card.width * 0.5f;
         char hdr[48];

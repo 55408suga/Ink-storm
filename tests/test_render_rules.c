@@ -383,6 +383,18 @@ static void test_fluid_upload_cache_matches_and_invalidates(void)
     TEST_ASSERT_FALSE(render_fluid_cache_matches(&cache, f, true));
 }
 
+static void test_skill_pip_ready_requires_enough_ink(void)
+{
+    TEST_ASSERT_FALSE(render_skill_pip_ready(true, 5.0f, 26.0f));
+    TEST_ASSERT_FALSE(render_skill_pip_ready(true, 15.9f, 16.0f));
+    TEST_ASSERT_TRUE(render_skill_pip_ready(true, 16.0f, 16.0f));
+    TEST_ASSERT_TRUE(render_skill_pip_ready(true, 18.72f, 18.72f));
+    TEST_ASSERT_TRUE(render_skill_pip_ready(true, 0.0f, 0.0f));
+    TEST_ASSERT_FALSE(render_skill_pip_ready(false, 100.0f, 16.0f));
+    TEST_ASSERT_FALSE(render_skill_pip_ready(true, NAN, 16.0f));
+    TEST_ASSERT_FALSE(render_skill_pip_ready(true, 50.0f, NAN));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -400,5 +412,6 @@ int main(void)
     RUN_TEST(test_polyline_plan_with_more_segments_than_samples_reaches_the_tail);
     RUN_TEST(test_rain_phase_advances_continuously_across_long_duration);
     RUN_TEST(test_fluid_upload_cache_matches_and_invalidates);
+    RUN_TEST(test_skill_pip_ready_requires_enough_ink);
     return UNITY_END();
 }

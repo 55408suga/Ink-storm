@@ -27,6 +27,29 @@ void render_pause_layout(PauseLayout *out)
     out->confirm_no = (Rectangle){cx + 22.0f, 388.0f, 168.0f, 52.0f};
 }
 
+static void draw_pause_cell_text(const RenderState *r, const char *text, Vector2 pos, float max_w,
+                                 float size, float min_size, PaletteId color, float alpha)
+{
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+    float s = size;
+    while (s > min_size && render_measure_text(r, text, s, false).x > max_w) {
+        s -= 1.0f;
+    }
+    render_draw_text(r, text, pos, s, color, alpha, false);
+}
+
+static void format_more_badge(bool use_ja, int32_t hidden, char *out, size_t cap)
+{
+    const char *word = text_get(TEXT_RESULT_MORE_ITEMS, use_ja);
+    if (use_ja) {
+        snprintf(out, cap, "%s +%d", word, hidden);
+    } else {
+        snprintf(out, cap, "+%d %s", hidden, word);
+    }
+}
+
 void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
 {
     if (r == NULL || g == NULL || ui == NULL) {
@@ -42,18 +65,37 @@ void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
 
     /* Left panel: current run's owned upgrades & relics */
     const Rectangle build_panel = {112.0f, 136.0f, 476.0f, 476.0f};
+    const float panel_bottom = build_panel.y + build_panel.height - 14.0f;
     ink_fill_panel(r, build_panel, PAL_GOFUN, 0.94f, PAL_SUMI_DARK, 0.90f, 1100u);
     render_draw_text_id(r, TEXT_PAUSE_BUILD_HDR,
-                        (Vector2){build_panel.x + 24.0f, build_panel.y + 20.0f}, 22.0f,
+                        (Vector2){build_panel.x + 24.0f, build_panel.y + 18.0f}, 22.0f,
                         PAL_SUMI_SCORCH, 0.98f, false);
 
-    float y = build_panel.y + 62.0f;
-    if (g->run.upgrade_count <= 0) {
+    const int32_t rel_n = g->run.relic_count;
+    const int32_t rel_cols = rel_n > 4 ? 2 : 1;
+    const float rel_row_h = rel_n > 8 ? 20.0f : 24.0f;
+    const float rel_font = rel_n > 8 ? 15.0f : 18.0f;
+    const int32_t rel_rows_need = rel_n > 0 ? (rel_n + rel_cols - 1) / rel_cols : 1;
+    const int32_t rel_rows_res = rel_rows_need < 8 ? rel_rows_need : 8;
+    const float rel_reserved_h = 46.0f + (float)rel_rows_res * rel_row_h;
+
+    float y = build_panel.y + 56.0f;
+    const int32_t upg_n = g->run.upgrade_count;
+    if (upg_n <= 0) {
         render_draw_text_id(r, TEXT_PAUSE_NONE, (Vector2){build_panel.x + 28.0f, y}, 18.0f,
                             PAL_SUMI_LIGHT, 0.92f, false);
         y += 28.0f;
     } else {
-        const int32_t shown = g->run.upgrade_count < 12 ? g->run.upgrade_count : 12;
+        const float upg_row_h = upg_n > 18 ? 18.0f : (upg_n > 12 ? 20.0f : 25.0f);
+        const float upg_font = upg_n > 18 ? 14.0f : (upg_n > 12 ? 15.0f : 17.5f);
+        const float upg_avail_h = panel_bottom - y - rel_reserved_h;
+        int32_t max_rows = (int32_t)(upg_avail_h / upg_row_h);
+        if (max_rows < 2) {
+            max_rows = 2;
+        }
+        const int32_t max_slots = max_rows * 2;
+        const bool upg_overflow = upg_n > max_slots;
+        const int32_t shown = upg_overflow ? (max_slots - 1) : upg_n;
         for (int32_t i = 0; i < shown; ++i) {
             char buf[96];
             const OwnedUpgrade *ou = &g->run.upgrades[i];
@@ -61,12 +103,23 @@ void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
             const int row = i / 2;
             snprintf(buf, sizeof buf, "%s %s%u", text_get(text_upgrade_name(ou->id), r->use_ja),
                      text_get(TEXT_REWARD_LV, r->use_ja), (unsigned)ou->level);
-            render_draw_text(
+            draw_pause_cell_text(
                 r, buf,
-                (Vector2){build_panel.x + 24.0f + (float)col * 224.0f, y + (float)row * 26.0f},
-                18.0f, pal_axis_color(game_upgrade_axis(ou->id)), 0.95f, false);
+                (Vector2){build_panel.x + 24.0f + (float)col * 222.0f, y + (float)row * upg_row_h},
+                214.0f, upg_font, 12.0f, pal_axis_color(game_upgrade_axis(ou->id)), 0.95f);
         }
-        y += (float)((shown + 1) / 2) * 26.0f + 22.0f;
+        if (upg_overflow) {
+            char more_buf[32];
+            format_more_badge(r->use_ja, upg_n - shown, more_buf, sizeof more_buf);
+            const int col = shown % 2;
+            const int row = shown / 2;
+            draw_pause_cell_text(
+                r, more_buf,
+                (Vector2){build_panel.x + 24.0f + (float)col * 222.0f, y + (float)row * upg_row_h},
+                214.0f, upg_font, 12.0f, PAL_SHU, 0.96f);
+        }
+        const int32_t used_slots = upg_overflow ? max_slots : shown;
+        y += (float)((used_slots + 1) / 2) * upg_row_h + 10.0f;
     }
 
     const Vector2 div[2] = {{build_panel.x + 24.0f, y},
@@ -79,21 +132,42 @@ void render_draw_pause_ui(RenderState *r, const GameState *g, const UiView *ui)
                               .dry = 0.30f,
                               .seed = 1105u},
                (InkTone){.color = PAL_SUMI_LIGHT, .alpha = 0.70f}, 1.0f);
-    y += 18.0f;
+    y += 12.0f;
 
-    render_draw_text_id(r, TEXT_RESULT_RELICS, (Vector2){build_panel.x + 24.0f, y}, 20.0f,
+    render_draw_text_id(r, TEXT_RESULT_RELICS, (Vector2){build_panel.x + 24.0f, y}, 19.0f,
                         PAL_SUMI_DARK, 0.96f, false);
-    y += 30.0f;
-    if (g->run.relic_count <= 0) {
+    y += 24.0f;
+    if (rel_n <= 0) {
         render_draw_text_id(r, TEXT_PAUSE_NONE, (Vector2){build_panel.x + 28.0f, y}, 18.0f,
                             PAL_SUMI_LIGHT, 0.92f, false);
     } else {
-        const int32_t shown_rel = g->run.relic_count < 6 ? g->run.relic_count : 6;
+        int32_t max_rel_rows = (int32_t)((panel_bottom - y) / rel_row_h);
+        if (max_rel_rows < 1) {
+            max_rel_rows = 1;
+        }
+        const int32_t rel_cap = max_rel_rows * rel_cols;
+        const bool rel_overflow = rel_n > rel_cap;
+        const int32_t shown_rel = rel_overflow ? (rel_cap - 1) : rel_n;
+        const float rel_col_w = rel_cols == 2 ? 222.0f : 428.0f;
+        const float rel_max_w = rel_cols == 2 ? 214.0f : 420.0f;
         for (int32_t i = 0; i < shown_rel; ++i) {
             const RelicId rid = g->run.relics[i];
-            render_draw_text_id(r, text_relic_name(rid),
-                                (Vector2){build_panel.x + 28.0f, y + (float)i * 26.0f}, 19.0f,
-                                PAL_KIN, 0.96f, false);
+            const int col = i % rel_cols;
+            const int row = i / rel_cols;
+            draw_pause_cell_text(r, text_get(text_relic_name(rid), r->use_ja),
+                                 (Vector2){build_panel.x + 24.0f + (float)col * rel_col_w,
+                                           y + (float)row * rel_row_h},
+                                 rel_max_w, rel_font, 12.0f, PAL_KIN, 0.96f);
+        }
+        if (rel_overflow) {
+            char more_buf[32];
+            format_more_badge(r->use_ja, rel_n - shown_rel, more_buf, sizeof more_buf);
+            const int col = shown_rel % rel_cols;
+            const int row = shown_rel / rel_cols;
+            draw_pause_cell_text(r, more_buf,
+                                 (Vector2){build_panel.x + 24.0f + (float)col * rel_col_w,
+                                           y + (float)row * rel_row_h},
+                                 rel_max_w, rel_font, 12.0f, PAL_SHU, 0.96f);
         }
     }
 

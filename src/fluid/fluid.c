@@ -84,7 +84,7 @@ void fluid_reset(FluidState *f)
     memset(f->dye, 0, sizeof f->dye);
     memset(f->dye0, 0, sizeof f->dye0);
     f->pristine = 1;
-    f->mut_borrow_dirty = 0;
+    f->mut_borrow_depth = 0;
     ++f->mutation_rev;
     if (f->mutation_rev == 0) {
         f->mutation_rev = 1;
@@ -428,7 +428,7 @@ bool fluid_is_pristine(const FluidState *f) { return f != NULL && f->pristine !=
 
 bool fluid_has_open_mut_borrow(const FluidState *f)
 {
-    return f != NULL && f->mut_borrow_dirty != 0;
+    return f != NULL && f->mut_borrow_depth > 0u;
 }
 
 typedef enum { SPLAT, SWIRL, RADIAL } Injection;
@@ -544,7 +544,9 @@ float *fluid_channel_mut(FluidState *f, int ch)
      * fluid_sanitize_channels skip them. */
     if (f && ch >= 0 && ch < f->cfg.active_channels) {
         f->pristine = 0;
-        f->mut_borrow_dirty = 1;
+        if (f->mut_borrow_depth < UINT32_MAX) {
+            ++f->mut_borrow_depth;
+        }
         ++f->mutation_rev;
         return f->dye[ch];
     }
@@ -556,7 +558,9 @@ void fluid_end_mut_borrow(FluidState *f)
     if (!f) {
         return;
     }
-    f->mut_borrow_dirty = 0;
+    if (f->mut_borrow_depth > 0u) {
+        --f->mut_borrow_depth;
+    }
     ++f->mutation_rev;
 }
 

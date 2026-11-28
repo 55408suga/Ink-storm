@@ -393,7 +393,7 @@ static void step_boss_field_effects(GameState *g)
         const float x1 = g->internal.nue_trail_x[t][1];
         const float y1 = g->internal.nue_trail_y[t][1];
         const float dist = hypotf(x1 - x0, y1 - y0);
-        const int steps = (int)ink_clampf(dist / 32.0f, 2.0f, 14.0f);
+        const int steps = (int)ink_clampf(ceilf(dist / 16.0f), 1.0f, 64.0f);
         for (int s = 0; s <= steps; ++s) {
             const float u = (float)s / (float)steps;
             fluid_splat(&g->fluid, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, GAME_PX_TO_CELLS(22.4f),

@@ -1,6 +1,7 @@
 #include "combat/damage.h"
 #include "core.h"
 #include "elements/elements.h"
+#include "enemies/projectiles.h"
 #include "game.h"
 #include "meta.h"
 #include "player/player_skills.h"
@@ -1589,25 +1590,30 @@ static void test_first_time_hints_all_8(void)
     /* 5-8. Reaction hints: BLAZING, TEMPEST, THUNDERBURST, CATACLYSM */
     const struct {
         GameEventType ev_type;
+        uint32_t ev_flags;
         HintId hint_id;
     } react_cases[4] = {
-        {EV_IGNITE, HINT_REACT_BLAZING},
-        {EV_STORM_ZAP, HINT_REACT_TEMPEST},
-        {EV_THUNDERBURST, HINT_REACT_THUNDERBURST},
-        {EV_CATACLYSM, HINT_REACT_CATACLYSM},
+        {EV_IGNITE, 0u, HINT_REACT_BLAZING},
+        {EV_STORM_ZAP, EVF_STORM_FLUID_TEMPEST, HINT_REACT_TEMPEST},
+        {EV_THUNDERBURST, 0u, HINT_REACT_THUNDERBURST},
+        {EV_CATACLYSM, 0u, HINT_REACT_CATACLYSM},
     };
     for (int i = 0; i < 4; ++i) {
         g->event_count = 0;
-        (void)game_push_event(
-            g, (GameEvent){.type = react_cases[i].ev_type, .x = 400.0f, .y = 300.0f});
+        (void)game_push_event(g, (GameEvent){.type = react_cases[i].ev_type,
+                                             .x = 400.0f,
+                                             .y = 300.0f,
+                                             .flags = react_cases[i].ev_flags});
         hints_check_tick(g);
         TEST_ASSERT_EQUAL_INT(1, count_ev(g, EV_HINT_TRIGGER));
         TEST_ASSERT_EQUAL_INT32((int32_t)react_cases[i].hint_id, g->events[1].value);
 
         /* Same event a second time must NOT re-trigger. */
         g->event_count = 0;
-        (void)game_push_event(
-            g, (GameEvent){.type = react_cases[i].ev_type, .x = 400.0f, .y = 300.0f});
+        (void)game_push_event(g, (GameEvent){.type = react_cases[i].ev_type,
+                                             .x = 400.0f,
+                                             .y = 300.0f,
+                                             .flags = react_cases[i].ev_flags});
         hints_check_tick(g);
         TEST_ASSERT_EQUAL_INT(0, count_ev(g, EV_HINT_TRIGGER));
     }
@@ -2539,6 +2545,108 @@ static void test_wave_spawn_picker_falls_back_to_perimeter_and_defers_when_full(
     game_destroy(g);
 }
 
+static void test_thunder_drum_and_arrow_do_not_consume_tempest_hint(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+    g->internal.triggered_hints_mask = 0u;
+    TEST_ASSERT_TRUE(roguelike_grant_relic(g, RELIC_THUNDER_DRUM));
+
+    /* 1. Thunder Drum Cyclone emits EV_STORM_ZAP without consuming HINT_REACT_TEMPEST. */
+    const BrushInput cyc = {
+        .pmx = 640.0f, .pmy = 360.0f, .mx = 640.0f, .my = 360.0f, .cyclone = true};
+    g->event_count = 0;
+    player_skills_step(g, &cyc);
+    hints_check_tick(g);
+    TEST_ASSERT_GREATER_THAN_INT(0, count_ev(g, EV_STORM_ZAP));
+    TEST_ASSERT_EQUAL_UINT32(0u, g->internal.triggered_hints_mask &
+                                     (UINT32_C(1) << HINT_REACT_TEMPEST));
+
+    /* 2. Electrified projectile bounce also leaves HINT_REACT_TEMPEST untriggered. */
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+    const EntityId hit_e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 420.0f, 300.0f);
+    const EntityId near_e = game_debug_spawn_enemy(g, ENEMY_STONE_ONI, 480.0f, 300.0f);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, hit_e.index);
+    TEST_ASSERT_NOT_EQUAL_UINT32(ECS_INVALID_INDEX, near_e.index);
+    const EntityId arrow = game_debug_spawn_projectile(g, PROJ_ARROW, 412.0f, 300.0f, 240.0f, 0.0f);
+    game_proj_mut(g, arrow)->deflected = true;
+    game_proj_mut(g, arrow)->electrified = true;
+    g->event_count = 0;
+    projectiles_step(g);
+    hints_check_tick(g);
+    TEST_ASSERT_GREATER_THAN_INT(0, count_ev(g, EV_STORM_ZAP));
+    TEST_ASSERT_EQUAL_UINT32(0u, g->internal.triggered_hints_mask &
+                                     (UINT32_C(1) << HINT_REACT_TEMPEST));
+
+    /* 3. Fluid-driven Tempest reaction sets EVF_STORM_FLUID_TEMPEST and triggers the hint. */
+    float *storm = fluid_channel_mut(&g->fluid, 2);
+    for (int k = 0; k < 24; ++k) {
+        storm[(36 + (k / 6)) * FLUID_W + 50 + (k % 6)] = 0.8f;
+    }
+    fluid_end_mut_borrow(&g->fluid);
+    g->event_count = 0;
+    elements_step(g);
+    hints_check_tick(g);
+    TEST_ASSERT_NOT_EQUAL_UINT32(0u, g->internal.triggered_hints_mask &
+                                         (UINT32_C(1) << HINT_REACT_TEMPEST));
+
+    game_destroy(g);
+}
+
+static void test_autoplay_waits_for_cursor_to_reach_fireball_before_cyclone(void)
+{
+    GameState *g = game_create(NULL);
+    TEST_ASSERT_NOT_NULL(g);
+    game_debug_start_wave(g, 0);
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+
+    g->player.cursor_x = 640.0f;
+    g->player.cursor_y = 360.0f;
+    g->player.ink = g->player.ink_max;
+    g->player.cyclone_cd = 0.0f;
+    g->player.idle_t = 0.0f;
+
+    /* Spawn fireball in ink 350px away; cursor clamp (+34px) lands 316px away > 124px radius. */
+    const float ink_dye[FLUID_MAX_CHANNELS] = {0.8f, 0.0f, 0.0f, 0.0f};
+    fluid_splat(&g->fluid, 990.0f, 360.0f, 4.0f, 0.0f, 0.0f, ink_dye);
+    (void)game_debug_spawn_projectile(g, PROJ_FIREBALL, 990.0f, 360.0f, -100.0f, 0.0f);
+
+    const BrushInput far_in = game_autoplay_input(g);
+    TEST_ASSERT_FALSE(far_in.cyclone);
+    TEST_ASSERT_TRUE(far_in.mx > g->player.cursor_x);
+
+    /* Once cursor is within Cyclone range of the fireball, autoplay casts Cyclone. */
+    g->player.cursor_x = 920.0f;
+    const BrushInput near_in = game_autoplay_input(g);
+    TEST_ASSERT_TRUE(near_in.cyclone);
+
+    /* Boss + sole projectile 350px from Shrine on tick % 95 == 0 must aim & range-check the
+     * tracked projectile rather than spending Cyclone on an unpopulated Shrine fallback. */
+    clear_test_entities(g);
+    fluid_reset(&g->fluid);
+    (void)game_debug_spawn_enemy(g, ENEMY_BOSS_TENGU, 640.0f, 150.0f);
+    (void)game_debug_spawn_projectile(g, PROJ_ARROW, 990.0f, 360.0f, -100.0f, 0.0f);
+    g->ticks = UINT64_C(95);
+    g->player.cursor_x = 640.0f;
+    g->player.cursor_y = 360.0f;
+    g->player.ink = g->player.ink_max;
+    g->player.cyclone_cd = 0.0f;
+    const BrushInput boss_far = game_autoplay_input(g);
+    TEST_ASSERT_FALSE(boss_far.cyclone);
+    TEST_ASSERT_TRUE(boss_far.mx > g->player.cursor_x);
+
+    g->player.cursor_x = 920.0f;
+    const BrushInput boss_near = game_autoplay_input(g);
+    TEST_ASSERT_TRUE(boss_near.cyclone);
+
+    game_destroy(g);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2580,5 +2688,7 @@ int main(void)
     RUN_TEST(test_fallback_repair_overflow_contract_regular_vs_relic);
     RUN_TEST(test_endless_reroll_preserves_axis_diversity_across_exclude_pool);
     RUN_TEST(test_wave_spawn_picker_falls_back_to_perimeter_and_defers_when_full);
+    RUN_TEST(test_thunder_drum_and_arrow_do_not_consume_tempest_hint);
+    RUN_TEST(test_autoplay_waits_for_cursor_to_reach_fireball_before_cyclone);
     return UNITY_END();
 }

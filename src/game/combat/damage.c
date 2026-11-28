@@ -32,10 +32,81 @@ static void normalize_vec2(float vx, float vy, float *ox, float *oy)
     }
 }
 
+static void resolve_orb_spawn_pos(const GameState *g, float x, float y, float dst_x, float dst_y,
+                                  float *out_x, float *out_y)
+{
+    const float fallback_x = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+    const float fallback_y = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+    if (!isfinite(x) || !isfinite(y) || !isfinite(dst_x) || !isfinite(dst_y)) {
+        *out_x = fallback_x;
+        *out_y = fallback_y;
+        return;
+    }
+    if (!fluid_is_solid(&g->fluid, x, y)) {
+        const FluidRayHit hit = fluid_trace_solid_segment(&g->fluid, x, y, dst_x, dst_y);
+        const float px = hit.hit ? hit.hit_x : dst_x;
+        const float py = hit.hit ? hit.hit_y : dst_y;
+        if (!fluid_is_solid(&g->fluid, px, py)) {
+            *out_x = px;
+            *out_y = py;
+            return;
+        }
+    } else if (!fluid_is_solid(&g->fluid, dst_x, dst_y)) {
+        *out_x = dst_x;
+        *out_y = dst_y;
+        return;
+    }
+
+    const int cx = (int)ink_clampf(x / FLUID_CELL_PX, 1.0f, (float)(FLUID_W - 2));
+    const int cy = (int)ink_clampf(y / FLUID_CELL_PX, 1.0f, (float)(FLUID_H - 2));
+    bool found = false;
+    float best_d2 = 1e30f;
+    float best_x = dst_x;
+    float best_y = dst_y;
+    for (int r = 1; r <= 8 && !found; ++r) {
+        for (int dy = -r; dy <= r; ++dy) {
+            const int gy = cy + dy;
+            if (gy < 1 || gy > FLUID_H - 2) {
+                continue;
+            }
+            for (int dx = -r; dx <= r; ++dx) {
+                if (dx != -r && dx != r && dy != -r && dy != r) {
+                    continue;
+                }
+                const int gx = cx + dx;
+                if (gx < 1 || gx > FLUID_W - 2) {
+                    continue;
+                }
+                const float px = ((float)gx + 0.5f) * FLUID_CELL_PX;
+                const float py = ((float)gy + 0.5f) * FLUID_CELL_PX;
+                if (fluid_is_solid(&g->fluid, px, py)) {
+                    continue;
+                }
+                const float ddx = px - dst_x;
+                const float ddy = py - dst_y;
+                const float d2 = ddx * ddx + ddy * ddy;
+                if (!found || d2 < best_d2) {
+                    found = true;
+                    best_d2 = d2;
+                    best_x = px;
+                    best_y = py;
+                }
+            }
+        }
+    }
+    if (found) {
+        *out_x = best_x;
+        *out_y = best_y;
+        return;
+    }
+    *out_x = fallback_x;
+    *out_y = fallback_y;
+}
+
 EntityId combat_spawn_orb(GameState *g, float x, float y)
 {
     const EntityId invalid = {ECS_INVALID_INDEX, 0};
-    if (g == NULL) {
+    if (g == NULL || !isfinite(x) || !isfinite(y)) {
         return invalid;
     }
     const EntityId id = game_spawn_entity(g, COMP_TRANSFORM | COMP_VELOCITY | COMP_INK_ORB);
@@ -47,8 +118,11 @@ EntityId combat_spawn_orb(GameState *g, float x, float y)
     const float speed = 35.0f + 60.0f * ink_rng_f01(&g->rng);
     const float cx = g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
     const float cy = g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
-    const float ox = ink_clampf(x + (cx - x) * 0.10f, 95.0f, (float)INK_SCREEN_W - 95.0f);
-    const float oy = ink_clampf(y + (cy - y) * 0.10f, 95.0f, (float)INK_SCREEN_H - 80.0f);
+    const float dst_x = ink_clampf(x + (cx - x) * 0.10f, 95.0f, (float)INK_SCREEN_W - 95.0f);
+    const float dst_y = ink_clampf(y + (cy - y) * 0.10f, 95.0f, (float)INK_SCREEN_H - 80.0f);
+    float ox = dst_x;
+    float oy = dst_y;
+    resolve_orb_spawn_pos(g, x, y, dst_x, dst_y, &ox, &oy);
 
     TransformComp *tr = game_transform_mut(g, id);
     if (tr != NULL) {
@@ -378,9 +452,21 @@ int32_t combat_apply_damage_f(GameState *g, EntityId target, float base_dmg, uin
                     if (en_mut->fire_cd < en_mut->windup + 0.10f) {
                         en_mut->fire_cd = en_mut->windup + 0.10f;
                     }
+                    boss->telegraph_pattern = (boss->pattern & 1) == 1 ? 3 : 1;
+                    if (boss->telegraph_pattern == 1) {
+                        const float sx =
+                            g->shrine_count > 0 ? g->shrines[0].x : (float)INK_SCREEN_W * 0.5f;
+                        const float sy =
+                            g->shrine_count > 0 ? g->shrines[0].y : (float)INK_SCREEN_H * 0.5f;
+                        normalize_vec2(sx - tr->x, sy - tr->y, &boss->gale_dx, &boss->gale_dy);
+                        if (boss->gale_dx == 0.0f && boss->gale_dy == 0.0f) {
+                            boss->gale_dx = 1.0f;
+                        }
+                    }
+                } else {
+                    boss->telegraph_pattern = 0;
                 }
                 boss->telegraph = 0.0f;
-                boss->telegraph_pattern = 0;
                 static const float k_nue_dye[FLUID_MAX_CHANNELS] = {0.8f, 0.0f, 0.8f, 0.0f};
                 fluid_swirl(&g->fluid, tr->x, tr->y, 14.0f, 45.0f, k_nue_dye);
                 (void)game_push_event(g, (GameEvent){

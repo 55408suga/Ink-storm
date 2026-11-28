@@ -3,6 +3,7 @@
 #include "menu_nav.h"
 #include "raylib.h"
 #include "render.h"
+#include "roguelike/rewards.h"
 
 #include <stddef.h>
 
@@ -88,39 +89,47 @@ RawInput input_map_read(const GameState *g, UiView *ui, bool reward_ready)
             ui->hover_choice = hover;
         }
 
+        const bool repair_ok = layout.has_repair && g->run.reward.repair_available;
+        const bool crystal_ok = layout.has_crystal && g->run.reward.crystal_reward > 0;
+        const bool reroll_ok = layout.has_reroll && rewards_can_reroll(g);
+
         if (left_pressed && hover != UI_HOVER_NONE) {
             raw.ui_click = true;
             if (hover >= 0 && hover < layout.card_count) {
                 raw.pick_pressed = hover;
-            } else if (hover == UI_HOVER_REPAIR) {
+            } else if (hover == UI_HOVER_REPAIR && repair_ok) {
                 raw.repair_pressed = true;
-            } else if (hover == UI_HOVER_CRYSTAL) {
+            } else if (hover == UI_HOVER_CRYSTAL && crystal_ok) {
                 raw.crystal_pressed = true;
-            } else if (hover == UI_HOVER_REROLL) {
+            } else if (hover == UI_HOVER_REROLL && reroll_ok) {
                 raw.reroll_pressed = true;
             }
         }
 
         if (g->run.reward.kind == REWARD_KIND_FALLBACK) {
-            if (IsKeyPressed(KEY_ONE) || IsKeyPressed(KEY_FOUR)) {
+            if ((IsKeyPressed(KEY_ONE) || IsKeyPressed(KEY_FOUR)) && repair_ok) {
                 raw.repair_pressed = true;
-            } else if (IsKeyPressed(KEY_TWO) && layout.has_crystal) {
+            } else if (IsKeyPressed(KEY_TWO) && crystal_ok) {
                 raw.crystal_pressed = true;
             }
         } else {
-            if (IsKeyPressed(KEY_ONE)) {
+            if (IsKeyPressed(KEY_ONE) && layout.card_count > 0) {
                 raw.pick_pressed = 0;
-            } else if (IsKeyPressed(KEY_TWO)) {
+            } else if (IsKeyPressed(KEY_TWO) && layout.card_count > 1) {
                 raw.pick_pressed = 1;
-            } else if (IsKeyPressed(KEY_THREE)) {
+            } else if (IsKeyPressed(KEY_THREE) && layout.card_count > 2) {
                 raw.pick_pressed = 2;
             }
-            if (IsKeyPressed(KEY_FOUR)) {
+            if (IsKeyPressed(KEY_FOUR) && repair_ok) {
                 raw.repair_pressed = true;
             }
-            if (IsKeyPressed(KEY_R)) {
+            if (IsKeyPressed(KEY_R) && reroll_ok) {
                 raw.reroll_pressed = true;
             }
+        }
+        if (left_down && (raw.pick_pressed >= 0 || raw.repair_pressed || raw.crystal_pressed ||
+                          raw.reroll_pressed)) {
+            raw.ui_click = true;
         }
         return raw;
     }

@@ -2,8 +2,11 @@
 #define INK_APP_CLI_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#define CLI_SNAP_SUFFIX_LEN 12u /* "/snap_00.png" */
 
 typedef enum { APP_MODE_WINDOW = 0, APP_MODE_HEADLESS, APP_MODE_SHOWCASE, APP_MODE_DEMO } AppMode;
 
@@ -25,5 +28,6 @@ typedef struct {
 bool cli_parse(int argc, char *const argv[], CliOptions *out);
 void cli_print_usage(FILE *stream, const char *program);
 uint32_t cli_parse_debug_faults(const char *value, FILE *warn);
+size_t cli_trimmed_dir_len(const char *path);
 
 #endif

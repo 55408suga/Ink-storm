@@ -37,12 +37,28 @@ static bool is_valid_cli_path(const char *p)
     return strlen(p) < (size_t)PATH_MAX;
 }
 
+size_t cli_trimmed_dir_len(const char *path)
+{
+    if (path == NULL) {
+        return 0u;
+    }
+    size_t len = strlen(path);
+    while (len > 1u && path[len - 1u] == '/') {
+        --len;
+    }
+    return len;
+}
+
 static bool is_valid_snap_dir(const char *p)
 {
     if (!is_valid_cli_path(p)) {
         return false;
     }
-    return strlen(p) + 16u < (size_t)PATH_MAX;
+    const size_t len = cli_trimmed_dir_len(p);
+    if (len == 1u && p[0] == '/') {
+        return CLI_SNAP_SUFFIX_LEN < (size_t)PATH_MAX;
+    }
+    return len + CLI_SNAP_SUFFIX_LEN < (size_t)PATH_MAX;
 }
 
 bool cli_parse(int argc, char *const argv[], CliOptions *out)
