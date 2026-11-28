@@ -1979,6 +1979,46 @@ static void test_latch_multiframe_cw_and_ccw_preserve_both_spins_and_coords(void
     TEST_ASSERT_FALSE(l.cyclone_ccw_pending);
 
     game_destroy(g);
+
+    /* (f) FIFO preservation across re-arrival: CW -> CCW -> pop (CW) -> new CW -> pop (CCW) -> pop
+     * (new CW). */
+    input_latch_init(&l, 100.0f, 100.0f);
+    RawInput q1 = make_raw(210.0f, 150.0f);
+    q1.cyclone_pressed = true;
+    RawInput q2 = make_raw(430.0f, 290.0f);
+    q2.cyclone_ccw_pressed = true;
+    input_latch_feed(&l, &q1);
+    input_latch_feed(&l, &q2);
+
+    const BrushInput qt1 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(qt1.cyclone);
+    TEST_ASSERT_FALSE(qt1.cyclone_ccw);
+    TEST_ASSERT_TRUE(qt1.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(210.0f, qt1.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(150.0f, qt1.cyclone_y);
+
+    RawInput q3 = make_raw(650.0f, 470.0f);
+    q3.cyclone_pressed = true;
+    input_latch_feed(&l, &q3);
+
+    const BrushInput qt2 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(qt2.cyclone);
+    TEST_ASSERT_TRUE(qt2.cyclone_ccw);
+    TEST_ASSERT_TRUE(qt2.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(430.0f, qt2.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(290.0f, qt2.cyclone_y);
+
+    const BrushInput qt3 = input_latch_take_tick(&l);
+    TEST_ASSERT_TRUE(qt3.cyclone);
+    TEST_ASSERT_FALSE(qt3.cyclone_ccw);
+    TEST_ASSERT_TRUE(qt3.has_cyclone_pos);
+    TEST_ASSERT_EQUAL_FLOAT(650.0f, qt3.cyclone_x);
+    TEST_ASSERT_EQUAL_FLOAT(470.0f, qt3.cyclone_y);
+
+    const BrushInput qt4 = input_latch_take_tick(&l);
+    TEST_ASSERT_FALSE(qt4.cyclone);
+    TEST_ASSERT_FALSE(qt4.cyclone_ccw);
+    TEST_ASSERT_FALSE(qt4.has_cyclone_pos);
 }
 
 int main(void)

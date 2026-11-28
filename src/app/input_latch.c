@@ -185,6 +185,7 @@ static BrushInput take_subtick_impl(InputLatch *l, int32_t remaining_ticks, bool
                 in.cyclone_x = l->cyclone_x;
                 in.cyclone_y = l->cyclone_y;
                 l->cyclone_pending = false;
+                l->cyclone_ccw_first = l->cyclone_ccw_pending;
             }
             in.gale = l->gale_pending;
             l->gale_pending = false;
